@@ -1,6 +1,6 @@
 services:
   nas-traffic-lens:
-    image: isle204/nas-traffic-lens:2026.06.17-9
+    image: isle204/nas-traffic-lens:latest
     container_name: nas-traffic-lens
     restart: unless-stopped
     network_mode: host

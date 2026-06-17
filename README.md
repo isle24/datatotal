@@ -80,7 +80,7 @@ DASHBOARD_PASSWORD: "123456"
 ```yaml
 services:
   nas-traffic-lens:
-    image: isle204/nas-traffic-lens:2026.06.17-9
+    image: isle204/nas-traffic-lens:latest
     container_name: nas-traffic-lens
     restart: unless-stopped
     network_mode: host
@@ -192,7 +192,7 @@ docker load -i nas-traffic-lens-amd64.tar
 然后 compose 使用：
 
 ```yaml
-image: isle204/nas-traffic-lens:2026.06.17-9
+image: isle204/nas-traffic-lens:latest
 platform: linux/amd64
 ```
 
@@ -222,7 +222,7 @@ docker save \
 ARM 设备 compose 示例：
 
 ```yaml
-image: isle204/nas-traffic-lens:2026.06.17-9-arm64
+image: isle204/nas-traffic-lens:arm64
 platform: linux/arm64
 ```
 
@@ -268,7 +268,7 @@ docker push isle204/nas-traffic-lens:${VERSION}-arm64
 docker push isle204/nas-traffic-lens:arm64
 ```
 
-推荐 NAS 端使用固定版本 tag，例如 `2026.06.17-9`，避免 `latest` 被缓存后看起来“没变化”。
+日常部署推荐使用 `latest`，这样文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag，例如 `2026.06.17-9`。
 
 ## 环境变量
 
