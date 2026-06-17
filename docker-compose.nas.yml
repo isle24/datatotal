@@ -1,0 +1,57 @@
+services:
+  nas-traffic-lens:
+    image: isle204/nas-traffic-lens:2026.06.17-9
+    container_name: nas-traffic-lens
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    platform: linux/amd64
+    privileged: true
+    environment:
+      APP_PORT: "8088"
+      SAMPLE_SECONDS: "1"
+      RETENTION_SECONDS: "3600"
+      DB_PATH: "/data/traffic.db"
+      LOG_DIR: "/logs"
+      ENABLE_DOCKER_DISCOVERY: "false"
+      DOCKER_LIST_CACHE_SECONDS: "20"
+      DOCKER_STATS_CACHE_SECONDS: "5"
+      DOCKER_WEB_PROBE_TTL_SECONDS: "86400"
+      DOCKER_WEB_PROBE_TIMEOUT: "1"
+      UVICORN_ACCESS_LOG: "false"
+      CONSOLE_LOG: "true"
+      # 强烈建议设置，设置后启用访问密码
+      DASHBOARD_PASSWORD: "isle0204"
+      # 持续公网上传告警，单位 B/s 和秒。例如 10MB/s 持续 300 秒
+      ALERT_WAN_TX_BPS: "10485760"
+      ALERT_WAN_TX_SECONDS: "300"
+      # 阶段/每日公网上传告警，单位 B
+      ALERT_STAGE_TX_BYTES: "10737418240"
+      ALERT_DAILY_TX_BYTES: "53687091200"
+      # 告警通知，默认 webhook；设置 URL 后触发告警会 POST JSON
+      ALERT_NOTIFY_CHANNEL: "webhook"
+      ALERT_WEBHOOK_URL: ""
+      ALERT_WEBHOOK_TIMEOUT: "5"
+      CONNECTION_ACTIVE_SECONDS: "120"
+      CONNECTION_RETENTION_SECONDS: "900"
+      AUTO_START_STAGE: "true"
+      # 连接数默认按 conntrack 活跃会话统计，更接近路由器；可改 socket 或 capture 排查
+      CONNECTION_COUNT_SOURCE: "conntrack"
+      CONNTRACK_REFRESH_SECONDS: "5"
+      CONNTRACK_COUNT_MODE: "active"
+      CONNTRACK_TCP_STATES: "ESTABLISHED"
+      CONNTRACK_UDP_REQUIRE_ASSURED: "true"
+      CONNTRACK_INCLUDE_UNREPLIED: "false"
+      CONNTRACK_MIN_TIMEOUT_SECONDS: "3"
+      # 可选：只抓指定网卡，逗号分隔。例如 eth0,br0,bond0
+      # CAPTURE_INTERFACES: "eth0"
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+      # 可选：允许读取 Docker 容器名和端口映射；Docker socket 权限很高，确认需要再打开
+      # 同时需要设置 ENABLE_DOCKER_DISCOVERY: "true"
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+    # 可选：暴露 Intel 核显 / NPU 设备，极空间 UI 支持 devices 时再打开
+    # devices:
+    #   - /dev/dri:/dev/dri
+    #   - /dev/accel:/dev/accel
