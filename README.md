@@ -68,7 +68,7 @@ environment:
 默认 compose 已设置访问密码：
 
 ```yaml
-DASHBOARD_PASSWORD: "isle0204"
+DASHBOARD_PASSWORD: "123456"
 ```
 
 如果只在内网访问，也仍建议保留密码。要关闭密码，删除或置空 `DASHBOARD_PASSWORD`。
@@ -100,7 +100,7 @@ services:
       DOCKER_WEB_PROBE_TIMEOUT: "1"
       UVICORN_ACCESS_LOG: "false"
       CONSOLE_LOG: "true"
-      DASHBOARD_PASSWORD: "isle0204"
+      DASHBOARD_PASSWORD: "123456"
       ALERT_WAN_TX_BPS: "10485760"
       ALERT_WAN_TX_SECONDS: "300"
       ALERT_STAGE_TX_BYTES: "10737418240"

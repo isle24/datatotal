@@ -22,7 +22,7 @@ services:
       UVICORN_ACCESS_LOG: "false"
       CONSOLE_LOG: "true"
       # 强烈建议设置，设置后启用访问密码
-      DASHBOARD_PASSWORD: "isle0204"
+      DASHBOARD_PASSWORD: "123456"
       # 持续公网上传告警，单位 B/s 和秒。例如 10MB/s 持续 300 秒
       ALERT_WAN_TX_BPS: "10485760"
       ALERT_WAN_TX_SECONDS: "300"
