@@ -590,6 +590,13 @@ let connectionTimer = null;
 let dockerTimer = null;
 let connectionDebounce = null;
 let dockerHydrateToken = 0;
+let overviewLoading = false;
+let interfaceLoading = false;
+let processLoading = false;
+let systemLoading = false;
+let dockerLoading = false;
+let connectionLoading = false;
+const handleResize = () => historyChart?.resize();
 
 const connFilters = reactive({ mode: "capture", iface: "all", scope: "all", proto: "all", direction: "all", owner: "", source: "", dest: "", minBytes: null, minDuration: null });
 
@@ -725,10 +732,22 @@ async function api(url, options) {
   return readJson(await fetch(url, { cache: "no-store", ...options }));
 }
 async function refreshOverview() {
+  if (overviewLoading) return;
+  overviewLoading = true;
+  try {
   overview.value = await api(`/api/overview?interfaces=${encodeURIComponent(interfaceView.value)}`);
+  } finally {
+    overviewLoading = false;
+  }
 }
 async function refreshInterfaces() {
+  if (interfaceLoading) return;
+  interfaceLoading = true;
+  try {
   snapshot.value = await api(`/api/snapshot?interfaces=${encodeURIComponent(interfaceView.value)}`);
+  } finally {
+    interfaceLoading = false;
+  }
 }
 async function refreshHistory(period = historyPeriod.value) {
   historyPeriod.value = period;
@@ -737,12 +756,18 @@ async function refreshHistory(period = historyPeriod.value) {
   renderHistoryChart();
 }
 async function refreshProcesses() {
+  if (processLoading) return;
+  processLoading = true;
+  try {
   const params = new URLSearchParams({ period: processPeriod.value, limit: "30" });
   if (processPeriod.value === "custom") {
     if (processStart.value) params.set("start", Math.floor(new Date(processStart.value).getTime() / 1000));
     if (processEnd.value) params.set("end", Math.floor(new Date(processEnd.value).getTime() / 1000));
   }
   processes.value = (await api(`/api/processes?${params.toString()}`)).processes || [];
+  } finally {
+    processLoading = false;
+  }
 }
 async function refreshSettings() {
   settings.value = await api("/api/settings");
@@ -751,12 +776,24 @@ async function refreshSettings() {
   Object.assign(runtimeForm, settings.value.runtime || {});
 }
 async function refreshSystem() {
+  if (systemLoading) return;
+  systemLoading = true;
+  try {
   system.value = await api("/api/system");
+  } finally {
+    systemLoading = false;
+  }
 }
 async function refreshDocker() {
+  if (dockerLoading) return;
+  dockerLoading = true;
+  try {
   const data = await api("/api/docker/containers");
   dockerData.value = { ...data, containers: mergeDockerContainers(data.containers || []) };
   hydrateDockerDetails();
+  } finally {
+    dockerLoading = false;
+  }
 }
 function dockerKey(container) {
   return container?.id || container?.name || "";
@@ -845,8 +882,10 @@ async function refreshVisibleDockerStats() {
   }
 }
 async function refreshConnections(resetPage = false) {
+  if (connectionLoading) return;
   if (resetPage) connOffset.value = 0;
   connLoading.value = true;
+  connectionLoading = true;
   try {
     const params = new URLSearchParams({
       mode: connFilters.mode,
@@ -868,6 +907,7 @@ async function refreshConnections(resetPage = false) {
     connPagination.value = data.pagination || {};
   } finally {
     connLoading.value = false;
+    connectionLoading = false;
   }
 }
 function renderHistoryChart() {
@@ -1118,10 +1158,12 @@ onMounted(async () => {
   }, 2000);
   processTimer = setInterval(() => activeView.value === "processes" && refreshProcesses(), 10000);
   systemTimer = setInterval(() => activeView.value === "system" && refreshSystem(), 3000);
-  window.addEventListener("resize", () => historyChart?.resize());
+  window.addEventListener("resize", handleResize);
 });
 onUnmounted(() => {
-  [overviewTimer, processTimer, systemTimer, connectionTimer].forEach((timer) => timer && clearInterval(timer));
+  [overviewTimer, processTimer, systemTimer, connectionTimer, dockerTimer].forEach((timer) => timer && clearInterval(timer));
+  if (connectionDebounce) clearTimeout(connectionDebounce);
+  window.removeEventListener("resize", handleResize);
   historyChart?.dispose();
 });
 </script>

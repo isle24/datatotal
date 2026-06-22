@@ -98,6 +98,12 @@ services:
       DOCKER_STATS_CACHE_SECONDS: "5"
       DOCKER_WEB_PROBE_TTL_SECONDS: "86400"
       DOCKER_WEB_PROBE_TIMEOUT: "1"
+      PROCESS_RECENT_SECONDS: "180"
+      MAX_CONNECTION_TRACKED: "20000"
+      MAX_PROCESS_TRACKED: "4096"
+      MAX_PORT_TRACKED: "8192"
+      MAX_DOCKER_CACHE_ENTRIES: "512"
+      MAX_DOCKER_ICON_DATA_CHARS: "2097152"
       UVICORN_ACCESS_LOG: "false"
       CONSOLE_LOG: "true"
       DASHBOARD_PASSWORD: "123456"
@@ -293,6 +299,12 @@ docker push isle204/nas-traffic-lens:arm64
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数 |
 | `DOCKER_WEB_PROBE_TTL_SECONDS` | `86400` | Web 端口探测缓存秒数 |
 | `DOCKER_WEB_PROBE_TIMEOUT` | `1` | 单次 Web 探测超时秒数 |
+| `PROCESS_RECENT_SECONDS` | `180` | 30 秒进程排行的内存缓存窗口，默认只保留最近几分钟 |
+| `MAX_CONNECTION_TRACKED` | `20000` | 抓包连接缓存硬上限，超过后淘汰最久未活跃连接 |
+| `MAX_PROCESS_TRACKED` | `4096` | 进程累计缓存硬上限 |
+| `MAX_PORT_TRACKED` | `8192` | 端口累计缓存硬上限 |
+| `MAX_DOCKER_CACHE_ENTRIES` | `512` | Docker stats 和 Web 探测缓存条目上限 |
+| `MAX_DOCKER_ICON_DATA_CHARS` | `2097152` | 单个 Docker 图标 data URL 最大字符数 |
 | `LOGIN_MAX_ATTEMPTS` | `10` | 单客户端登录失败次数上限 |
 | `LOGIN_LOCK_SECONDS` | `300` | 登录锁定秒数 |
 | `ALERT_WAN_TX_BPS` | `0` | 默认持续公网上传速率阈值，单位 B/s |
@@ -426,6 +438,39 @@ tail -f ./logs/uvicorn-error.log
 - 保持默认只展示物理网卡，需要排查时再切换“全部接口”。
 - 保持 Docker stats 按需查看，不要让页面长期打开大量容器详情。
 - `ENABLE_DOCKER_DISCOVERY` 出问题时先设为 `false`，再确认 Docker socket 是否可映射。
+- 查看 `/api/diagnostics` 可以看到当前 RSS 内存、线程数、连接缓存、进程缓存、Docker 缓存规模。
+
+### 运行几天后 CPU 或内存变高
+
+优先打开：
+
+```text
+http://NAS-IP:8088/api/diagnostics
+```
+
+重点看：
+
+- `memory.rssBytes`：后端进程实际内存。
+- `caches.connectionTotals`：抓包连接缓存数量。
+- `caches.processTotals`：进程累计缓存数量。
+- `caches.processRecentKeys`：短期进程排行缓存数量。
+- `caches.dockerStats` / `caches.dockerWebProbes`：Docker 按需缓存数量。
+
+默认已经加了硬上限，BT、DHT、UDP 或大量短连接不会无限撑大内存。如果 NAS 负载仍高，可以进一步调低：
+
+```yaml
+PROCESS_RECENT_SECONDS: "90"
+CONNECTION_RETENTION_SECONDS: "300"
+MAX_CONNECTION_TRACKED: "8000"
+MAX_PROCESS_TRACKED: "2048"
+MAX_PORT_TRACKED: "4096"
+```
+
+如果不常看连接明细，也可以只抓指定物理网卡：
+
+```yaml
+CAPTURE_INTERFACES: "eth0"
+```
 
 ### 公网连接数特别大
 

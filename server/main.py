@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import heapq
 import hmac
 import json
 import ipaddress
@@ -82,6 +83,12 @@ SOCKET_REFRESH_SECONDS = int(os.getenv("SOCKET_REFRESH_SECONDS", "10"))
 INTERFACE_REFRESH_SECONDS = int(os.getenv("INTERFACE_REFRESH_SECONDS", "30"))
 DEFAULT_PERSIST_INTERVAL_SECONDS = int(os.getenv("PERSIST_INTERVAL_SECONDS", "60"))
 DEFAULT_HISTORY_RETENTION_DAYS = int(os.getenv("HISTORY_RETENTION_DAYS", "400"))
+PROCESS_RECENT_SECONDS = int(os.getenv("PROCESS_RECENT_SECONDS", "180"))
+MAX_CONNECTION_TRACKED = int(os.getenv("MAX_CONNECTION_TRACKED", "20000"))
+MAX_PROCESS_TRACKED = int(os.getenv("MAX_PROCESS_TRACKED", "4096"))
+MAX_PORT_TRACKED = int(os.getenv("MAX_PORT_TRACKED", "8192"))
+MAX_DOCKER_CACHE_ENTRIES = int(os.getenv("MAX_DOCKER_CACHE_ENTRIES", "512"))
+MAX_DOCKER_ICON_DATA_CHARS = int(os.getenv("MAX_DOCKER_ICON_DATA_CHARS", str(2 * 1024 * 1024)))
 SAMPLE_SECONDS = DEFAULT_SAMPLE_SECONDS
 RETENTION_SECONDS = DEFAULT_RETENTION_SECONDS
 CONNECTION_ACTIVE_SECONDS = DEFAULT_CONNECTION_ACTIVE_SECONDS
@@ -1206,6 +1213,9 @@ def sanitize_docker_icon(value: str) -> str:
     cleaned = str(value or "").strip()
     if not cleaned:
         return ""
+    max_chars = max(64 * 1024, MAX_DOCKER_ICON_DATA_CHARS)
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars]
     if not cleaned.startswith("data:image/"):
         return ""
     header, sep, payload = cleaned.partition(",")
@@ -1217,6 +1227,8 @@ def sanitize_docker_icon(value: str) -> str:
     try:
         base64.b64decode(payload, validate=True)
     except Exception:
+        return ""
+    if len(payload) > max_chars:
         return ""
     return cleaned
 
@@ -2103,10 +2115,11 @@ class TrafficCollector:
         if container:
             event.process = {**event.process, "container": container}
         process_key = process_key_for(event.process)
+        conn_process_key = process_key_for(event.process, include_container_detail=True)
         port_key = f"{event.proto}:{event.sport}->{event.dport}"
         conn_key = (
             f"{event.iface}|{event.scope}|{event.proto}|"
-            f"{event.src}:{event.sport}|{event.dst}:{event.dport}|{process_key}"
+            f"{event.src}:{event.sport}|{event.dst}:{event.dport}|{conn_process_key}"
         )
 
         with self.lock:
@@ -2132,16 +2145,16 @@ class TrafficCollector:
                     self.last_rates = rates
                     self.history.append({"timestamp": current_time, "rates": rates})
                 self.evaluate_alerts(rates, current_time)
-            if current_time - last_persist >= PERSIST_INTERVAL_SECONDS:
-                self.persist_minute(current, current_time)
-                self.persist_process_minute(current_time)
-                self.evaluate_daily_alert(current_time)
-                last_persist = current_time
             if current_time - last_prune >= 60:
                 self.prune_stale()
                 self.prune_recent_processes(current_time)
                 self.db.prune_old(int(current_time - HISTORY_RETENTION_DAYS * 86400))
                 last_prune = current_time
+            if current_time - last_persist >= PERSIST_INTERVAL_SECONDS:
+                self.persist_minute(current, current_time)
+                self.persist_process_minute(current_time)
+                self.evaluate_daily_alert(current_time)
+                last_persist = current_time
             previous = {"timestamp": current_time, "interfaces": current}
             time.sleep(max(0.5, SAMPLE_SECONDS))
 
@@ -2196,9 +2209,7 @@ class TrafficCollector:
     def connection_counts(self) -> dict:
         with self.lock:
             conntrack = dict(self.conntrack_summary)
-            conn_items = list(self.conn_totals.items())
             socket_summary = socket_connection_summary(self.socket_map)
-        fallback = self.connection_summary(conn_items, set())
         prefer_socket = CONNECTION_COUNT_SOURCE == "socket" and socket_summary.get("available")
         prefer_conntrack = CONNECTION_COUNT_SOURCE == "conntrack" and conntrack.get("available")
         source = "capture"
@@ -2218,12 +2229,18 @@ class TrafficCollector:
             total = socket_summary.get("total")
             wan = socket_summary.get("wan")
             lan = socket_summary.get("lan")
+        else:
+            with self.lock:
+                fallback = self.connection_summary(list(self.conn_totals.items()), set())
+            total = fallback.get("total", 0)
+            wan = fallback.get("wan", 0)
+            lan = fallback.get("lan", 0)
         return {
             "source": source,
             "available": source != "capture",
-            "total": int(total if total is not None else fallback.get("total", 0)),
-            "wan": int(wan if wan is not None else fallback.get("wan", 0)),
-            "lan": int(lan if lan is not None else fallback.get("lan", 0)),
+            "total": int(total or 0),
+            "wan": int(wan or 0),
+            "lan": int(lan or 0),
             "rawTotal": conntrack.get("rawTotal"),
             "countMode": conntrack.get("mode"),
             "mode": conntrack.get("mode") if source == "conntrack" else CONNECTION_COUNT_SOURCE,
@@ -2241,10 +2258,31 @@ class TrafficCollector:
         rows.sort(key=lambda row: row["totalBytes"], reverse=True)
         return rows[:limit]
 
-    def connection_rows(self, values: List[Tuple[str, Counter]], interface_names: set, limit: Optional[int] = None) -> Tuple[List[dict], dict]:
+    def connection_rows(
+        self,
+        values: List[Tuple[str, Counter]],
+        interface_names: set,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        filters: Optional[dict] = None,
+    ) -> Tuple[List[dict], dict, int]:
         rows = []
         summary = {"total": 0, "wan": 0, "lan": 0}
         active_cutoff = now() - max(10, CONNECTION_ACTIVE_SECONDS)
+        filters = filters or {}
+        owner_lower = str(filters.get("owner") or "").lower().strip()
+        source_lower = str(filters.get("source") or "").lower().strip()
+        dest_lower = str(filters.get("dest") or "").lower().strip()
+        iface_filter = str(filters.get("iface") or "all")
+        scope_filter = str(filters.get("scope") or "all")
+        proto_filter = str(filters.get("proto") or "all")
+        direction_filter = str(filters.get("direction") or "all")
+        min_bytes_filter = int(filters.get("min_bytes") or 0)
+        min_duration_filter = int(filters.get("min_duration") or 0)
+        page_limit = max(1, int(limit or 120)) if limit else None
+        page_offset = max(0, int(offset or 0))
+        heap_size = (page_offset + page_limit) if page_limit else 0
+        filtered_total = 0
         for key, counter in values:
             try:
                 if counter.last_seen < active_cutoff:
@@ -2252,16 +2290,60 @@ class TrafficCollector:
                 item = parse_connection_key(key)
                 if interface_names and item.get("iface") not in interface_names:
                     continue
+                if iface_filter != "all" and item.get("iface") != iface_filter:
+                    continue
+                if scope_filter != "all" and item.get("scope") != scope_filter:
+                    continue
+                if proto_filter != "all" and item.get("proto") != proto_filter:
+                    continue
                 item.update(counter.snapshot())
                 scope = item.get("scope")
                 summary["total"] += 1
                 if scope in ("wan", "lan"):
                     summary[scope] += 1
-                rows.append(item)
+                if direction_filter == "rx" and int(item.get("rxBytes") or 0) <= 0:
+                    continue
+                if direction_filter == "tx" and int(item.get("txBytes") or 0) <= 0:
+                    continue
+                if min_bytes_filter and int(item.get("totalBytes") or 0) < min_bytes_filter:
+                    continue
+                if min_duration_filter and float(item.get("durationSeconds") or 0) < min_duration_filter:
+                    continue
+                if source_lower and source_lower not in str(item.get("source", "")).lower():
+                    continue
+                if dest_lower and dest_lower not in str(item.get("dest", "")).lower():
+                    continue
+                if owner_lower:
+                    container = item.get("process", {}).get("container") or {}
+                    owner_text = " ".join(
+                        str(value or "")
+                        for value in (
+                            item.get("process", {}).get("name"),
+                            item.get("process", {}).get("pid"),
+                            container.get("name"),
+                            container.get("image"),
+                            container.get("label"),
+                        )
+                    ).lower()
+                    if owner_lower not in owner_text:
+                        continue
+                filtered_total += 1
+                if page_limit:
+                    score = int(item.get("totalBytes") or 0)
+                    entry = (score, filtered_total, item)
+                    if len(rows) < heap_size:
+                        heapq.heappush(rows, entry)
+                    elif heap_size and entry > rows[0]:
+                        heapq.heapreplace(rows, entry)
+                else:
+                    rows.append(item)
             except Exception:
                 print(f"skip malformed connection key: {key}", flush=True)
+        if page_limit:
+            sorted_rows = [entry[2] for entry in sorted(rows, key=lambda row: (row[0], row[1]), reverse=True)]
+            return sorted_rows[page_offset : page_offset + page_limit], summary, filtered_total
         rows.sort(key=lambda row: row["totalBytes"], reverse=True)
-        return (rows[:limit] if limit else rows), summary
+        return rows, summary, filtered_total
 
     def connection_summary(self, values: List[Tuple[str, Counter]], interface_names: set) -> dict:
         summary = {"total": 0, "wan": 0, "lan": 0}
@@ -2381,7 +2463,7 @@ class TrafficCollector:
         return self.rank_items(list(counters.items()), parse_process_key, limit)
 
     def prune_recent_processes(self, timestamp: float) -> None:
-        cutoff = int(timestamp) - max(120, RETENTION_SECONDS)
+        cutoff = int(timestamp) - max(60, min(PROCESS_RECENT_SECONDS, RETENTION_SECONDS))
         with self.lock:
             for bucket in list(self.process_recent.keys()):
                 if bucket < cutoff:
@@ -2414,46 +2496,23 @@ class TrafficCollector:
         interface_names = set(interfaces.keys())
         with self.lock:
             conn_items = list(self.conn_totals.items())
-        rows, summary = self.connection_rows(conn_items, interface_names)
-        filtered = []
-        owner_lower = owner.lower().strip()
-        source_lower = source.lower().strip()
-        dest_lower = dest.lower().strip()
-        for item in rows:
-            container = item.get("process", {}).get("container") or {}
-            owner_text = " ".join(
-                str(value or "")
-                for value in (
-                    item.get("process", {}).get("name"),
-                    item.get("process", {}).get("pid"),
-                    container.get("name"),
-                    container.get("image"),
-                    container.get("label"),
-                )
-            ).lower()
-            if iface != "all" and item.get("iface") != iface:
-                continue
-            if scope != "all" and item.get("scope") != scope:
-                continue
-            if proto != "all" and item.get("proto") != proto:
-                continue
-            if direction == "rx" and int(item.get("rxBytes") or 0) <= 0:
-                continue
-            if direction == "tx" and int(item.get("txBytes") or 0) <= 0:
-                continue
-            if owner_lower and owner_lower not in owner_text:
-                continue
-            if source_lower and source_lower not in str(item.get("source", "")).lower():
-                continue
-            if dest_lower and dest_lower not in str(item.get("dest", "")).lower():
-                continue
-            if min_bytes and int(item.get("totalBytes") or 0) < int(min_bytes):
-                continue
-            if min_duration and float(item.get("durationSeconds") or 0) < int(min_duration):
-                continue
-            filtered.append(item)
-        total_filtered = len(filtered)
-        page_rows = filtered[offset : offset + limit]
+        page_rows, summary, total_filtered = self.connection_rows(
+            conn_items,
+            interface_names,
+            limit=limit,
+            offset=offset,
+            filters={
+                "iface": iface,
+                "scope": scope,
+                "proto": proto,
+                "direction": direction,
+                "owner": owner,
+                "source": source,
+                "dest": dest,
+                "min_bytes": min_bytes,
+                "min_duration": min_duration,
+            },
+        )
         return {
             "source": "capture",
             "interfaceView": interface_view,
@@ -2532,6 +2591,26 @@ class TrafficCollector:
 
         self.last_process_persist_totals = current_totals
         self.db.add_process_minute(int(timestamp // 60) * 60, rows)
+
+    def trim_counter_store(self, store: dict, max_items: int) -> None:
+        if max_items <= 0 or len(store) <= max_items:
+            return
+        remove_count = len(store) - max_items
+        stale_keys = heapq.nsmallest(remove_count, store.keys(), key=lambda key: store[key].last_seen)
+        for key in stale_keys:
+            store.pop(key, None)
+
+    def trim_mapping_by_time(self, store: dict, max_items: int, time_field: str) -> None:
+        if max_items <= 0 or len(store) <= max_items:
+            return
+        remove_count = len(store) - max_items
+        stale_keys = heapq.nsmallest(
+            remove_count,
+            store.keys(),
+            key=lambda key: float((store.get(key) or {}).get(time_field) or 0),
+        )
+        for key in stale_keys:
+            store.pop(key, None)
 
     def evaluate_alerts(self, rates: dict, timestamp: float) -> None:
         wan_tx_bps = sum(scope.get("wan", {}).get("txBps", 0) for scope in [item.get("scopes", {}) for item in rates.values()])
@@ -2638,12 +2717,24 @@ class TrafficCollector:
             for key in list(self.conn_totals.keys()):
                 if self.conn_totals[key].last_seen < connection_cutoff:
                     del self.conn_totals[key]
+            self.trim_counter_store(self.conn_totals, max(1000, MAX_CONNECTION_TRACKED))
+            self.trim_counter_store(self.process_totals, max(256, MAX_PROCESS_TRACKED))
+            self.trim_counter_store(self.port_totals, max(512, MAX_PORT_TRACKED))
+            self.trim_mapping_by_time(self.docker_stats_cache, max(32, MAX_DOCKER_CACHE_ENTRIES), "cachedAt")
+            self.trim_mapping_by_time(self.docker_web_probe_cache, max(32, MAX_DOCKER_CACHE_ENTRIES), "checkedAt")
             for iface in list(self.iface_totals.keys()):
                 for scope in list(self.iface_totals[iface].keys()):
                     if self.iface_totals[iface][scope].last_seen < traffic_cutoff:
                         del self.iface_totals[iface][scope]
                 if not self.iface_totals[iface]:
                     del self.iface_totals[iface]
+            if self.last_process_persist_totals and len(self.last_process_persist_totals) > max(256, MAX_PROCESS_TRACKED):
+                active_processes = set(self.process_totals.keys())
+                self.last_process_persist_totals = {
+                    key: value
+                    for key, value in self.last_process_persist_totals.items()
+                    if key in active_processes
+                }
 
     def start_stage(self, interface_view: str = "physical") -> dict:
         with self.lock:
@@ -2716,11 +2807,50 @@ class TrafficCollector:
                 "captureInterfaces": self.capture_interfaces,
                 "conntrackSource": self.conntrack_summary.get("source"),
                 "conntrackAvailable": self.conntrack_summary.get("available"),
+                "processRecentSeconds": PROCESS_RECENT_SECONDS,
+                "maxConnectionTracked": MAX_CONNECTION_TRACKED,
+                "maxProcessTracked": MAX_PROCESS_TRACKED,
+                "maxPortTracked": MAX_PORT_TRACKED,
+                "maxDockerCacheEntries": MAX_DOCKER_CACHE_ENTRIES,
             },
                 "labels": self.db.get_labels(),
                 "dockerOverrides": self.docker_overrides,
                 "dockerDiscovery": self.container_status,
         }
+
+    def diagnostics(self) -> dict:
+        process = psutil.Process()
+        memory = process.memory_info()
+        with self.lock:
+            recent_process_keys = sum(len(processes) for processes in self.process_recent.values())
+            return {
+                "timestamp": now(),
+                "memory": {
+                    "rssBytes": memory.rss,
+                    "vmsBytes": memory.vms,
+                },
+                "threads": process.num_threads(),
+                "caches": {
+                    "interfaces": len(self.iface_totals),
+                    "processTotals": len(self.process_totals),
+                    "portTotals": len(self.port_totals),
+                    "connectionTotals": len(self.conn_totals),
+                    "processRecentBuckets": len(self.process_recent),
+                    "processRecentKeys": recent_process_keys,
+                    "dockerStats": len(self.docker_stats_cache),
+                    "dockerWebProbes": len(self.docker_web_probe_cache),
+                    "socketMap": len(self.socket_map),
+                    "containerPorts": len(self.container_ports),
+                    "containerRows": len(self.container_rows),
+                },
+                "limits": {
+                    "processRecentSeconds": PROCESS_RECENT_SECONDS,
+                    "maxConnectionTracked": MAX_CONNECTION_TRACKED,
+                    "maxProcessTracked": MAX_PROCESS_TRACKED,
+                    "maxPortTracked": MAX_PORT_TRACKED,
+                    "maxDockerCacheEntries": MAX_DOCKER_CACHE_ENTRIES,
+                },
+            }
 
     def docker_containers(self) -> dict:
         self.refresh_container_ports()
@@ -3140,6 +3270,8 @@ def read_conntrack_connections(
     dest_lower = dest.lower().strip()
     rows = []
     summary = {"total": 0, "wan": 0, "lan": 0}
+    heap_size = offset + limit
+    filtered_total = 0
     try:
         with selected.open("r", errors="ignore") as file:
             for line in file:
@@ -3187,23 +3319,28 @@ def read_conntrack_connections(
                 summary["total"] += 1
                 if endpoint_scope in ("wan", "lan"):
                     summary[endpoint_scope] += 1
-                rows.append(
-                    {
-                        "iface": "conntrack",
-                        "scope": endpoint_scope,
-                        "proto": entry.get("proto") or "unknown",
-                        "direction": direction if direction in {"rx", "tx"} else ("tx" if tx_bytes >= rx_bytes else "rx"),
-                        "source": src_text,
-                        "dest": dst_text,
-                        "rxBytes": rx_bytes,
-                        "txBytes": tx_bytes,
-                        "durationSeconds": duration,
-                        "process": {"pid": None, "name": "conntrack", "cmdline": "", "container": {}},
-                        "container": {},
-                        "labelKey": "",
-                        "label": "",
-                    }
-                )
+                filtered_total += 1
+                row = {
+                    "iface": "conntrack",
+                    "scope": endpoint_scope,
+                    "proto": entry.get("proto") or "unknown",
+                    "direction": direction if direction in {"rx", "tx"} else ("tx" if tx_bytes >= rx_bytes else "rx"),
+                    "source": src_text,
+                    "dest": dst_text,
+                    "rxBytes": rx_bytes,
+                    "txBytes": tx_bytes,
+                    "durationSeconds": duration,
+                    "process": {"pid": None, "name": "conntrack", "cmdline": "", "container": {}},
+                    "container": {},
+                    "labelKey": "",
+                    "label": "",
+                }
+                score = tx_bytes + rx_bytes
+                entry_key = (score, filtered_total, row)
+                if len(rows) < heap_size:
+                    heapq.heappush(rows, entry_key)
+                elif heap_size and entry_key > rows[0]:
+                    heapq.heapreplace(rows, entry_key)
     except OSError:
         return {
             "source": "conntrack",
@@ -3212,18 +3349,17 @@ def read_conntrack_connections(
             "connections": [],
         }
 
-    rows.sort(key=lambda row: row.get("txBytes", 0) + row.get("rxBytes", 0), reverse=True)
-    total_filtered = len(rows)
-    page_rows = rows[offset : offset + limit]
+    sorted_rows = [entry[2] for entry in sorted(rows, key=lambda row: (row[0], row[1]), reverse=True)]
+    page_rows = sorted_rows[offset : offset + limit]
     return {
         "source": "conntrack",
         "summary": summary,
         "pagination": {
-            "total": total_filtered,
+            "total": filtered_total,
             "limit": limit,
             "offset": offset,
             "page": int(offset // limit) + 1,
-            "pages": max(1, int((total_filtered + limit - 1) // limit)),
+            "pages": max(1, int((filtered_total + limit - 1) // limit)),
         },
         "connections": page_rows,
     }
@@ -3247,12 +3383,33 @@ def socket_connection_summary(socket_map: Dict[Tuple[str, str, str, int, int], d
     return {"available": bool(total), "total": total, "wan": wan, "lan": lan}
 
 
-def process_key_for(process: dict) -> str:
+def slim_container_for_process(process: dict, include_detail: bool = False) -> dict:
+    container = process.get("container") or {}
+    if not isinstance(container, dict):
+        return {}
+    if include_detail:
+        return {
+            "id": str(container.get("id") or "")[:12],
+            "name": str(container.get("name") or "")[:120],
+            "image": str(container.get("image") or "")[:160],
+            "label": str(container.get("label") or "")[:120],
+            "labelKey": str(container.get("labelKey") or "")[:180],
+            "hostPort": int(container.get("hostPort") or 0),
+            "proto": str(container.get("proto") or "")[:8],
+        }
+    return {
+        "id": str(container.get("id") or "")[:12],
+        "name": str(container.get("name") or "")[:120],
+        "label": str(container.get("label") or "")[:120],
+    }
+
+
+def process_key_for(process: dict, include_container_detail: bool = False) -> str:
     payload = {
         "pid": process.get("pid"),
-        "name": process.get("name") or "unknown",
-        "cmdline": process.get("cmdline") or "",
-        "container": process.get("container") or {},
+        "name": str(process.get("name") or "unknown")[:120],
+        "cmdline": str(process.get("cmdline") or "")[:240],
+        "container": slim_container_for_process(process, include_container_detail),
     }
     return b64url(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode())
 
@@ -3614,14 +3771,22 @@ async def system() -> dict:
 
 @app.get("/api/health")
 async def health() -> dict:
+    diagnostics = collector.diagnostics()
     return {
         "ok": True,
         "version": APP_VERSION,
         "sniffers": len(collector.sniffers),
         "captureInterfaces": collector.capture_interfaces,
         "containerStatus": collector.container_status,
+        "memory": diagnostics.get("memory"),
+        "caches": diagnostics.get("caches"),
         "timestamp": now(),
     }
+
+
+@app.get("/api/diagnostics")
+async def diagnostics() -> dict:
+    return collector.diagnostics()
 
 
 @app.post("/api/stage/start")

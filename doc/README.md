@@ -103,6 +103,12 @@ docker compose -f docker-compose.nas.yml up -d
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数，只对已点开“显示占用”的容器生效 |
 | `DOCKER_WEB_PROBE_TTL_SECONDS` | `86400` | 端口是否 Web 的探测缓存秒数 |
 | `DOCKER_WEB_PROBE_TIMEOUT` | `1` | 单次 Web 端口探测超时秒数 |
+| `PROCESS_RECENT_SECONDS` | `180` | 30 秒进程排行的内存缓存窗口 |
+| `MAX_CONNECTION_TRACKED` | `20000` | 抓包连接缓存硬上限，超过后淘汰最久未活跃连接 |
+| `MAX_PROCESS_TRACKED` | `4096` | 进程累计缓存硬上限 |
+| `MAX_PORT_TRACKED` | `8192` | 端口累计缓存硬上限 |
+| `MAX_DOCKER_CACHE_ENTRIES` | `512` | Docker stats 和 Web 探测缓存条目上限 |
+| `MAX_DOCKER_ICON_DATA_CHARS` | `2097152` | 单个 Docker 图标 data URL 最大字符数 |
 | `LOGIN_MAX_ATTEMPTS` | `10` | 单个客户端登录失败次数上限 |
 | `LOGIN_LOCK_SECONDS` | `300` | 登录失败达到上限后的限制时间 |
 | `ALERT_WAN_TX_BPS` | `0` | 默认监控规则：公网上传速率阈值，单位 B/s |
