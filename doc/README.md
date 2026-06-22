@@ -62,19 +62,23 @@ platform: linux/amd64
 如果你在 Z425 本机上构建，直接执行部署命令即可。如果你在 Apple Silicon Mac 或其他非 amd64 机器上打包给 Z425 使用，建议同时打固定版本和 `latest` 两个 tag：
 
 ```bash
+VERSION=$(cat VERSION)
+
 docker buildx build --platform linux/amd64 \
-  -t isle204/nas-traffic-lens:2026.06.17-9 \
+  -t isle204/nas-traffic-lens:${VERSION} \
   -t isle204/nas-traffic-lens:latest \
   --load .
-docker save isle204/nas-traffic-lens:2026.06.17-9 isle204/nas-traffic-lens:latest -o nas-traffic-lens-amd64.tar
+docker save isle204/nas-traffic-lens:${VERSION} isle204/nas-traffic-lens:latest -o nas-traffic-lens-amd64.tar
 ```
 
 把 `nas-traffic-lens-amd64.tar` 导入极空间 Docker 后，镜像架构就是 `linux/amd64`。
 
-推荐 NAS 部署固定版本 tag，避免复用 `latest` 缓存。你手动推送时可以两个 tag 都推：
+日常 NAS 部署推荐使用 `latest`，文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag。你手动推送时可以两个 tag 都推：
 
 ```bash
-docker push isle204/nas-traffic-lens:2026.06.17-9
+VERSION=$(cat VERSION)
+
+docker push isle204/nas-traffic-lens:${VERSION}
 docker push isle204/nas-traffic-lens:latest
 ```
 
@@ -95,18 +99,24 @@ docker compose -f docker-compose.nas.yml up -d
 | `DB_PATH` | `/data/traffic.db` | SQLite 历史数据路径 |
 | `LOG_DIR` | `/logs` | uvicorn 访问日志和错误日志目录 |
 | `UVICORN_ACCESS_LOG` | `false` | 是否记录每次 HTTP 访问日志，默认关闭以减少写盘 |
+| `FILE_LOG` | `true` | 是否写入日志文件；设为 `false` 时直接输出到容器控制台 |
 | `CONSOLE_LOG` | `true` | 是否把文件日志同步输出到容器控制台 |
+| `ENABLE_PACKET_CAPTURE` | `true` | 是否启用抓包归因；关闭后公网阶段和进程流量会不可用或变少 |
 | `CAPTURE_INTERFACES` | 自动 | 指定抓包网卡，逗号分隔；设置为 `all` 才抓所有启用接口 |
+| `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 每秒最多记录的抓包事件，超过会丢弃以保护宿主 |
+| `CAPTURE_SAMPLE_RATE` | `1` | 抓包采样率，`2` 表示每 2 个包取 1 个 |
+| `MAX_RATE_HISTORY_POINTS` | `180` | 内存实时速率诊断点数，历史图表使用 SQLite |
 | `HISTORY_RETENTION_DAYS` | `400` | SQLite 历史数据保留天数 |
 | `ENABLE_DOCKER_DISCOVERY` | `false` | 是否读取 Docker socket 自动识别容器名 |
 | `DOCKER_LIST_CACHE_SECONDS` | `20` | Docker 容器列表缓存秒数，避免频繁扫 socket |
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数，只对已点开“显示占用”的容器生效 |
 | `DOCKER_WEB_PROBE_TTL_SECONDS` | `86400` | 端口是否 Web 的探测缓存秒数 |
 | `DOCKER_WEB_PROBE_TIMEOUT` | `1` | 单次 Web 端口探测超时秒数 |
+| `DOCKER_API_MAX_BYTES` | `2097152` | 单次 Docker socket 响应最大读取字节 |
 | `PROCESS_RECENT_SECONDS` | `180` | 30 秒进程排行的内存缓存窗口 |
-| `MAX_CONNECTION_TRACKED` | `20000` | 抓包连接缓存硬上限，超过后淘汰最久未活跃连接 |
-| `MAX_PROCESS_TRACKED` | `4096` | 进程累计缓存硬上限 |
-| `MAX_PORT_TRACKED` | `8192` | 端口累计缓存硬上限 |
+| `MAX_CONNECTION_TRACKED` | `10000` | 抓包连接缓存硬上限，超过后淘汰最久未活跃连接 |
+| `MAX_PROCESS_TRACKED` | `2048` | 进程累计缓存硬上限 |
+| `MAX_PORT_TRACKED` | `4096` | 端口累计缓存硬上限 |
 | `MAX_DOCKER_CACHE_ENTRIES` | `512` | Docker stats 和 Web 探测缓存条目上限 |
 | `MAX_DOCKER_ICON_DATA_CHARS` | `2097152` | 单个 Docker 图标 data URL 最大字符数 |
 | `LOGIN_MAX_ATTEMPTS` | `10` | 单个客户端登录失败次数上限 |
@@ -122,12 +132,20 @@ docker compose -f docker-compose.nas.yml up -d
 | `CONNECTION_RETENTION_SECONDS` | `900` | 连接明细缓存保留时长 |
 | `AUTO_START_STAGE` | `true` | 启动后自动开始阶段公网统计，设为 `false` 后需手动开始 |
 | `CONNECTION_COUNT_SOURCE` | `conntrack` | 首页连接数来源，支持 `conntrack`、`socket`、`capture` |
-| `CONNTRACK_REFRESH_SECONDS` | `5` | conntrack 连接数刷新间隔，单位秒 |
+| `CONNTRACK_REFRESH_SECONDS` | `30` | conntrack 连接数刷新间隔，单位秒 |
 | `CONNTRACK_COUNT_MODE` | `active` | conntrack 计数模式，`active` 只算活跃会话，`raw` 算原始表条目 |
 | `CONNTRACK_TCP_STATES` | `ESTABLISHED` | active 模式下计入的 TCP 状态，逗号分隔 |
 | `CONNTRACK_UDP_REQUIRE_ASSURED` | `true` | UDP 默认只统计双向确认会话，减少组播/残留条目 |
 | `CONNTRACK_INCLUDE_UNREPLIED` | `false` | 是否把未回应连接纳入 active 统计 |
 | `CONNTRACK_MIN_TIMEOUT_SECONDS` | `3` | active 模式下最小剩余超时时间 |
+| `CONNTRACK_MAX_LINES` | `30000` | 首页连接数每次最多扫描 conntrack 行数 |
+| `CONNTRACK_SCAN_SECONDS` | `1` | 首页连接数每次最多扫描秒数 |
+| `CONNTRACK_CONNECTION_MAX_LINES` | `30000` | 连接弹窗明细每次最多扫描 conntrack 行数 |
+| `CONNTRACK_CONNECTION_SCAN_SECONDS` | `1.5` | 连接弹窗明细每次最多扫描秒数 |
+| `SOCKET_REFRESH_SECONDS` | `60` | socket/进程归属刷新间隔 |
+| `PROC_SCAN_TIMEOUT_SECONDS` | `1` | 扫描 `/proc` socket 到进程归属的单次时间预算 |
+| `MAX_PROC_FD_LINKS` | `60000` | 单次最多读取的进程 fd 链接数 |
+| `MAX_PROC_NET_LINES` | `60000` | 单个 `/proc/net/*` 文件最多读取行数 |
 
 监控规则、通知渠道和部分运行参数都可以在页面“监控中心”里修改。页面保存后的值会写入 SQLite，并优先于环境变量。端口、日志目录、Docker 发现、抓包接口这类启动期配置会在页面只读展示，修改仍建议通过 compose 环境变量并重启容器。
 
@@ -287,6 +305,19 @@ devices:
 - 连接/端口缓存会定期清理长时间不活跃项。
 - 进程、连接、端口排行只在页面请求快照时排序，不在每秒采样循环里排序。
 - 默认关闭 uvicorn 访问日志，避免 2 秒轮询持续写盘。
+- conntrack 和 `/proc` 扫描都有行数上限和时间预算，超过后返回截断状态，优先保护 Docker 引擎和宿主稳定。
+- 抓包有每秒事件上限，超过会丢弃并在 `/api/diagnostics` 的 `capture.droppedEvents` 中体现。
+
+如果宿主或 Docker 引擎负载异常，可以先用保守模式定位压力来源：
+
+```yaml
+ENABLE_DOCKER_DISCOVERY: "false"
+CONNECTION_COUNT_SOURCE: "socket"
+ENABLE_PACKET_CAPTURE: "false"
+FILE_LOG: "false"
+```
+
+这个模式会牺牲公网阶段统计、进程流量归因和 Docker 自动发现，但能快速判断问题是否来自 conntrack、抓包或 Docker socket。
 
 ## 连接数口径
 

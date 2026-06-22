@@ -98,13 +98,19 @@ services:
       DOCKER_STATS_CACHE_SECONDS: "5"
       DOCKER_WEB_PROBE_TTL_SECONDS: "86400"
       DOCKER_WEB_PROBE_TIMEOUT: "1"
+      DOCKER_API_MAX_BYTES: "2097152"
+      ENABLE_PACKET_CAPTURE: "true"
+      CAPTURE_MAX_EVENTS_PER_SECOND: "2000"
+      CAPTURE_SAMPLE_RATE: "1"
+      MAX_RATE_HISTORY_POINTS: "180"
       PROCESS_RECENT_SECONDS: "180"
-      MAX_CONNECTION_TRACKED: "20000"
-      MAX_PROCESS_TRACKED: "4096"
-      MAX_PORT_TRACKED: "8192"
+      MAX_CONNECTION_TRACKED: "10000"
+      MAX_PROCESS_TRACKED: "2048"
+      MAX_PORT_TRACKED: "4096"
       MAX_DOCKER_CACHE_ENTRIES: "512"
       MAX_DOCKER_ICON_DATA_CHARS: "2097152"
       UVICORN_ACCESS_LOG: "false"
+      FILE_LOG: "true"
       CONSOLE_LOG: "true"
       DASHBOARD_PASSWORD: "123456"
       ALERT_WAN_TX_BPS: "10485760"
@@ -118,12 +124,20 @@ services:
       CONNECTION_RETENTION_SECONDS: "900"
       AUTO_START_STAGE: "true"
       CONNECTION_COUNT_SOURCE: "conntrack"
-      CONNTRACK_REFRESH_SECONDS: "5"
+      CONNTRACK_REFRESH_SECONDS: "30"
       CONNTRACK_COUNT_MODE: "active"
       CONNTRACK_TCP_STATES: "ESTABLISHED"
       CONNTRACK_UDP_REQUIRE_ASSURED: "true"
       CONNTRACK_INCLUDE_UNREPLIED: "false"
       CONNTRACK_MIN_TIMEOUT_SECONDS: "3"
+      CONNTRACK_MAX_LINES: "30000"
+      CONNTRACK_SCAN_SECONDS: "1"
+      CONNTRACK_CONNECTION_MAX_LINES: "30000"
+      CONNTRACK_CONNECTION_SCAN_SECONDS: "1.5"
+      SOCKET_REFRESH_SECONDS: "60"
+      PROC_SCAN_TIMEOUT_SECONDS: "1"
+      MAX_PROC_FD_LINKS: "60000"
+      MAX_PROC_NET_LINES: "60000"
       # CAPTURE_INTERFACES: "eth0"
     volumes:
       - ./data:/data
@@ -274,7 +288,7 @@ docker push isle204/nas-traffic-lens:${VERSION}-arm64
 docker push isle204/nas-traffic-lens:arm64
 ```
 
-日常部署推荐使用 `latest`，这样文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag，例如 `2026.06.17-9`。
+日常部署推荐使用 `latest`，这样文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag，例如当前 `VERSION` 文件中的版本。
 
 ## 环境变量
 
@@ -287,22 +301,28 @@ docker push isle204/nas-traffic-lens:arm64
 | `DB_PATH` | `/data/traffic.db` | SQLite 数据库路径 |
 | `LOG_DIR` | `/logs` | 日志目录 |
 | `UVICORN_ACCESS_LOG` | `false` | 是否开启 HTTP access log，默认关闭以降低写盘 |
+| `FILE_LOG` | `true` | 是否写入 `LOG_DIR` 文件；设为 `false` 时直接输出到容器 stdout/stderr |
 | `CONSOLE_LOG` | `true` | 是否把日志同步输出到容器控制台 |
 | `SAMPLE_SECONDS` | `1` | 采样间隔 |
 | `RETENTION_SECONDS` | `3600` | 内存中短期历史保留秒数 |
 | `PERSIST_INTERVAL_SECONDS` | `60` | 写入 SQLite 的间隔 |
 | `HISTORY_RETENTION_DAYS` | `400` | 历史数据保留天数 |
+| `ENABLE_PACKET_CAPTURE` | `true` | 是否启用抓包归因；关闭后公网阶段和进程流量会不可用或变少 |
 | `CAPTURE_INTERFACES` | 自动 | 指定抓包接口，逗号分隔；`all` 表示抓所有启用接口 |
+| `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 抓包每秒最多记录的包数，超过会丢弃以保护宿主 |
+| `CAPTURE_SAMPLE_RATE` | `1` | 抓包采样率，`2` 表示每 2 个包取 1 个 |
+| `MAX_RATE_HISTORY_POINTS` | `180` | 内存中的实时速率诊断点数，历史图表使用 SQLite |
 | `ENABLE_DOCKER_DISCOVERY` | `false` | 是否读取 Docker socket 自动发现容器和端口 |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket 路径 |
 | `DOCKER_LIST_CACHE_SECONDS` | `20` | Docker 容器列表缓存秒数 |
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数 |
 | `DOCKER_WEB_PROBE_TTL_SECONDS` | `86400` | Web 端口探测缓存秒数 |
 | `DOCKER_WEB_PROBE_TIMEOUT` | `1` | 单次 Web 探测超时秒数 |
+| `DOCKER_API_MAX_BYTES` | `2097152` | 单次 Docker socket 响应最大读取字节 |
 | `PROCESS_RECENT_SECONDS` | `180` | 30 秒进程排行的内存缓存窗口，默认只保留最近几分钟 |
-| `MAX_CONNECTION_TRACKED` | `20000` | 抓包连接缓存硬上限，超过后淘汰最久未活跃连接 |
-| `MAX_PROCESS_TRACKED` | `4096` | 进程累计缓存硬上限 |
-| `MAX_PORT_TRACKED` | `8192` | 端口累计缓存硬上限 |
+| `MAX_CONNECTION_TRACKED` | `10000` | 抓包连接缓存硬上限，超过后淘汰最久未活跃连接 |
+| `MAX_PROCESS_TRACKED` | `2048` | 进程累计缓存硬上限 |
+| `MAX_PORT_TRACKED` | `4096` | 端口累计缓存硬上限 |
 | `MAX_DOCKER_CACHE_ENTRIES` | `512` | Docker stats 和 Web 探测缓存条目上限 |
 | `MAX_DOCKER_ICON_DATA_CHARS` | `2097152` | 单个 Docker 图标 data URL 最大字符数 |
 | `LOGIN_MAX_ATTEMPTS` | `10` | 单客户端登录失败次数上限 |
@@ -317,14 +337,21 @@ docker push isle204/nas-traffic-lens:arm64
 | `CONNECTION_ACTIVE_SECONDS` | `120` | 活跃连接统计窗口 |
 | `CONNECTION_RETENTION_SECONDS` | `900` | 连接明细缓存保留秒数 |
 | `CONNECTION_COUNT_SOURCE` | `conntrack` | 连接数来源：`conntrack`、`socket`、`capture` |
-| `CONNTRACK_REFRESH_SECONDS` | `5` | conntrack 连接数刷新间隔 |
+| `CONNTRACK_REFRESH_SECONDS` | `30` | conntrack 连接数刷新间隔 |
 | `CONNTRACK_COUNT_MODE` | `active` | `active` 统计活跃会话，`raw` 统计原始表条目 |
 | `CONNTRACK_TCP_STATES` | `ESTABLISHED` | active 模式下计入的 TCP 状态 |
 | `CONNTRACK_UDP_REQUIRE_ASSURED` | `true` | UDP 是否只统计已确认双向会话 |
 | `CONNTRACK_INCLUDE_UNREPLIED` | `false` | 是否统计未回应连接 |
 | `CONNTRACK_MIN_TIMEOUT_SECONDS` | `3` | active 模式最小剩余超时时间 |
+| `CONNTRACK_MAX_LINES` | `30000` | 首页连接数每次最多扫描 conntrack 行数 |
+| `CONNTRACK_SCAN_SECONDS` | `1` | 首页连接数每次最多扫描秒数 |
+| `CONNTRACK_CONNECTION_MAX_LINES` | `30000` | 连接弹窗 conntrack 明细每次最多扫描行数 |
+| `CONNTRACK_CONNECTION_SCAN_SECONDS` | `1.5` | 连接弹窗 conntrack 明细每次最多扫描秒数 |
 | `SOCKET_TCP_STATES` | `ESTABLISHED` | socket 模式下计入的 TCP 状态 |
-| `SOCKET_REFRESH_SECONDS` | `10` | socket 连接数刷新间隔 |
+| `SOCKET_REFRESH_SECONDS` | `60` | socket 连接数刷新间隔 |
+| `PROC_SCAN_TIMEOUT_SECONDS` | `1` | 扫描 `/proc` socket 到进程归属的单次时间预算 |
+| `MAX_PROC_FD_LINKS` | `60000` | 单次最多读取的进程 fd 链接数 |
+| `MAX_PROC_NET_LINES` | `60000` | 单个 `/proc/net/*` 文件最多读取行数 |
 | `INTERFACE_REFRESH_SECONDS` | `30` | 网卡元信息刷新间隔 |
 
 页面“监控中心”可以修改监控规则、通知渠道、消息模板和部分运行参数。页面保存后的配置会写入 SQLite，优先级高于环境变量。端口、日志目录、Docker 发现、Docker socket、抓包接口属于启动期配置，修改后需要重启容器。
@@ -455,6 +482,8 @@ http://NAS-IP:8088/api/diagnostics
 - `caches.processTotals`：进程累计缓存数量。
 - `caches.processRecentKeys`：短期进程排行缓存数量。
 - `caches.dockerStats` / `caches.dockerWebProbes`：Docker 按需缓存数量。
+- `capture.droppedEvents`：抓包限流丢弃的包数。
+- `conntrack.truncated`：conntrack 是否因行数或时间预算被截断。
 
 默认已经加了硬上限，BT、DHT、UDP 或大量短连接不会无限撑大内存。如果 NAS 负载仍高，可以进一步调低：
 
@@ -464,6 +493,9 @@ CONNECTION_RETENTION_SECONDS: "300"
 MAX_CONNECTION_TRACKED: "8000"
 MAX_PROCESS_TRACKED: "2048"
 MAX_PORT_TRACKED: "4096"
+CAPTURE_MAX_EVENTS_PER_SECOND: "1000"
+CONNTRACK_MAX_LINES: "15000"
+CONNTRACK_CONNECTION_MAX_LINES: "15000"
 ```
 
 如果不常看连接明细，也可以只抓指定物理网卡：
@@ -471,6 +503,17 @@ MAX_PORT_TRACKED: "4096"
 ```yaml
 CAPTURE_INTERFACES: "eth0"
 ```
+
+如果 Docker 引擎或宿主负载异常，先用保守模式验证：
+
+```yaml
+ENABLE_DOCKER_DISCOVERY: "false"
+CONNECTION_COUNT_SOURCE: "socket"
+ENABLE_PACKET_CAPTURE: "false"
+FILE_LOG: "false"
+```
+
+这个模式会牺牲公网阶段统计、进程流量归因和 Docker 自动发现，但可以快速判断压力是否来自 conntrack/抓包/Docker socket。
 
 ### 公网连接数特别大
 
@@ -533,7 +576,7 @@ cd front-end && npm run build
 ## 版本发布建议
 
 1. 修改代码。
-2. 更新 `VERSION`，例如 `2026.06.17-10`。
+2. 更新 `VERSION`，例如 `2026.06.22-2`。
 3. 运行后端和前端检查。
 4. 提交 Git。
 5. 分别构建 amd64 和 arm64。

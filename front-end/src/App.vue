@@ -291,7 +291,7 @@
               <label>历史保留天<input v-model.number="runtimeForm.historyRetentionDays" type="number" min="1" /></label>
               <label>活跃连接窗口秒<input v-model.number="runtimeForm.connectionActiveSeconds" type="number" min="10" /></label>
               <label>连接缓存秒<input v-model.number="runtimeForm.connectionRetentionSeconds" type="number" min="60" /></label>
-              <label>Conntrack 刷新秒<input v-model.number="runtimeForm.conntrackRefreshSeconds" type="number" min="2" /></label>
+              <label>Conntrack 刷新秒<input v-model.number="runtimeForm.conntrackRefreshSeconds" type="number" :min="settings?.runtime?.minConntrackRefreshSeconds || 15" /></label>
               <label class="check"><input v-model="runtimeForm.autoStartStage" type="checkbox" /> 阶段公网默认统计</label>
             </div>
           </section>
@@ -304,6 +304,9 @@
               <InfoItem label="日志目录" :value="settings?.runtime?.logDir" />
               <InfoItem label="Docker 发现" :value="settings?.runtime?.dockerDiscovery ? '启用' : '关闭'" />
               <InfoItem label="抓包接口" :value="(settings?.runtime?.captureInterfaces || []).join('、') || '-'" />
+              <InfoItem label="抓包限流" :value="settings?.runtime?.packetCapture ? `${settings?.runtime?.captureMaxEventsPerSecond || 0} 包/秒` : '关闭'" />
+              <InfoItem label="Conntrack 上限" :value="`${settings?.runtime?.conntrackMaxLines || '-'} 行 / ${settings?.runtime?.conntrackRefreshSeconds || '-'} 秒`" />
+              <InfoItem label="Conntrack 状态" :value="settings?.runtime?.conntrackTruncated ? `已截断，扫描 ${settings?.runtime?.conntrackScannedLines || 0} 行` : '正常'" />
               <InfoItem label="版本" :value="settings?.version" />
             </div>
           </section>
@@ -724,8 +727,14 @@ async function readJson(response) {
     throw new Error("authentication required");
   }
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!response.ok) throw new Error(data?.detail || response.statusText || "请求失败");
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (error) {
+    if (!response.ok) throw new Error(text || response.statusText || "请求失败");
+    throw error;
+  }
+  if (!response.ok) throw new Error(data?.detail || text || response.statusText || "请求失败");
   return data;
 }
 async function api(url, options) {

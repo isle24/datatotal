@@ -60,11 +60,18 @@ DEFAULT_CONNECTION_ACTIVE_SECONDS = int(os.getenv("CONNECTION_ACTIVE_SECONDS", "
 DEFAULT_CONNECTION_RETENTION_SECONDS = int(os.getenv("CONNECTION_RETENTION_SECONDS", "900"))
 CONNECTION_COUNT_SOURCE = os.getenv("CONNECTION_COUNT_SOURCE", "conntrack").strip().lower()
 DEFAULT_AUTO_START_STAGE = os.getenv("AUTO_START_STAGE", "true").strip().lower() in {"1", "true", "yes", "on"}
-DEFAULT_CONNTRACK_REFRESH_SECONDS = int(os.getenv("CONNTRACK_REFRESH_SECONDS", "5"))
+MIN_CONNTRACK_REFRESH_SECONDS = int(os.getenv("MIN_CONNTRACK_REFRESH_SECONDS", "15"))
+DEFAULT_CONNTRACK_REFRESH_SECONDS = max(MIN_CONNTRACK_REFRESH_SECONDS, int(os.getenv("CONNTRACK_REFRESH_SECONDS", "30")))
 DOCKER_WEB_PROBE_TTL_SECONDS = int(os.getenv("DOCKER_WEB_PROBE_TTL_SECONDS", "86400"))
 DOCKER_WEB_PROBE_TIMEOUT = float(os.getenv("DOCKER_WEB_PROBE_TIMEOUT", "1.0"))
 DOCKER_LIST_CACHE_SECONDS = float(os.getenv("DOCKER_LIST_CACHE_SECONDS", "20"))
 DOCKER_STATS_CACHE_SECONDS = float(os.getenv("DOCKER_STATS_CACHE_SECONDS", "5"))
+DOCKER_API_MAX_BYTES = int(os.getenv("DOCKER_API_MAX_BYTES", str(2 * 1024 * 1024)))
+ENABLE_PACKET_CAPTURE = os.getenv("ENABLE_PACKET_CAPTURE", "true").strip().lower() in {"1", "true", "yes", "on"}
+CAPTURE_MAX_EVENTS_PER_SECOND = int(os.getenv("CAPTURE_MAX_EVENTS_PER_SECOND", "2000"))
+CAPTURE_SAMPLE_RATE = int(os.getenv("CAPTURE_SAMPLE_RATE", "1"))
+CAPTURE_HOT_TRIM_SECONDS = float(os.getenv("CAPTURE_HOT_TRIM_SECONDS", "1.0"))
+CAPTURE_TRIM_INTERVAL_PACKETS = int(os.getenv("CAPTURE_TRIM_INTERVAL_PACKETS", "500"))
 CONNTRACK_COUNT_MODE = os.getenv("CONNTRACK_COUNT_MODE", "active").strip().lower()
 CONNTRACK_TCP_STATES = {
     item.strip().upper()
@@ -74,19 +81,27 @@ CONNTRACK_TCP_STATES = {
 CONNTRACK_UDP_REQUIRE_ASSURED = os.getenv("CONNTRACK_UDP_REQUIRE_ASSURED", "true").strip().lower() in {"1", "true", "yes", "on"}
 CONNTRACK_INCLUDE_UNREPLIED = os.getenv("CONNTRACK_INCLUDE_UNREPLIED", "false").strip().lower() in {"1", "true", "yes", "on"}
 CONNTRACK_MIN_TIMEOUT_SECONDS = int(os.getenv("CONNTRACK_MIN_TIMEOUT_SECONDS", "3"))
+CONNTRACK_MAX_LINES = int(os.getenv("CONNTRACK_MAX_LINES", "30000"))
+CONNTRACK_SCAN_SECONDS = float(os.getenv("CONNTRACK_SCAN_SECONDS", "1.0"))
+CONNTRACK_CONNECTION_MAX_LINES = int(os.getenv("CONNTRACK_CONNECTION_MAX_LINES", str(CONNTRACK_MAX_LINES)))
+CONNTRACK_CONNECTION_SCAN_SECONDS = float(os.getenv("CONNTRACK_CONNECTION_SCAN_SECONDS", "1.5"))
 SOCKET_TCP_STATES = {
     item.strip().upper()
     for item in os.getenv("SOCKET_TCP_STATES", "ESTABLISHED").split(",")
     if item.strip()
 }
-SOCKET_REFRESH_SECONDS = int(os.getenv("SOCKET_REFRESH_SECONDS", "10"))
+SOCKET_REFRESH_SECONDS = int(os.getenv("SOCKET_REFRESH_SECONDS", "60"))
+PROC_SCAN_TIMEOUT_SECONDS = float(os.getenv("PROC_SCAN_TIMEOUT_SECONDS", "1.0"))
+MAX_PROC_FD_LINKS = int(os.getenv("MAX_PROC_FD_LINKS", "60000"))
+MAX_PROC_NET_LINES = int(os.getenv("MAX_PROC_NET_LINES", "60000"))
 INTERFACE_REFRESH_SECONDS = int(os.getenv("INTERFACE_REFRESH_SECONDS", "30"))
 DEFAULT_PERSIST_INTERVAL_SECONDS = int(os.getenv("PERSIST_INTERVAL_SECONDS", "60"))
 DEFAULT_HISTORY_RETENTION_DAYS = int(os.getenv("HISTORY_RETENTION_DAYS", "400"))
 PROCESS_RECENT_SECONDS = int(os.getenv("PROCESS_RECENT_SECONDS", "180"))
-MAX_CONNECTION_TRACKED = int(os.getenv("MAX_CONNECTION_TRACKED", "20000"))
-MAX_PROCESS_TRACKED = int(os.getenv("MAX_PROCESS_TRACKED", "4096"))
-MAX_PORT_TRACKED = int(os.getenv("MAX_PORT_TRACKED", "8192"))
+MAX_RATE_HISTORY_POINTS = int(os.getenv("MAX_RATE_HISTORY_POINTS", "180"))
+MAX_CONNECTION_TRACKED = int(os.getenv("MAX_CONNECTION_TRACKED", "10000"))
+MAX_PROCESS_TRACKED = int(os.getenv("MAX_PROCESS_TRACKED", "2048"))
+MAX_PORT_TRACKED = int(os.getenv("MAX_PORT_TRACKED", "4096"))
 MAX_DOCKER_CACHE_ENTRIES = int(os.getenv("MAX_DOCKER_CACHE_ENTRIES", "512"))
 MAX_DOCKER_ICON_DATA_CHARS = int(os.getenv("MAX_DOCKER_ICON_DATA_CHARS", str(2 * 1024 * 1024)))
 SAMPLE_SECONDS = DEFAULT_SAMPLE_SECONDS
@@ -199,21 +214,30 @@ def parse_proc_net(path: str, proto: str) -> Dict[Tuple[str, str, str, int, int]
         return sockets
 
     try:
-        lines = file_path.read_text(errors="ignore").splitlines()[1:]
+        file = file_path.open("r", errors="ignore")
     except OSError:
         return sockets
 
-    for line in lines:
-        parts = line.split()
-        if len(parts) < 10:
-            continue
-        local, remote, inode = parts[1], parts[2], parts[9]
-        try:
-            local_ip, local_port = decode_proc_address(local)
-            remote_ip, remote_port = decode_proc_address(remote)
-            sockets[(proto, local_ip, remote_ip, local_port, remote_port)] = int(inode)
-        except (ValueError, OSError):
-            continue
+    start = now()
+    max_lines = max(1000, MAX_PROC_NET_LINES)
+    try:
+        with file:
+            next(file, None)
+            for index, line in enumerate(file, start=1):
+                if index > max_lines or now() - start > max(0.1, PROC_SCAN_TIMEOUT_SECONDS):
+                    break
+                parts = line.split()
+                if len(parts) < 10:
+                    continue
+                local, remote, inode = parts[1], parts[2], parts[9]
+                try:
+                    local_ip, local_port = decode_proc_address(local)
+                    remote_ip, remote_port = decode_proc_address(remote)
+                    sockets[(proto, local_ip, remote_ip, local_port, remote_port)] = int(inode)
+                except (ValueError, OSError):
+                    continue
+    except OSError:
+        return sockets
     return sockets
 
 
@@ -241,7 +265,11 @@ def proc_inode_process_map() -> Dict[int, dict]:
     except OSError:
         return inode_map
 
+    start = now()
+    scanned_links = 0
     for pid_dir in pid_dirs:
+        if now() - start > max(0.1, PROC_SCAN_TIMEOUT_SECONDS):
+            break
         if not pid_dir.name.isdigit():
             continue
         fd_dir = pid_dir / "fd"
@@ -256,6 +284,9 @@ def proc_inode_process_map() -> Dict[int, dict]:
 
         try:
             for fd in fd_dir.iterdir():
+                scanned_links += 1
+                if scanned_links > max(1000, MAX_PROC_FD_LINKS) or now() - start > max(0.1, PROC_SCAN_TIMEOUT_SECONDS):
+                    break
                 try:
                     target = os.readlink(fd)
                 except OSError:
@@ -264,6 +295,8 @@ def proc_inode_process_map() -> Dict[int, dict]:
                     inode_map[int(target[8:-1])] = proc_info
         except OSError:
             continue
+        if scanned_links > max(1000, MAX_PROC_FD_LINKS):
+            break
     return inode_map
 
 
@@ -386,6 +419,8 @@ def get_interface_details(captured: Optional[set] = None) -> Dict[str, dict]:
 
 
 def get_capture_interfaces_from_details(details: Dict[str, dict]) -> List[str]:
+    if not ENABLE_PACKET_CAPTURE:
+        return []
     requested = os.getenv("CAPTURE_INTERFACES", "").strip()
     if requested.lower() == "all":
         return [name for name, item in details.items() if item["isUp"] and name != "lo"]
@@ -1549,7 +1584,7 @@ def discover_container_ports(labels: Dict[str, str], overrides: Optional[dict] =
     return ports
 
 
-def docker_api_request(method: str, path: str, body: bytes = b"", timeout: float = 2.0) -> dict:
+def docker_api_request(method: str, path: str, body: bytes = b"", timeout: float = 2.0, max_bytes: int = DOCKER_API_MAX_BYTES) -> dict:
     headers = [
         f"{method.upper()} {path} HTTP/1.1",
         "Host: docker",
@@ -1565,11 +1600,15 @@ def docker_api_request(method: str, path: str, body: bytes = b"", timeout: float
             sock.connect(DOCKER_SOCKET)
             sock.sendall(request)
             chunks = []
+            total_bytes = 0
             while True:
                 data = sock.recv(65536)
                 if not data:
                     break
                 chunks.append(data)
+                total_bytes += len(data)
+                if total_bytes > max(65536, max_bytes):
+                    return {"ok": False, "status": 0, "json": None, "body": "", "detail": "docker api response too large"}
     except OSError as exc:
         return {"ok": False, "status": 0, "json": None, "body": "", "detail": str(exc)}
     raw = b"".join(chunks)
@@ -1818,7 +1857,7 @@ class TrafficCollector:
         self.process_totals: Dict[str, Counter] = defaultdict(Counter)
         self.port_totals: Dict[str, Counter] = defaultdict(Counter)
         self.conn_totals: Dict[str, Counter] = defaultdict(Counter)
-        self.history = deque(maxlen=max(60, RETENTION_SECONDS))
+        self.history = deque(maxlen=max(10, min(MAX_RATE_HISTORY_POINTS, RETENTION_SECONDS)))
         self.process_recent: Dict[int, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
         self.alerts = deque(maxlen=200)
         self.monitor_rules = default_monitor_rules()
@@ -1833,6 +1872,12 @@ class TrafficCollector:
         self.stage_started_at: Optional[float] = None
         self.stage_totals: Dict[str, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
         self.sniffers: List[AsyncSniffer] = []
+        self.packet_seen = 0
+        self.capture_window_second = 0
+        self.capture_window_events = 0
+        self.capture_dropped_events = 0
+        self.recorded_packet_events = 0
+        self.last_hot_trim = 0.0
         self.socket_map: Dict[Tuple[str, str, str, int, int], dict] = {}
         self.last_socket_refresh = 0.0
         self.local_addresses = set()
@@ -1868,7 +1913,8 @@ class TrafficCollector:
         self.load_saved_settings()
         self.local_addresses = get_local_addresses()
         self.refresh_interface_details()
-        self.refresh_container_ports()
+        if not ENABLE_DOCKER_DISCOVERY and (self.docker_overrides.get("containers") or {}):
+            self.refresh_container_ports()
         self.refresh_socket_map()
         self.refresh_conntrack_summary()
         if AUTO_START_STAGE and not self.stage_started_at:
@@ -1876,13 +1922,14 @@ class TrafficCollector:
             self.stage_totals = defaultdict(lambda: defaultdict(Counter))
             self.stage_accumulated_seconds = 0.0
 
-        for iface in self.capture_interfaces:
-            sniffer = AsyncSniffer(iface=iface, prn=lambda packet, name=iface: self.handle_packet(name, packet), store=False)
-            try:
-                sniffer.start()
-                self.sniffers.append(sniffer)
-            except Exception as exc:
-                print(f"failed to start sniffer on {iface}: {exc}", flush=True)
+        if ENABLE_PACKET_CAPTURE:
+            for iface in self.capture_interfaces:
+                sniffer = AsyncSniffer(iface=iface, prn=lambda packet, name=iface: self.handle_packet(name, packet), store=False)
+                try:
+                    sniffer.start()
+                    self.sniffers.append(sniffer)
+                except Exception as exc:
+                    print(f"failed to start sniffer on {iface}: {exc}", flush=True)
 
         threading.Thread(target=self.rate_loop, daemon=True).start()
         threading.Thread(target=self.socket_loop, daemon=True).start()
@@ -1937,7 +1984,7 @@ class TrafficCollector:
                 HISTORY_RETENTION_DAYS = int(settings.historyRetentionDays)
                 CONNECTION_ACTIVE_SECONDS = int(settings.connectionActiveSeconds)
                 CONNECTION_RETENTION_SECONDS = int(settings.connectionRetentionSeconds)
-                CONNTRACK_REFRESH_SECONDS = int(settings.conntrackRefreshSeconds)
+                CONNTRACK_REFRESH_SECONDS = max(MIN_CONNTRACK_REFRESH_SECONDS, int(settings.conntrackRefreshSeconds))
                 AUTO_START_STAGE = bool(settings.autoStartStage)
             except Exception as exc:
                 print(f"ignore invalid saved runtime settings: {exc}", flush=True)
@@ -2051,6 +2098,8 @@ class TrafficCollector:
             self.last_socket_refresh = now()
 
     def handle_packet(self, iface: str, packet) -> None:
+        if not self.should_accept_packet():
+            return
         parsed = parse_packet(packet)
         if not parsed:
             return
@@ -2084,6 +2133,25 @@ class TrafficCollector:
                 process=process,
             )
         )
+
+    def should_accept_packet(self) -> bool:
+        self.packet_seen += 1
+        sample_rate = max(1, CAPTURE_SAMPLE_RATE)
+        if sample_rate > 1 and self.packet_seen % sample_rate:
+            self.capture_dropped_events += 1
+            return False
+        max_events = max(0, CAPTURE_MAX_EVENTS_PER_SECOND)
+        if not max_events:
+            return True
+        current_second = int(now())
+        if current_second != self.capture_window_second:
+            self.capture_window_second = current_second
+            self.capture_window_events = 0
+        self.capture_window_events += 1
+        if self.capture_window_events > max_events:
+            self.capture_dropped_events += 1
+            return False
+        return True
 
     def find_process(self, proto: str, local_ip: str, remote_ip: str, local_port: int, remote_port: int) -> dict:
         candidates = [
@@ -2128,8 +2196,25 @@ class TrafficCollector:
             self.port_totals[port_key].add(event.direction, event.size)
             self.conn_totals[conn_key].add(event.direction, event.size)
             self.process_recent[int(event.timestamp)][process_key].add(event.direction, event.size)
+            self.recorded_packet_events += 1
+            current_time = now()
+            if (
+                self.recorded_packet_events % max(100, CAPTURE_TRIM_INTERVAL_PACKETS) == 0
+                and current_time - self.last_hot_trim >= max(0.2, CAPTURE_HOT_TRIM_SECONDS)
+            ):
+                self.trim_hot_caches_locked()
+                self.last_hot_trim = current_time
             if self.stage_started_at:
                 self.stage_totals[event.iface][event.scope].add(event.direction, event.size)
+
+    def trim_hot_caches_locked(self) -> None:
+        self.trim_counter_store(self.conn_totals, max(1000, MAX_CONNECTION_TRACKED))
+        self.trim_counter_store(self.process_totals, max(256, MAX_PROCESS_TRACKED))
+        self.trim_counter_store(self.port_totals, max(512, MAX_PORT_TRACKED))
+        cutoff = int(now()) - max(60, min(PROCESS_RECENT_SECONDS, RETENTION_SECONDS))
+        for bucket in list(self.process_recent.keys()):
+            if bucket < cutoff:
+                del self.process_recent[bucket]
 
     def rate_loop(self) -> None:
         previous = None
@@ -2807,11 +2892,23 @@ class TrafficCollector:
                 "captureInterfaces": self.capture_interfaces,
                 "conntrackSource": self.conntrack_summary.get("source"),
                 "conntrackAvailable": self.conntrack_summary.get("available"),
+                "conntrackTruncated": self.conntrack_summary.get("truncated"),
+                "conntrackScannedLines": self.conntrack_summary.get("scannedLines"),
+                "conntrackMaxLines": CONNTRACK_MAX_LINES,
+                "conntrackScanSeconds": CONNTRACK_SCAN_SECONDS,
+                "conntrackConnectionMaxLines": CONNTRACK_CONNECTION_MAX_LINES,
+                "conntrackConnectionScanSeconds": CONNTRACK_CONNECTION_SCAN_SECONDS,
+                "minConntrackRefreshSeconds": MIN_CONNTRACK_REFRESH_SECONDS,
+                "packetCapture": ENABLE_PACKET_CAPTURE,
+                "captureMaxEventsPerSecond": CAPTURE_MAX_EVENTS_PER_SECOND,
+                "captureSampleRate": CAPTURE_SAMPLE_RATE,
+                "socketRefreshSeconds": SOCKET_REFRESH_SECONDS,
                 "processRecentSeconds": PROCESS_RECENT_SECONDS,
                 "maxConnectionTracked": MAX_CONNECTION_TRACKED,
                 "maxProcessTracked": MAX_PROCESS_TRACKED,
                 "maxPortTracked": MAX_PORT_TRACKED,
                 "maxDockerCacheEntries": MAX_DOCKER_CACHE_ENTRIES,
+                "dockerApiMaxBytes": DOCKER_API_MAX_BYTES,
             },
                 "labels": self.db.get_labels(),
                 "dockerOverrides": self.docker_overrides,
@@ -2842,8 +2939,25 @@ class TrafficCollector:
                     "socketMap": len(self.socket_map),
                     "containerPorts": len(self.container_ports),
                     "containerRows": len(self.container_rows),
+                    "rateHistory": len(self.history),
                 },
+                "capture": {
+                    "enabled": ENABLE_PACKET_CAPTURE,
+                    "interfaces": list(self.capture_interfaces),
+                    "seenEvents": self.packet_seen,
+                    "recordedEvents": self.recorded_packet_events,
+                    "droppedEvents": self.capture_dropped_events,
+                    "maxEventsPerSecond": CAPTURE_MAX_EVENTS_PER_SECOND,
+                    "sampleRate": CAPTURE_SAMPLE_RATE,
+                },
+                "conntrack": dict(self.conntrack_summary),
                 "limits": {
+                    "minConntrackRefreshSeconds": MIN_CONNTRACK_REFRESH_SECONDS,
+                    "conntrackMaxLines": CONNTRACK_MAX_LINES,
+                    "conntrackScanSeconds": CONNTRACK_SCAN_SECONDS,
+                    "conntrackConnectionMaxLines": CONNTRACK_CONNECTION_MAX_LINES,
+                    "conntrackConnectionScanSeconds": CONNTRACK_CONNECTION_SCAN_SECONDS,
+                    "maxRateHistoryPoints": MAX_RATE_HISTORY_POINTS,
                     "processRecentSeconds": PROCESS_RECENT_SECONDS,
                     "maxConnectionTracked": MAX_CONNECTION_TRACKED,
                     "maxProcessTracked": MAX_PROCESS_TRACKED,
@@ -2960,7 +3074,8 @@ class TrafficCollector:
         HISTORY_RETENTION_DAYS = int(settings.historyRetentionDays)
         CONNECTION_ACTIVE_SECONDS = int(settings.connectionActiveSeconds)
         CONNECTION_RETENTION_SECONDS = int(settings.connectionRetentionSeconds)
-        CONNTRACK_REFRESH_SECONDS = int(settings.conntrackRefreshSeconds)
+        CONNTRACK_REFRESH_SECONDS = max(MIN_CONNTRACK_REFRESH_SECONDS, int(settings.conntrackRefreshSeconds))
+        settings.conntrackRefreshSeconds = CONNTRACK_REFRESH_SECONDS
         AUTO_START_STAGE = bool(settings.autoStartStage)
         self.db.set_setting("runtime_settings", settings.model_dump())
         return self.get_settings()
@@ -3200,16 +3315,25 @@ def read_conntrack_summary() -> dict:
             "total": None,
             "wan": None,
             "lan": None,
+            "truncated": False,
+            "scannedLines": 0,
         }
 
     total = 0
     wan = 0
     lan = 0
     raw_total = 0
+    truncated = False
+    start = now()
+    max_lines = max(1000, CONNTRACK_MAX_LINES)
+    time_budget = max(0.1, CONNTRACK_SCAN_SECONDS)
     try:
         with selected.open("r", errors="ignore") as file:
             for line in file:
                 raw_total += 1
+                if raw_total > max_lines or now() - start > time_budget:
+                    truncated = True
+                    break
                 entry = parse_conntrack_line(line)
                 if not entry or not conntrack_entry_is_active(entry):
                     continue
@@ -3228,6 +3352,8 @@ def read_conntrack_summary() -> dict:
             "total": None,
             "wan": None,
             "lan": None,
+            "truncated": False,
+            "scannedLines": 0,
         }
 
     return {
@@ -3239,6 +3365,9 @@ def read_conntrack_summary() -> dict:
         "total": total,
         "wan": wan,
         "lan": lan,
+        "truncated": truncated,
+        "scannedLines": raw_total,
+        "scanSeconds": round(now() - start, 4),
     }
 
 
@@ -3272,9 +3401,18 @@ def read_conntrack_connections(
     summary = {"total": 0, "wan": 0, "lan": 0}
     heap_size = offset + limit
     filtered_total = 0
+    raw_total = 0
+    truncated = False
+    start = now()
+    max_lines = max(1000, CONNTRACK_CONNECTION_MAX_LINES)
+    time_budget = max(0.1, CONNTRACK_CONNECTION_SCAN_SECONDS)
     try:
         with selected.open("r", errors="ignore") as file:
             for line in file:
+                raw_total += 1
+                if raw_total > max_lines or now() - start > time_budget:
+                    truncated = True
+                    break
                 entry = parse_conntrack_line(line)
                 if not entry or not conntrack_entry_is_active(entry):
                     continue
@@ -3354,6 +3492,9 @@ def read_conntrack_connections(
     return {
         "source": "conntrack",
         "summary": summary,
+        "truncated": truncated,
+        "scannedLines": raw_total,
+        "scanSeconds": round(now() - start, 4),
         "pagination": {
             "total": filtered_total,
             "limit": limit,

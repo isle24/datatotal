@@ -1,9 +1,15 @@
 import os
 import subprocess
+import threading
 import time
 from typing import Dict, List, Optional
 
 import psutil
+
+
+SYSTEM_STATUS_CACHE_SECONDS = float(os.getenv("SYSTEM_STATUS_CACHE_SECONDS", "5"))
+_SYSTEM_STATUS_CACHE = {"timestamp": 0.0, "data": None}
+_SYSTEM_STATUS_LOCK = threading.Lock()
 
 
 def _read_first(path: str) -> str:
@@ -235,7 +241,7 @@ def temperature_level(current, critical, high) -> str:
     return "ok"
 
 
-def system_status() -> dict:
+def collect_system_status() -> dict:
     cpu_freq = psutil.cpu_freq()
     per_cpu = psutil.cpu_percent(interval=None, percpu=True)
     memory = psutil.virtual_memory()
@@ -270,3 +276,16 @@ def system_status() -> dict:
         "npu": read_npu_stats(),
         "uptimeSeconds": max(0, int(time.time() - boot)),
     }
+
+
+def system_status() -> dict:
+    current = time.time()
+    ttl = max(0.0, SYSTEM_STATUS_CACHE_SECONDS)
+    with _SYSTEM_STATUS_LOCK:
+        cached = _SYSTEM_STATUS_CACHE.get("data")
+        if cached and ttl and current - float(_SYSTEM_STATUS_CACHE.get("timestamp") or 0) < ttl:
+            return cached
+        data = collect_system_status()
+        _SYSTEM_STATUS_CACHE["timestamp"] = current
+        _SYSTEM_STATUS_CACHE["data"] = data
+        return data

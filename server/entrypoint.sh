@@ -7,15 +7,22 @@ LOG_PATH="${LOG_DIR:-/logs}"
 mkdir -p "$LOG_PATH" "$DB_DIR"
 touch "$LOG_PATH/uvicorn.log" "$LOG_PATH/uvicorn-error.log"
 
-if [ "${CONSOLE_LOG:-true}" = "true" ]; then
-  tail -n 0 -q -F "$LOG_PATH/uvicorn.log" "$LOG_PATH/uvicorn-error.log" &
-fi
-
 ACCESS_LOG_FLAG=""
 if [ "${UVICORN_ACCESS_LOG:-false}" = "true" ]; then
   ACCESS_LOG_FLAG="--access-log"
 else
   ACCESS_LOG_FLAG="--no-access-log"
+fi
+
+if [ "${FILE_LOG:-true}" != "true" ]; then
+  exec uvicorn server.main:app \
+    --host 0.0.0.0 \
+    --port "${APP_PORT:-8088}" \
+    $ACCESS_LOG_FLAG
+fi
+
+if [ "${CONSOLE_LOG:-true}" = "true" ]; then
+  tail -n 0 -q -F "$LOG_PATH/uvicorn.log" "$LOG_PATH/uvicorn-error.log" &
 fi
 
 exec uvicorn server.main:app \
