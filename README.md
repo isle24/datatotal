@@ -630,3 +630,26 @@ cd front-end && npm run build
 更细的功能说明、设计取舍和模块说明见：
 
 - [doc/README.md](doc/README.md)
+
+## 采集后端（三层降级）
+
+启动时按优先级自动选择：**eBPF → Go + libpcap → Python Scapy**。
+
+| 层 | 技术 | 负载 | 要求 |
+|---|---|---|---|
+| 1 | eBPF TC 内核 hook | 最低 | Linux >= 5.4, BTF, privileged |
+| 2 | Go 编译二进制 + libpcap | 低 | Linux, libpcap |
+| 3 | Python Scapy（原方案） | 正常 | 无需额外依赖 |
+
+可通过 `COLLECTOR_MODE=auto|ebpf|golibpcap` 环境变量强制指定。细节见 [doc/README.md § 采集后端架构](doc/README.md#采集后端架构三层降级)。
+
+## 开发
+
+Go collector（独立编译）：
+
+```bash
+cd server/go-collector
+go build -o go-collector .
+```
+
+前端：

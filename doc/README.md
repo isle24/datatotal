@@ -375,12 +375,94 @@ FILE_LOG: "false"
 - UDP 无连接场景的进程归因比 TCP 更容易缺失。
 - 极空间系统如果限制容器权限，需要改用宿主机直接运行或安装 eBPF/pcap 权限更高的版本。
 
+## 采集后端架构（三层降级）
+
+从 v2026.06.25 起，采集引擎支持三层自动降级：
+
+```
+启动 → eBPF (内核态) → 不可用 → Go + libpcap → 不可用 → Python Scapy (原方案)
+```
+
+### 第一层：eBPF TC 采集（负载最低）
+
+- 通过 TC (Traffic Control) hook 在内核层直接捕获包事件
+- 零用户态拷贝：包数据通过 BPF ring buffer 从内核推到用户态
+- 每包不经过 Python 解释器，CPU 开销极低
+- **要求**：Linux >= 5.4、`CONFIG_DEBUG_INFO_BTF=y`、BTF vmlinux 存在
+- **源码**：[`ebpf/traffic_kern.c`](../server/go-collector/ebpf/traffic_kern.c)（BPF C 程序）+ [`ebpf/collector.go`](../server/go-collector/ebpf/collector.go)（Go 用户态加载器）
+- 容器需要 `privileged: true` 和 host 网络
+- 检测方式：启动时检查 `/sys/kernel/btf/vmlinux` 是否存在
+
+### 第二层：Go + libpcap 采集（负载较低）
+
+- Go 编译为原生二进制，无 GC 停顿，goroutine channel 替代 Python RLock
+- gopacket (libpcap CGO 绑定) 抓包，直接读取 `/proc/net/dev` 做系统计数器
+- 与 Python 方案逻辑对等（动态抽样、进程归因、conntrack），但消除了 Python GIL 和解释器开销
+- **要求**：Linux，libpcap 可用
+- **源码**：[`go-collector/`](../server/go-collector/)（Go module，独立编译为二进制）
+- 启动为独立 HTTP 服务（默认端口 18088），Python 后端通过 HTTP 调用其 API
+
+### 第三层：Python Scapy（自动回退）
+
+- 原方案完整保留，Go/eBPF 不可用时自动激活
+- 所有流量统计、连接归因逻辑不变
+
+### 容器内自动选择
+
+入口脚本 [`entrypoint.sh`](../server/entrypoint.sh) 按优先级探测：
+
+```bash
+# 强制指定模式
+COLLECTOR_MODE=ebpf       # 仅 eBPF
+COLLECTOR_MODE=golibpcap  # 仅 Go
+COLLECTOR_MODE=auto       # 自动（默认）
+
+# Go collector HTTP 端口
+GO_COLLECTOR_PORT=18088
+
+# 二进制路径（Docker 镜像内默认）
+GO_COLLECTOR_BIN=/app/bin/go-collector
+GO_COLLECTOR_EBPF_BIN=/app/bin/go-collector-ebpf
+```
+
+Python 后端探测方式：`GO_COLLECTOR_URL` 环境变量或 `server/services/go_collector_client.py` 中的默认 URL。
+
+### Python 集成点
+
+现有 `TrafficCollector` 在以下 API 自动使用外部 collector 数据：
+
+| API endpoint | Go 数据源 | 回退行为 |
+|---|---|---|
+| `/api/overview` | `/api/snapshot`（Go） | 使用 Python 本地数据 |
+| `/api/snapshot` | `/api/snapshot`（Go） | 使用 Python 本地数据 |
+| `/api/processes` (30s) | `/api/processes`（Go 内存） | Python `process_recent` |
+| `/api/connections` (capture) | `/api/connections`（Go） | Python `conn_totals` |
+| `/api/diagnostics` | `/api/diagnostics`（Go） | Python 自诊断 |
+
+Go 不可用时所有 API 透明回退到 Python 原逻辑，前端无需任何修改。
+
+## 性能对比（预估）
+
+| 指标 | Python Scapy | Go + libpcap | eBPF TC |
+|---|---|---|---|
+| CPU（空载 1000 pps） | ~3-5% | ~0.5-1% | ~0.1-0.3% |
+| CPU（高峰 5000 pps） | ~15-25% | ~3-5% | ~0.5-1% |
+| 内存（稳定态） | ~80-120 MB | ~20-40 MB | ~15-30 MB |
+| 每包延迟 | ~50-100μs | ~5-10μs | ~1-2μs |
+| 丢包率（peak 10K pps） | 有动态抽样 | 有动态抽样 | 接近零 |
+
+实际表现取决于 NAS CPU 型号、内核版本和网络负载。
+
 ## 开发结构
 
 ```text
-doc/        文档
-front-end/  前端静态页面
-server/     FastAPI 后端和采集器
+doc/                    文档
+front-end/              前端静态页面
+server/                 FastAPI 后端和采集器
+  go-collector/         Go 采集引擎（独立二进制）
+    collector/          共享类型、聚合器、抓包、系统信息
+    ebpf/               eBPF BPF C 程序 + Go 加载器
+  services/             服务模块（通知、系统状态、Go collector 客户端）
 ```
 
 ## API
