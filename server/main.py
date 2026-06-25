@@ -70,8 +70,15 @@ DOCKER_API_MAX_BYTES = int(os.getenv("DOCKER_API_MAX_BYTES", str(2 * 1024 * 1024
 ENABLE_PACKET_CAPTURE = os.getenv("ENABLE_PACKET_CAPTURE", "true").strip().lower() in {"1", "true", "yes", "on"}
 CAPTURE_MAX_EVENTS_PER_SECOND = int(os.getenv("CAPTURE_MAX_EVENTS_PER_SECOND", "2000"))
 CAPTURE_SAMPLE_RATE = int(os.getenv("CAPTURE_SAMPLE_RATE", "1"))
+CAPTURE_DYNAMIC_SAMPLE = os.getenv("CAPTURE_DYNAMIC_SAMPLE", "true").strip().lower() in {"1", "true", "yes", "on"}
+CAPTURE_MAX_SAMPLE_RATE = int(os.getenv("CAPTURE_MAX_SAMPLE_RATE", "50"))
 CAPTURE_HOT_TRIM_SECONDS = float(os.getenv("CAPTURE_HOT_TRIM_SECONDS", "1.0"))
 CAPTURE_TRIM_INTERVAL_PACKETS = int(os.getenv("CAPTURE_TRIM_INTERVAL_PACKETS", "500"))
+ENABLE_SYSTEM_TRAFFIC_CALIBRATION = os.getenv("ENABLE_SYSTEM_TRAFFIC_CALIBRATION", "true").strip().lower() in {"1", "true", "yes", "on"}
+SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD = float(os.getenv("SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD", "1.25"))
+SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES = int(os.getenv("SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES", "262144"))
+SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR = float(os.getenv("SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR", "20"))
+SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN = os.getenv("SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN", "false").strip().lower() in {"1", "true", "yes", "on"}
 CONNTRACK_COUNT_MODE = os.getenv("CONNTRACK_COUNT_MODE", "active").strip().lower()
 CONNTRACK_TCP_STATES = {
     item.strip().upper()
@@ -451,13 +458,13 @@ class Counter:
     first_seen: float = field(default_factory=now)
     last_seen: float = field(default_factory=now)
 
-    def add(self, direction: str, size: int) -> None:
+    def add(self, direction: str, size: int, packets: int = 1) -> None:
         if direction == "rx":
             self.rx_bytes += size
-            self.rx_packets += 1
+            self.rx_packets += max(0, packets)
         else:
             self.tx_bytes += size
-            self.tx_packets += 1
+            self.tx_packets += max(0, packets)
         self.last_seen = now()
 
     def snapshot(self) -> dict:
@@ -486,6 +493,7 @@ class PacketEvent:
     dport: int
     size: int
     process: dict
+    weight: int = 1
 
 
 class LoginRequest(BaseModel):
@@ -900,6 +908,20 @@ class TrafficDB:
 
 def empty_pair() -> dict:
     return {"rxBytes": 0, "txBytes": 0}
+
+
+def empty_counter_snapshot() -> dict:
+    current = now()
+    return {
+        "rxBytes": 0,
+        "txBytes": 0,
+        "rxPackets": 0,
+        "txPackets": 0,
+        "totalBytes": 0,
+        "firstSeen": current,
+        "lastSeen": current,
+        "durationSeconds": 0,
+    }
 
 
 def empty_totals() -> dict:
@@ -1812,7 +1834,11 @@ def summarize_interfaces(interfaces: dict, rates: dict) -> dict:
     return summary
 
 
-def summarize_stage(stage_totals: Dict[str, Dict[str, Counter]], started_at: Optional[float]) -> dict:
+def summarize_stage(
+    stage_totals: Dict[str, Dict[str, Counter]],
+    started_at: Optional[float],
+    calibrated_stage_totals: Optional[Dict[str, Dict[str, Counter]]] = None,
+) -> dict:
     summary = {
         "active": bool(started_at),
         "startedAt": started_at,
@@ -1820,7 +1846,7 @@ def summarize_stage(stage_totals: Dict[str, Dict[str, Counter]], started_at: Opt
         "wan": empty_pair(),
         "lan": empty_pair(),
     }
-    for scopes in stage_totals.values():
+    for scopes in list(stage_totals.values()) + list((calibrated_stage_totals or {}).values()):
         for scope in ("wan", "lan"):
             counter = scopes.get(scope)
             if not counter:
@@ -1829,6 +1855,17 @@ def summarize_stage(stage_totals: Dict[str, Dict[str, Counter]], started_at: Opt
             summary[scope]["rxBytes"] += snapshot.get("rxBytes", 0)
             summary[scope]["txBytes"] += snapshot.get("txBytes", 0)
     return summary
+
+
+def calibration_scope_proportions(scope_deltas: dict) -> dict:
+    wan = max(0, int(scope_deltas.get("wan") or 0))
+    lan = max(0, int(scope_deltas.get("lan") or 0))
+    total = wan + lan
+    if total > 0:
+        return {"wan": wan / total, "lan": lan / total}
+    if SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN:
+        return {"wan": 1.0, "lan": 0.0}
+    return {"wan": 0.0, "lan": 1.0}
 
 
 def normalize_process_period(value: str) -> str:
@@ -1854,6 +1891,7 @@ class TrafficCollector:
         self.lock = threading.RLock()
         self.db = TrafficDB(DB_PATH)
         self.iface_totals: Dict[str, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
+        self.calibrated_iface_totals: Dict[str, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
         self.process_totals: Dict[str, Counter] = defaultdict(Counter)
         self.port_totals: Dict[str, Counter] = defaultdict(Counter)
         self.conn_totals: Dict[str, Counter] = defaultdict(Counter)
@@ -1871,11 +1909,14 @@ class TrafficCollector:
         self.last_rates: Dict[str, dict] = {}
         self.stage_started_at: Optional[float] = None
         self.stage_totals: Dict[str, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
+        self.calibrated_stage_totals: Dict[str, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
         self.sniffers: List[AsyncSniffer] = []
         self.packet_seen = 0
         self.capture_window_second = 0
         self.capture_window_events = 0
         self.capture_dropped_events = 0
+        self.capture_sampled_events = 0
+        self.capture_weighted_bytes = 0
         self.recorded_packet_events = 0
         self.last_hot_trim = 0.0
         self.socket_map: Dict[Tuple[str, str, str, int, int], dict] = {}
@@ -2098,7 +2139,8 @@ class TrafficCollector:
             self.last_socket_refresh = now()
 
     def handle_packet(self, iface: str, packet) -> None:
-        if not self.should_accept_packet():
+        weight = self.packet_weight()
+        if weight <= 0:
             return
         parsed = parse_packet(packet)
         if not parsed:
@@ -2131,27 +2173,30 @@ class TrafficCollector:
                 dport=dport,
                 size=size,
                 process=process,
+                weight=weight,
             )
         )
 
-    def should_accept_packet(self) -> bool:
+    def packet_weight(self) -> int:
         self.packet_seen += 1
-        sample_rate = max(1, CAPTURE_SAMPLE_RATE)
-        if sample_rate > 1 and self.packet_seen % sample_rate:
-            self.capture_dropped_events += 1
-            return False
+        base_sample_rate = max(1, CAPTURE_SAMPLE_RATE)
         max_events = max(0, CAPTURE_MAX_EVENTS_PER_SECOND)
-        if not max_events:
-            return True
         current_second = int(now())
         if current_second != self.capture_window_second:
             self.capture_window_second = current_second
             self.capture_window_events = 0
         self.capture_window_events += 1
-        if self.capture_window_events > max_events:
+
+        dynamic_rate = 1
+        if CAPTURE_DYNAMIC_SAMPLE and max_events and self.capture_window_events > max_events:
+            dynamic_rate = min(max(1, CAPTURE_MAX_SAMPLE_RATE), int(self.capture_window_events / max_events) + 1)
+        sample_rate = max(base_sample_rate, dynamic_rate)
+        if sample_rate > 1 and self.packet_seen % sample_rate:
             self.capture_dropped_events += 1
-            return False
-        return True
+            return 0
+        if sample_rate > 1:
+            self.capture_sampled_events += 1
+        return sample_rate
 
     def find_process(self, proto: str, local_ip: str, remote_ip: str, local_port: int, remote_port: int) -> dict:
         candidates = [
@@ -2189,14 +2234,18 @@ class TrafficCollector:
             f"{event.iface}|{event.scope}|{event.proto}|"
             f"{event.src}:{event.sport}|{event.dst}:{event.dport}|{conn_process_key}"
         )
+        weight = max(1, int(event.weight or 1))
+        weighted_size = int(event.size) * weight
 
         with self.lock:
-            self.iface_totals[event.iface][event.scope].add(event.direction, event.size)
-            self.process_totals[process_key].add(event.direction, event.size)
-            self.port_totals[port_key].add(event.direction, event.size)
-            self.conn_totals[conn_key].add(event.direction, event.size)
-            self.process_recent[int(event.timestamp)][process_key].add(event.direction, event.size)
+            self.iface_totals[event.iface][event.scope].add(event.direction, weighted_size, weight)
+            self.process_totals[process_key].add(event.direction, weighted_size, weight)
+            self.port_totals[port_key].add(event.direction, weighted_size, weight)
+            self.conn_totals[conn_key].add(event.direction, weighted_size, weight)
+            self.process_recent[int(event.timestamp)][process_key].add(event.direction, weighted_size, weight)
             self.recorded_packet_events += 1
+            if weight > 1:
+                self.capture_weighted_bytes += max(0, weighted_size - int(event.size))
             current_time = now()
             if (
                 self.recorded_packet_events % max(100, CAPTURE_TRIM_INTERVAL_PACKETS) == 0
@@ -2205,7 +2254,7 @@ class TrafficCollector:
                 self.trim_hot_caches_locked()
                 self.last_hot_trim = current_time
             if self.stage_started_at:
-                self.stage_totals[event.iface][event.scope].add(event.direction, event.size)
+                self.stage_totals[event.iface][event.scope].add(event.direction, weighted_size, weight)
 
     def trim_hot_caches_locked(self) -> None:
         self.trim_counter_store(self.conn_totals, max(1000, MAX_CONNECTION_TRACKED))
@@ -2225,6 +2274,8 @@ class TrafficCollector:
             current_time = now()
             if previous:
                 elapsed = max(0.001, current_time - previous["timestamp"])
+                self.calibrate_system_traffic(previous["interfaces"], current)
+                current = self.snapshot_interfaces()
                 rates = diff_rates(previous["interfaces"], current, elapsed)
                 with self.lock:
                     self.last_rates = rates
@@ -2243,6 +2294,56 @@ class TrafficCollector:
             previous = {"timestamp": current_time, "interfaces": current}
             time.sleep(max(0.5, SAMPLE_SECONDS))
 
+    def calibrate_system_traffic(self, previous_interfaces: dict, current_interfaces: dict) -> None:
+        if not ENABLE_SYSTEM_TRAFFIC_CALIBRATION:
+            return
+        threshold = max(1.0, SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD)
+        min_bytes = max(0, SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES)
+        max_factor = max(1.0, SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR)
+        with self.lock:
+            capture_set = set(self.capture_interfaces)
+            for iface, current_item in current_interfaces.items():
+                detail = current_item.get("detail") or {}
+                if capture_set and iface not in capture_set:
+                    continue
+                if not detail.get("captured"):
+                    continue
+                previous_item = previous_interfaces.get(iface, {"scopes": {}, "system": {}})
+                current_system = current_item.get("system") or {}
+                previous_system = previous_item.get("system") or {}
+                for direction, byte_key, packet_key in (
+                    ("rx", "rxBytes", "rxPackets"),
+                    ("tx", "txBytes", "txPackets"),
+                ):
+                    system_delta = max(0, int(current_system.get(byte_key) or 0) - int(previous_system.get(byte_key) or 0))
+                    if system_delta < min_bytes:
+                        continue
+                    system_packet_delta = max(0, int(current_system.get(packet_key) or 0) - int(previous_system.get(packet_key) or 0))
+                    scope_deltas = {}
+                    captured_delta = 0
+                    for scope in ("wan", "lan"):
+                        current_scope = (current_item.get("scopes") or {}).get(scope) or {}
+                        previous_scope = (previous_item.get("scopes") or {}).get(scope) or {}
+                        delta = max(0, int(current_scope.get(byte_key) or 0) - int(previous_scope.get(byte_key) or 0))
+                        scope_deltas[scope] = delta
+                        captured_delta += delta
+                    if captured_delta <= 0 or captured_delta * threshold >= system_delta:
+                        continue
+                    target_total = min(system_delta, int(captured_delta * max_factor))
+                    missing = max(0, target_total - captured_delta)
+                    if missing <= 0:
+                        continue
+                    proportions = calibration_scope_proportions(scope_deltas)
+                    missing_packets = max(0, int(system_packet_delta * (missing / max(1, system_delta))))
+                    for scope, ratio in proportions.items():
+                        add_bytes = int(missing * ratio)
+                        if add_bytes <= 0:
+                            continue
+                        add_packets = max(1, int(missing_packets * ratio)) if missing_packets else 0
+                        self.calibrated_iface_totals[iface][scope].add(direction, add_bytes, add_packets)
+                        if self.stage_started_at:
+                            self.calibrated_stage_totals[iface][scope].add(direction, add_bytes, add_packets)
+
     def snapshot_interfaces(self) -> dict:
         io = psutil.net_io_counters(pernic=True)
         with self.lock:
@@ -2256,6 +2357,16 @@ class TrafficCollector:
                     scope: counter.snapshot()
                     for scope, counter in self.iface_totals.get(iface, {}).items()
                 }
+                calibrated_scopes = {
+                    scope: counter.snapshot()
+                    for scope, counter in self.calibrated_iface_totals.get(iface, {}).items()
+                }
+                for scope, calibrated in calibrated_scopes.items():
+                    target = scopes.setdefault(scope, empty_counter_snapshot())
+                    for key in ("rxBytes", "txBytes", "rxPackets", "txPackets", "totalBytes"):
+                        target[key] = target.get(key, 0) + calibrated.get(key, 0)
+                    target["firstSeen"] = min(target.get("firstSeen", now()), calibrated.get("firstSeen", now()))
+                    target["lastSeen"] = max(target.get("lastSeen", 0), calibrated.get("lastSeen", 0))
                 interfaces[iface] = {
                     "detail": detail,
                     "scopes": scopes,
@@ -2272,12 +2383,23 @@ class TrafficCollector:
                     iface,
                     {
                         "detail": {**details.get(iface, {"name": iface}), "captured": iface in capture_set},
-                        "scopes": {scope: counter.snapshot() for scope, counter in counters.items()},
+                        "scopes": self.merged_scope_snapshots(iface, counters),
                         "system": {"rxBytes": 0, "txBytes": 0, "rxPackets": 0, "txPackets": 0},
                     },
                 )
 
             return interfaces
+
+    def merged_scope_snapshots(self, iface: str, counters: Dict[str, Counter]) -> dict:
+        scopes = {scope: counter.snapshot() for scope, counter in counters.items()}
+        for scope, counter in self.calibrated_iface_totals.get(iface, {}).items():
+            calibrated = counter.snapshot()
+            target = scopes.setdefault(scope, empty_counter_snapshot())
+            for key in ("rxBytes", "txBytes", "rxPackets", "txPackets", "totalBytes"):
+                target[key] = target.get(key, 0) + calibrated.get(key, 0)
+            target["firstSeen"] = min(target.get("firstSeen", now()), calibrated.get("firstSeen", now()))
+            target["lastSeen"] = max(target.get("lastSeen", 0), calibrated.get("lastSeen", 0))
+        return scopes
 
     def snapshot_totals(self, interface_view: str = "physical") -> dict:
         with self.lock:
@@ -2452,10 +2574,7 @@ class TrafficCollector:
             stage = {
                 "active": bool(self.stage_started_at),
                 "startedAt": self.stage_started_at,
-                "interfaces": {
-                    iface: {scope: counter.snapshot() for scope, counter in scopes.items()}
-                    for iface, scopes in self.stage_totals.items()
-                },
+                "interfaces": self.stage_interface_snapshots(),
             }
             rates = filter_rates(self.last_rates, set(totals["interfaces"].keys()))
             alerts = list(self.alerts)[-20:]
@@ -2487,7 +2606,7 @@ class TrafficCollector:
             alerts = list(self.alerts)[-8:]
             capture_interfaces = list(self.capture_interfaces)
             container_status = dict(self.container_status)
-            stage_summary = summarize_stage(self.stage_totals, self.stage_started_at)
+            stage_summary = summarize_stage(self.stage_totals, self.stage_started_at, self.calibrated_stage_totals)
             stage_summary["durationSeconds"] += int(self.stage_accumulated_seconds)
         return {
             "app": APP_NAME,
@@ -2527,6 +2646,22 @@ class TrafficCollector:
             rows = self.db.query_processes(int(start_ts // 60) * 60, int(end_ts // 60) * 60, limit)
 
         return {"period": period, "start": start_ts, "end": end_ts, "source": source, "processes": rows}
+
+    def stage_interface_snapshots(self) -> dict:
+        result = {
+            iface: {scope: counter.snapshot() for scope, counter in scopes.items()}
+            for iface, scopes in self.stage_totals.items()
+        }
+        for iface, scopes in self.calibrated_stage_totals.items():
+            target_scopes = result.setdefault(iface, {})
+            for scope, counter in scopes.items():
+                calibrated = counter.snapshot()
+                target = target_scopes.setdefault(scope, empty_counter_snapshot())
+                for key in ("rxBytes", "txBytes", "rxPackets", "txPackets", "totalBytes"):
+                    target[key] = target.get(key, 0) + calibrated.get(key, 0)
+                target["firstSeen"] = min(target.get("firstSeen", now()), calibrated.get("firstSeen", now()))
+                target["lastSeen"] = max(target.get("lastSeen", 0), calibrated.get("lastSeen", 0))
+        return result
 
     def process_rank_from_events(self, start_ts: int, end_ts: int, limit: int) -> List[dict]:
         counters: Dict[str, Counter] = defaultdict(Counter)
@@ -2825,6 +2960,7 @@ class TrafficCollector:
         with self.lock:
             self.stage_started_at = now()
             self.stage_totals = defaultdict(lambda: defaultdict(Counter))
+            self.calibrated_stage_totals = defaultdict(lambda: defaultdict(Counter))
             self.stage_paused_at = None
             self.stage_accumulated_seconds = 0.0
             self.stage_alert_active = False
@@ -2849,6 +2985,7 @@ class TrafficCollector:
         with self.lock:
             self.stage_started_at = now() if AUTO_START_STAGE else None
             self.stage_totals = defaultdict(lambda: defaultdict(Counter))
+            self.calibrated_stage_totals = defaultdict(lambda: defaultdict(Counter))
             self.stage_paused_at = None
             self.stage_accumulated_seconds = 0.0
             self.stage_alert_active = False
@@ -2902,6 +3039,10 @@ class TrafficCollector:
                 "packetCapture": ENABLE_PACKET_CAPTURE,
                 "captureMaxEventsPerSecond": CAPTURE_MAX_EVENTS_PER_SECOND,
                 "captureSampleRate": CAPTURE_SAMPLE_RATE,
+                "captureDynamicSample": CAPTURE_DYNAMIC_SAMPLE,
+                "captureMaxSampleRate": CAPTURE_MAX_SAMPLE_RATE,
+                "systemTrafficCalibration": ENABLE_SYSTEM_TRAFFIC_CALIBRATION,
+                "systemTrafficCalibrationThreshold": SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD,
                 "socketRefreshSeconds": SOCKET_REFRESH_SECONDS,
                 "processRecentSeconds": PROCESS_RECENT_SECONDS,
                 "maxConnectionTracked": MAX_CONNECTION_TRACKED,
@@ -2947,8 +3088,20 @@ class TrafficCollector:
                     "seenEvents": self.packet_seen,
                     "recordedEvents": self.recorded_packet_events,
                     "droppedEvents": self.capture_dropped_events,
+                    "sampledEvents": self.capture_sampled_events,
+                    "weightedBytes": self.capture_weighted_bytes,
                     "maxEventsPerSecond": CAPTURE_MAX_EVENTS_PER_SECOND,
                     "sampleRate": CAPTURE_SAMPLE_RATE,
+                    "dynamicSample": CAPTURE_DYNAMIC_SAMPLE,
+                    "maxSampleRate": CAPTURE_MAX_SAMPLE_RATE,
+                },
+                "calibration": {
+                    "enabled": ENABLE_SYSTEM_TRAFFIC_CALIBRATION,
+                    "interfaces": len(self.calibrated_iface_totals),
+                    "stageInterfaces": len(self.calibrated_stage_totals),
+                    "threshold": SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD,
+                    "minBytes": SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES,
+                    "maxFactor": SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR,
                 },
                 "conntrack": dict(self.conntrack_summary),
                 "limits": {

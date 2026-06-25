@@ -102,6 +102,13 @@ services:
       ENABLE_PACKET_CAPTURE: "true"
       CAPTURE_MAX_EVENTS_PER_SECOND: "2000"
       CAPTURE_SAMPLE_RATE: "1"
+      CAPTURE_DYNAMIC_SAMPLE: "true"
+      CAPTURE_MAX_SAMPLE_RATE: "50"
+      ENABLE_SYSTEM_TRAFFIC_CALIBRATION: "true"
+      SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD: "1.25"
+      SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES: "262144"
+      SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR: "20"
+      SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN: "false"
       MAX_RATE_HISTORY_POINTS: "180"
       PROCESS_RECENT_SECONDS: "180"
       MAX_CONNECTION_TRACKED: "10000"
@@ -309,8 +316,15 @@ docker push isle204/nas-traffic-lens:arm64
 | `HISTORY_RETENTION_DAYS` | `400` | 历史数据保留天数 |
 | `ENABLE_PACKET_CAPTURE` | `true` | 是否启用抓包归因；关闭后公网阶段和进程流量会不可用或变少 |
 | `CAPTURE_INTERFACES` | 自动 | 指定抓包接口，逗号分隔；`all` 表示抓所有启用接口 |
-| `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 抓包每秒最多记录的包数，超过会丢弃以保护宿主 |
-| `CAPTURE_SAMPLE_RATE` | `1` | 抓包采样率，`2` 表示每 2 个包取 1 个 |
+| `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 抓包每秒精确记录阈值，超过后动态抽样并按倍率折算 |
+| `CAPTURE_SAMPLE_RATE` | `1` | 固定抓包采样率，`1` 表示不固定抽样 |
+| `CAPTURE_DYNAMIC_SAMPLE` | `true` | 高包量时是否自动抽样并按倍率折算流量 |
+| `CAPTURE_MAX_SAMPLE_RATE` | `50` | 动态抽样最大倍率 |
+| `ENABLE_SYSTEM_TRAFFIC_CALIBRATION` | `true` | 抓包统计明显低于系统网卡计数时，用系统计数补齐总量 |
+| `SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD` | `1.25` | 系统网卡增量超过抓包增量多少倍时触发校准 |
+| `SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES` | `262144` | 单次校准最小系统增量，避免小流量抖动 |
+| `SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR` | `20` | 单次校准最大补齐倍率 |
+| `SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN` | `false` | 抓包没有公网/内网比例时是否默认补到公网 |
 | `MAX_RATE_HISTORY_POINTS` | `180` | 内存中的实时速率诊断点数，历史图表使用 SQLite |
 | `ENABLE_DOCKER_DISCOVERY` | `false` | 是否读取 Docker socket 自动发现容器和端口 |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket 路径 |
@@ -482,7 +496,9 @@ http://NAS-IP:8088/api/diagnostics
 - `caches.processTotals`：进程累计缓存数量。
 - `caches.processRecentKeys`：短期进程排行缓存数量。
 - `caches.dockerStats` / `caches.dockerWebProbes`：Docker 按需缓存数量。
-- `capture.droppedEvents`：抓包限流丢弃的包数。
+- `capture.droppedEvents`：动态抽样跳过的包数。
+- `capture.sampledEvents` / `capture.weightedBytes`：抽样折算是否正在发生。
+- `calibration.interfaces`：系统网卡计数校准是否已参与补齐。
 - `conntrack.truncated`：conntrack 是否因行数或时间预算被截断。
 
 默认已经加了硬上限，BT、DHT、UDP 或大量短连接不会无限撑大内存。如果 NAS 负载仍高，可以进一步调低：
@@ -514,6 +530,30 @@ FILE_LOG: "false"
 ```
 
 这个模式会牺牲公网阶段统计、进程流量归因和 Docker 自动发现，但可以快速判断压力是否来自 conntrack/抓包/Docker socket。
+
+### 迅雷或 BT 下载统计偏低
+
+迅雷、BT、DHT 这类场景包量很高。旧版本为了保护 Docker 引擎，超过 `CAPTURE_MAX_EVENTS_PER_SECOND` 后会直接跳过包，因此可能出现极空间系统监控显示 10MB/s 以上，而本页面公网流量只显示 1MB/s 左右。
+
+新版本改为两层保护：
+
+- 超过精确记录阈值后动态抽样，并按抽样倍率折算字节数。
+- 如果抓包统计仍明显低于系统网卡计数，会按已识别到的公网/内网比例补齐接口总量、阶段公网和历史统计。
+
+排查时打开：
+
+```text
+http://NAS-IP:8088/api/diagnostics
+```
+
+重点看 `capture.sampledEvents`、`capture.weightedBytes` 和 `calibration.interfaces`。如果它们在下载时增长，说明高速下载已经触发抽样/校准。
+
+如果你希望更精确、NAS CPU 也扛得住，可以提高：
+
+```yaml
+CAPTURE_MAX_EVENTS_PER_SECOND: "5000"
+CAPTURE_MAX_SAMPLE_RATE: "100"
+```
 
 ### 公网连接数特别大
 
@@ -576,7 +616,7 @@ cd front-end && npm run build
 ## 版本发布建议
 
 1. 修改代码。
-2. 更新 `VERSION`，例如 `2026.06.22-2`。
+2. 更新 `VERSION`，例如 `2026.06.25-1`。
 3. 运行后端和前端检查。
 4. 提交 Git。
 5. 分别构建 amd64 和 arm64。

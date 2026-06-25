@@ -305,6 +305,8 @@
               <InfoItem label="Docker 发现" :value="settings?.runtime?.dockerDiscovery ? '启用' : '关闭'" />
               <InfoItem label="抓包接口" :value="(settings?.runtime?.captureInterfaces || []).join('、') || '-'" />
               <InfoItem label="抓包限流" :value="settings?.runtime?.packetCapture ? `${settings?.runtime?.captureMaxEventsPerSecond || 0} 包/秒` : '关闭'" />
+              <InfoItem label="动态抽样" :value="settings?.runtime?.captureDynamicSample ? `启用，最高 ${settings?.runtime?.captureMaxSampleRate || 1}x` : '关闭'" />
+              <InfoItem label="系统校准" :value="settings?.runtime?.systemTrafficCalibration ? `启用，阈值 ${settings?.runtime?.systemTrafficCalibrationThreshold || '-'}` : '关闭'" />
               <InfoItem label="Conntrack 上限" :value="`${settings?.runtime?.conntrackMaxLines || '-'} 行 / ${settings?.runtime?.conntrackRefreshSeconds || '-'} 秒`" />
               <InfoItem label="Conntrack 状态" :value="settings?.runtime?.conntrackTruncated ? `已截断，扫描 ${settings?.runtime?.conntrackScannedLines || 0} 行` : '正常'" />
               <InfoItem label="版本" :value="settings?.version" />

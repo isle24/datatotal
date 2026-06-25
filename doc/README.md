@@ -103,8 +103,15 @@ docker compose -f docker-compose.nas.yml up -d
 | `CONSOLE_LOG` | `true` | 是否把文件日志同步输出到容器控制台 |
 | `ENABLE_PACKET_CAPTURE` | `true` | 是否启用抓包归因；关闭后公网阶段和进程流量会不可用或变少 |
 | `CAPTURE_INTERFACES` | 自动 | 指定抓包网卡，逗号分隔；设置为 `all` 才抓所有启用接口 |
-| `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 每秒最多记录的抓包事件，超过会丢弃以保护宿主 |
-| `CAPTURE_SAMPLE_RATE` | `1` | 抓包采样率，`2` 表示每 2 个包取 1 个 |
+| `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 抓包每秒精确记录阈值，超过后动态抽样并按倍率折算 |
+| `CAPTURE_SAMPLE_RATE` | `1` | 固定抓包采样率，`1` 表示不固定抽样 |
+| `CAPTURE_DYNAMIC_SAMPLE` | `true` | 高包量时是否自动抽样并按倍率折算流量 |
+| `CAPTURE_MAX_SAMPLE_RATE` | `50` | 动态抽样最大倍率 |
+| `ENABLE_SYSTEM_TRAFFIC_CALIBRATION` | `true` | 抓包统计明显低于系统网卡计数时，用系统计数补齐总量 |
+| `SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD` | `1.25` | 系统网卡增量超过抓包增量多少倍时触发校准 |
+| `SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES` | `262144` | 单次校准最小系统增量，避免小流量抖动 |
+| `SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR` | `20` | 单次校准最大补齐倍率 |
+| `SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN` | `false` | 抓包没有公网/内网比例时是否默认补到公网 |
 | `MAX_RATE_HISTORY_POINTS` | `180` | 内存实时速率诊断点数，历史图表使用 SQLite |
 | `HISTORY_RETENTION_DAYS` | `400` | SQLite 历史数据保留天数 |
 | `ENABLE_DOCKER_DISCOVERY` | `false` | 是否读取 Docker socket 自动识别容器名 |
@@ -306,7 +313,15 @@ devices:
 - 进程、连接、端口排行只在页面请求快照时排序，不在每秒采样循环里排序。
 - 默认关闭 uvicorn 访问日志，避免 2 秒轮询持续写盘。
 - conntrack 和 `/proc` 扫描都有行数上限和时间预算，超过后返回截断状态，优先保护 Docker 引擎和宿主稳定。
-- 抓包有每秒事件上限，超过会丢弃并在 `/api/diagnostics` 的 `capture.droppedEvents` 中体现。
+- 抓包有每秒精确记录阈值，超过后动态抽样并按倍率折算，避免迅雷、BT 等高包量下载被硬丢包漏统。
+- 抓包统计明显低于系统网卡计数时，会按已识别到的公网/内网比例补齐总量；补齐状态可在 `/api/diagnostics` 的 `calibration` 中查看。
+
+高速下载仍偏低时，优先看 `/api/diagnostics`：
+
+- `capture.sampledEvents` / `capture.weightedBytes`：是否触发抽样折算。
+- `calibration.interfaces`：是否触发系统网卡计数补齐。
+
+如果 NAS CPU 余量足，可以把 `CAPTURE_MAX_EVENTS_PER_SECOND` 提到 `5000`，或把 `CAPTURE_MAX_SAMPLE_RATE` 提到 `100`。
 
 如果宿主或 Docker 引擎负载异常，可以先用保守模式定位压力来源：
 
