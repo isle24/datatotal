@@ -36,6 +36,7 @@ from server.services.notifications import (
     send_notification_alert as dispatch_notification_alert,
 )
 from server.services.system_status import system_status
+from server.services.go_collector_client import probe as go_probe, snapshot as go_snapshot, processes as go_processes, connections as go_connections, diagnostics as go_diagnostics
 
 
 APP_NAME = "NAS Traffic Lens"
@@ -1937,6 +1938,7 @@ class TrafficCollector:
         self.last_conntrack_refresh = 0.0
         self.last_persist_totals: Optional[dict] = None
         self.last_process_persist_totals: Optional[dict] = None
+        self.go_collector_available = False
         self.high_tx_started_at: Optional[float] = None
         self.high_tx_alert_active = False
         self.stage_alert_active = False
@@ -1963,7 +1965,13 @@ class TrafficCollector:
             self.stage_totals = defaultdict(lambda: defaultdict(Counter))
             self.stage_accumulated_seconds = 0.0
 
-        if ENABLE_PACKET_CAPTURE:
+        # Probe Go collector; if available, delegate packet capture to it
+        go_available = self._probe_go_collector()
+        self.go_collector_available = go_available
+        if go_available:
+            print("Go collector detected — delegating packet capture to Go backend", flush=True)
+
+        if ENABLE_PACKET_CAPTURE and not go_available:
             for iface in self.capture_interfaces:
                 sniffer = AsyncSniffer(iface=iface, prn=lambda packet, name=iface: self.handle_packet(name, packet), store=False)
                 try:
@@ -1976,6 +1984,41 @@ class TrafficCollector:
         threading.Thread(target=self.socket_loop, daemon=True).start()
         threading.Thread(target=self.interface_loop, daemon=True).start()
         threading.Thread(target=self.conntrack_loop, daemon=True).start()
+
+    def _probe_go_collector(self) -> bool:
+        try:
+            return go_probe()
+        except Exception:
+            return False
+
+    def _merge_go_snapshot(self, go_data: dict, interface_view: str) -> dict:
+        go_ifaces = go_data.get("interfaces") or {}
+        go_rates = go_data.get("rates") or {}
+        go_conn_summary = go_data.get("connectionSummary") or {"total": 0, "wan": 0, "lan": 0}
+        with self.lock:
+            stage = {
+                "active": bool(self.stage_started_at),
+                "startedAt": self.stage_started_at,
+                "interfaces": self.stage_interface_snapshots(),
+            }
+            alerts = list(self.alerts)[-20:]
+            capture_ifaces = list(self.capture_interfaces)
+            container_status = dict(self.container_status)
+        return {
+            "app": APP_NAME,
+            "version": APP_VERSION,
+            "timestamp": now(),
+            "authEnabled": bool(DASHBOARD_PASSWORD),
+            "interfaceView": interface_view,
+            "captureInterfaces": capture_ifaces,
+            "containerStatus": container_status,
+            "rates": go_rates,
+            "interfaces": go_ifaces,
+            "connectionSummary": go_conn_summary,
+            "stage": stage,
+            "alerts": alerts,
+            "alertSettings": self.alert_settings.model_dump(),
+        }
 
     def load_saved_settings(self) -> None:
         global SAMPLE_SECONDS, RETENTION_SECONDS, CONNECTION_ACTIVE_SECONDS, CONNECTION_RETENTION_SECONDS
@@ -2569,6 +2612,11 @@ class TrafficCollector:
 
     def api_snapshot(self, interface_view: str = "physical") -> dict:
         interface_view = normalize_interface_view(interface_view)
+        # Use Go collector data when available
+        if self.go_collector_available:
+            go_data = go_snapshot()
+            if go_data:
+                return self._merge_go_snapshot(go_data, interface_view)
         totals = self.snapshot_totals(interface_view)
         with self.lock:
             stage = {
@@ -2599,6 +2647,30 @@ class TrafficCollector:
 
     def api_overview(self, interface_view: str = "physical") -> dict:
         interface_view = normalize_interface_view(interface_view)
+        # Use Go collector data when available
+        if self.go_collector_available:
+            go_data = go_snapshot()
+            if go_data:
+                go_ifaces = go_data.get("interfaces") or {}
+                go_rates = go_data.get("rates") or {}
+                alerts = list(self.alerts)[-8:]
+                capture_interfaces = list(self.capture_interfaces)
+                container_status = dict(self.container_status)
+                stage_summary = summarize_stage(self.stage_totals, self.stage_started_at, self.calibrated_stage_totals)
+                stage_summary["durationSeconds"] += int(self.stage_accumulated_seconds)
+                return {
+                    "app": APP_NAME,
+                    "version": APP_VERSION,
+                    "timestamp": now(),
+                    "authEnabled": bool(DASHBOARD_PASSWORD),
+                    "interfaceView": interface_view,
+                    "summary": summarize_interfaces(go_ifaces, go_rates),
+                    "stageSummary": stage_summary,
+                    "connectionSummary": go_data.get("connectionSummary", {"total": 0, "wan": 0, "lan": 0}),
+                    "alerts": alerts,
+                    "captureInterfaces": capture_interfaces,
+                    "containerStatus": container_status,
+                }
         interfaces = filter_interfaces(self.snapshot_interfaces(), interface_view)
         interface_names = set(interfaces.keys())
         with self.lock:
@@ -2623,6 +2695,11 @@ class TrafficCollector:
         }
 
     def process_rank(self, period: str = "30s", limit: int = 30, start: Optional[int] = None, end: Optional[int] = None) -> dict:
+        # Use Go collector when available for memory period
+        if self.go_collector_available and period == "30s" and not (start and end):
+            go_data = go_processes(period, limit)
+            if go_data:
+                return go_data
         period = normalize_process_period(period)
         limit = max(1, min(100, int(limit or 30)))
         current = int(now())
@@ -2708,6 +2785,12 @@ class TrafficCollector:
         mode = "conntrack" if str(mode or "").strip().lower() == "conntrack" else "capture"
         if mode == "conntrack":
             return read_conntrack_connections(scope, proto, direction, owner, source, dest, min_bytes, min_duration, limit, offset)
+
+        # Use Go collector when available
+        if self.go_collector_available and mode == "capture":
+            go_data = go_connections(mode)
+            if go_data:
+                return go_data
 
         interface_view = normalize_interface_view(interface_view)
         limit = max(1, min(300, int(limit or 120)))
