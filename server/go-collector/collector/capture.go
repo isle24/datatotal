@@ -153,11 +153,21 @@ func (ce *CaptureEngine) Start(ifaces []string) error {
 		log.Printf("go-collector: capturing on %s", iface)
 	}
 
+	if len(ce.handles) == 0 {
+		ce.running = false
+		return nil
+	}
 	ce.running = true
 	for iface, handle := range ce.handles {
 		go ce.captureLoop(iface, handle)
 	}
 	return nil
+}
+
+func (ce *CaptureEngine) Ready() bool {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+	return ce.running && len(ce.handles) > 0
 }
 
 func (ce *CaptureEngine) Stop() {
@@ -193,20 +203,12 @@ func (ce *CaptureEngine) captureLoop(iface string, handle *pcap.Handle) {
 			continue
 		}
 
-		// Determine direction
-		localIP, remoteIP := event.Src, event.Dst
-		localPort, remotePort := event.Sport, event.Dport
-		if event.Direction == "rx" {
-			localIP, remoteIP = event.Dst, event.Src
-			localPort, remotePort = event.Dport, event.Sport
-		}
-
-		proc := ce.findProcess(event.Proto, localIP, remoteIP, localPort, remotePort)
+		proc := ce.processForEvent(event)
 		event.Process = map[string]interface{}{
 			"pid": proc.PID, "name": proc.Name, "cmdline": proc.Cmdline,
 		}
 
-		ci := ce.findContainer(event.Proto, []int{localPort, remotePort})
+		ci := ce.findContainer(event.Proto, eventLocalRemotePorts(event))
 		if ci.Name != "" {
 			event.Process["container"] = map[string]interface{}{
 				"id": ci.ID, "name": ci.Name, "image": ci.Image,
@@ -218,6 +220,29 @@ func (ce *CaptureEngine) captureLoop(iface string, handle *pcap.Handle) {
 		event.Weight = weight
 		ce.aggregator.Record(*event)
 	}
+}
+
+func eventLocalRemotePorts(event *PacketEvent) []int {
+	if event == nil {
+		return nil
+	}
+	if event.Direction == "rx" {
+		return []int{event.Dport, event.Sport}
+	}
+	return []int{event.Sport, event.Dport}
+}
+
+func (ce *CaptureEngine) processForEvent(event *PacketEvent) ProcInfo {
+	if event == nil {
+		return ProcInfo{PID: 0, Name: "unknown"}
+	}
+	localIP, remoteIP := event.SrcIP, event.DstIP
+	localPort, remotePort := event.Sport, event.Dport
+	if event.Direction == "rx" {
+		localIP, remoteIP = event.DstIP, event.SrcIP
+		localPort, remotePort = event.Dport, event.Sport
+	}
+	return ce.findProcess(event.Proto, localIP, remoteIP, localPort, remotePort)
 }
 
 func (ce *CaptureEngine) parsePacket(iface string, packet gopacket.Packet) *PacketEvent {
@@ -263,6 +288,10 @@ func (ce *CaptureEngine) buildEventWithIPs(iface string, packet gopacket.Packet,
 		return nil
 	}
 
+	return ce.buildEventFromFields(iface, len(packet.Data()), srcIP, dstIP, proto, sport, dport)
+}
+
+func (ce *CaptureEngine) buildEventFromFields(iface string, size int, srcIP, dstIP, proto string, sport, dport int) *PacketEvent {
 	src := net.ParseIP(srcIP)
 	dst := net.ParseIP(dstIP)
 	scope := TrafficScope(src, dst)
@@ -291,11 +320,13 @@ func (ce *CaptureEngine) buildEventWithIPs(iface string, packet gopacket.Packet,
 		Scope:     scope,
 		Direction: direction,
 		Proto:     proto,
+		SrcIP:     srcIP,
+		DstIP:     dstIP,
 		Src:       formatEndpoint(srcIP, sport),
 		Dst:       formatEndpoint(dstIP, dport),
 		Sport:     sport,
 		Dport:     dport,
-		Size:      len(packet.Data()),
+		Size:      size,
 	}
 }
 

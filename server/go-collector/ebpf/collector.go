@@ -5,8 +5,8 @@
 // This package only compiles on Linux (requires cilium/ebpf).
 // On non-Linux platforms, the entire package is omitted via build tags.
 
-//go:build linux && cgo
-// +build linux,cgo
+//go:build linux && cgo && ebpf
+// +build linux,cgo,ebpf
 
 package ebpf
 
@@ -44,19 +44,19 @@ type PacketEvent struct {
 type Collector struct {
 	mu         sync.Mutex
 	objs       *trafficObjects
-	links       []link.Link
-	eventCh     chan PacketEvent
-	running     bool
-	ifaces      []string
-	ringReader  *ringbuf.Reader
+	links      []link.Link
+	eventCh    chan PacketEvent
+	running    bool
+	ifaces     []string
+	ringReader *ringbuf.Reader
 }
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64 traffic traffic_kern.c -- -I/usr/include -I/usr/include/x86_64-linux-gnu -O2 -Wall
 
 type trafficObjects struct {
-	Events      *ebpf.Map `ebpf:"events"`
-	IfaceFilter *ebpf.Map `ebpf:"iface_filter"`
-	IpBytes     *ebpf.Map `ebpf:"ip_bytes"`
+	Events      *ebpf.Map     `ebpf:"events"`
+	IfaceFilter *ebpf.Map     `ebpf:"iface_filter"`
+	IpBytes     *ebpf.Map     `ebpf:"ip_bytes"`
 	TcIngress   *ebpf.Program `ebpf:"tc_ingress"`
 	TcEgress    *ebpf.Program `ebpf:"tc_egress"`
 }

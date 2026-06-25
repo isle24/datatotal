@@ -2,6 +2,8 @@ package collector
 
 import (
 	"encoding/json"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,13 +23,13 @@ type Aggregator struct {
 	StageStartedAt float64
 	StagePaused    bool
 
-	SeenEvents           int64
-	RecordedEvents       int64
-	DroppedEvents        int64
-	SampledEvents        int64
-	WeightedBytes        int64
-	CaptureWindowSecond  int64
-	CaptureWindowEvents  int64
+	SeenEvents          int64
+	RecordedEvents      int64
+	DroppedEvents       int64
+	SampledEvents       int64
+	WeightedBytes       int64
+	CaptureWindowSecond int64
+	CaptureWindowEvents int64
 }
 
 func NewAggregator() *Aggregator {
@@ -296,6 +298,9 @@ func (a *Aggregator) SnapshotInterfaces(sysIO map[string]SystemCounters, details
 }
 
 func (a *Aggregator) ConnectionCounts(activeSec int64, ifaceNames map[string]bool) ConnectionSummary {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	cutoff := time.Now().UnixMilli() - int64(activeSec)*1000
 	summary := ConnectionSummary{}
 
@@ -429,13 +434,22 @@ func (a *Aggregator) Diagnostics() (CaptureDiagnostics, CacheDiagnostics) {
 		}
 }
 
-func (a *Aggregator) ConnectionEntries(activeSec, maxItems int) []ConnectionEntry {
+func (a *Aggregator) ConnectionEntries(activeSec, limit, offset int, filters ConnectionFilters) ([]ConnectionEntry, ConnectionPage, ConnectionSummary) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if limit <= 0 {
+		limit = 120
+	}
+	if limit > 300 {
+		limit = 300
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	cutoff := time.Now().UnixMilli() - int64(activeSec)*1000
-	var entries []ConnectionEntry
-	count := 0
+	entries := make([]ConnectionEntry, 0)
+	summary := ConnectionSummary{}
 	for key, counter := range a.ConnTotals {
 		if counter.LastSeen < cutoff {
 			continue
@@ -450,13 +464,83 @@ func (a *Aggregator) ConnectionEntries(activeSec, maxItems int) []ConnectionEntr
 		item.FirstSeen = float64(cd.FirstSeen) / 1000.0
 		item.LastSeen = float64(cd.LastSeen) / 1000.0
 		item.Duration = item.LastSeen - item.FirstSeen
+		item.Direction = "rx"
+		if item.TxBytes >= item.RxBytes {
+			item.Direction = "tx"
+		}
+		if !connectionMatches(item, filters) {
+			continue
+		}
 		entries = append(entries, item)
-		count++
-		if maxItems > 0 && count >= maxItems {
-			break
+		summary.Total++
+		if item.Scope == "lan" {
+			summary.LAN++
+		} else {
+			summary.WAN++
 		}
 	}
-	return entries
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].TotalBytes > entries[j].TotalBytes
+	})
+	total := len(entries)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	pageRows := entries[offset:end]
+	if pageRows == nil {
+		pageRows = []ConnectionEntry{}
+	}
+	pages := 1
+	if total > 0 {
+		pages = (total + limit - 1) / limit
+	}
+	return pageRows, ConnectionPage{
+		Total: total, Limit: limit, Offset: offset,
+		Page: (offset / limit) + 1, Pages: pages,
+	}, summary
+}
+
+func connectionMatches(item ConnectionEntry, filters ConnectionFilters) bool {
+	if filters.Iface != "" && filters.Iface != "all" && item.Iface != filters.Iface {
+		return false
+	}
+	if filters.Scope != "" && filters.Scope != "all" && item.Scope != filters.Scope {
+		return false
+	}
+	if filters.Proto != "" && filters.Proto != "all" && item.Proto != filters.Proto {
+		return false
+	}
+	if filters.Direction == "rx" && item.RxBytes <= 0 {
+		return false
+	}
+	if filters.Direction == "tx" && item.TxBytes <= 0 {
+		return false
+	}
+	if filters.MinBytes > 0 && item.TotalBytes < filters.MinBytes {
+		return false
+	}
+	if filters.MinDuration > 0 && int64(item.Duration) < filters.MinDuration {
+		return false
+	}
+	if filters.Owner != "" {
+		owner := strings.ToLower(filters.Owner)
+		name, _ := item.Process["name"].(string)
+		cmdline, _ := item.Process["cmdline"].(string)
+		if !strings.Contains(strings.ToLower(name+" "+cmdline), owner) {
+			return false
+		}
+	}
+	if filters.Source != "" && !strings.Contains(strings.ToLower(item.Source), strings.ToLower(filters.Source)) {
+		return false
+	}
+	if filters.Dest != "" && !strings.Contains(strings.ToLower(item.Dest), strings.ToLower(filters.Dest)) {
+		return false
+	}
+	return true
 }
 
 // ParseConnKey parses a connection store key into a ConnectionEntry (no counter values filled).

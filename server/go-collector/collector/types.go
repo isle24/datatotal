@@ -112,6 +112,8 @@ type PacketEvent struct {
 	Scope     string                 `json:"scope"`
 	Direction string                 `json:"direction"`
 	Proto     string                 `json:"proto"`
+	SrcIP     string                 `json:"srcIp"`
+	DstIP     string                 `json:"dstIp"`
 	Src       string                 `json:"src"`
 	Dst       string                 `json:"dst"`
 	Sport     int                    `json:"sport"`
@@ -211,6 +213,28 @@ type ConnectionSummary struct {
 	LAN   int `json:"lan"`
 }
 
+// ConnectionPage describes filtered connection pagination.
+type ConnectionPage struct {
+	Total  int `json:"total"`
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
+	Page   int `json:"page"`
+	Pages  int `json:"pages"`
+}
+
+// ConnectionFilters mirrors the Python connection table filters.
+type ConnectionFilters struct {
+	Iface       string
+	Scope       string
+	Proto       string
+	Direction   string
+	Owner       string
+	Source      string
+	Dest        string
+	MinBytes    int64
+	MinDuration int64
+}
+
 // ConntrackSummary holds conntrack stats.
 type ConntrackSummary struct {
 	Available    bool   `json:"available"`
@@ -230,7 +254,7 @@ type ProcessEntry struct {
 	Name            string                 `json:"name"`
 	Cmdline         string                 `json:"cmdline"`
 	Container       map[string]interface{} `json:"container"`
-	CounterData                              // embedded
+	CounterData                            // embedded
 	TotalBytes      int64                  `json:"totalBytes"`
 	DurationSeconds float64                `json:"durationSeconds"`
 }
@@ -268,11 +292,18 @@ type MemoryDiagnostics struct {
 
 // DiagnosticsResponse is the full diagnostics payload.
 type DiagnosticsResponse struct {
-	Timestamp float64             `json:"timestamp"`
-	Capture   CaptureDiagnostics  `json:"capture"`
-	Caches    CacheDiagnostics    `json:"caches"`
-	Conntrack ConntrackSummary    `json:"conntrack"`
-	Memory    MemoryDiagnostics   `json:"memory"`
+	Timestamp float64            `json:"timestamp"`
+	Capture   CaptureDiagnostics `json:"capture"`
+	Caches    CacheDiagnostics   `json:"caches"`
+	Conntrack ConntrackSummary   `json:"conntrack"`
+	Memory    MemoryDiagnostics  `json:"memory"`
+}
+
+// StageResponse mirrors the Python stage snapshot shape.
+type StageResponse struct {
+	Active     bool                              `json:"active"`
+	StartedAt  float64                           `json:"startedAt"`
+	Interfaces map[string]map[string]CounterData `json:"interfaces"`
 }
 
 // SnapshotResponse is the full snapshot payload.
@@ -282,6 +313,7 @@ type SnapshotResponse struct {
 	Rates             map[string]InterfaceRate  `json:"rates"`
 	ConnectionSummary ConnectionSummary         `json:"connectionSummary"`
 	ConntrackSummary  ConntrackSummary          `json:"conntrackSummary,omitempty"`
+	Stage             StageResponse             `json:"stage,omitempty"`
 	Connections       []ConnectionEntry         `json:"connections,omitempty"`
 	Processes         []ProcessEntry            `json:"processes,omitempty"`
 	CaptureInterfaces []string                  `json:"captureInterfaces"`

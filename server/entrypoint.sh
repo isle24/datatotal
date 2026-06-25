@@ -14,24 +14,22 @@ else
   ACCESS_LOG_FLAG="--no-access-log"
 fi
 
-# --- Collector selection (priority: eBPF > Go-libpcap > Python-Scapy) ---
+# --- Collector selection (production: Go-libpcap > Python-Scapy) ---
 
-GO_COLLECTOR_PORT="${GO_COLLECTOR_PORT:-18088}"
+. /app/server/entrypoint_helpers.sh
 
-try_ebpf() {
-  EBPF_BIN="${GO_COLLECTOR_EBPF_BIN:-/app/bin/go-collector-ebpf}"
-  if [ -x "$EBPF_BIN" ] && [ -e /sys/kernel/btf/vmlinux ]; then
-    echo "Starting eBPF collector on port $GO_COLLECTOR_PORT..."
-    "$EBPF_BIN" -port "$GO_COLLECTOR_PORT" &
-    export GO_COLLECTOR_URL="http://127.0.0.1:${GO_COLLECTOR_PORT}"
-    return 0
-  fi
-  return 1
-}
+REQUESTED_GO_COLLECTOR_PORT="${GO_COLLECTOR_PORT:-18088}"
+GO_COLLECTOR_PORT="$(resolve_go_collector_port)"
+COLLECTOR_MODE="${COLLECTOR_MODE:-auto}"
+COLLECTOR_PROFILE="${COLLECTOR_PROFILE:-balanced}"
+GO_COLLECTOR_ENABLED="${GO_COLLECTOR_ENABLED:-true}"
 
 try_go_libpcap() {
   GO_BIN="${GO_COLLECTOR_BIN:-/app/bin/go-collector}"
   if [ -x "$GO_BIN" ]; then
+    if [ "$GO_COLLECTOR_PORT" != "$REQUESTED_GO_COLLECTOR_PORT" ]; then
+      echo "Go collector port $REQUESTED_GO_COLLECTOR_PORT conflicts with APP_PORT ${APP_PORT:-8088}; using $GO_COLLECTOR_PORT instead"
+    fi
     echo "Starting Go libpcap collector on port $GO_COLLECTOR_PORT..."
     "$GO_BIN" -port "$GO_COLLECTOR_PORT" &
     export GO_COLLECTOR_URL="http://127.0.0.1:${GO_COLLECTOR_PORT}"
@@ -40,16 +38,16 @@ try_go_libpcap() {
   return 1
 }
 
-if [ "${COLLECTOR_MODE:-auto}" = "ebpf" ]; then
-  try_ebpf || try_go_libpcap || echo "eBPF collector unavailable, falling back to Python Scapy"
-elif [ "${COLLECTOR_MODE:-auto}" = "golibpcap" ]; then
+if [ "$GO_COLLECTOR_ENABLED" != "true" ] || [ "$COLLECTOR_PROFILE" = "low" ] || [ "$COLLECTOR_MODE" = "off" ] || [ "$COLLECTOR_MODE" = "python" ]; then
+  echo "External collector disabled; using Python/system counters profile"
+elif [ "$COLLECTOR_MODE" = "ebpf" ]; then
+  echo "eBPF collector is experimental in this build; starting Go libpcap instead"
+  try_go_libpcap || echo "Go collector unavailable, falling back to Python Scapy"
+elif [ "$COLLECTOR_MODE" = "golibpcap" ]; then
   try_go_libpcap || echo "Go collector unavailable, falling back to Python Scapy"
 else
-  # auto mode: try eBPF first, then Go, then Python
-  if ! try_ebpf; then
-    if ! try_go_libpcap; then
-      echo "No external collector available, using Python Scapy"
-    fi
+  if ! try_go_libpcap; then
+    echo "Go collector unavailable, using Python Scapy"
   fi
 fi
 

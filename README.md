@@ -99,6 +99,9 @@ services:
       DOCKER_WEB_PROBE_TTL_SECONDS: "86400"
       DOCKER_WEB_PROBE_TIMEOUT: "1"
       DOCKER_API_MAX_BYTES: "2097152"
+      COLLECTOR_MODE: "auto"
+      COLLECTOR_PROFILE: "balanced"
+      GO_COLLECTOR_ENABLED: "true"
       ENABLE_PACKET_CAPTURE: "true"
       CAPTURE_MAX_EVENTS_PER_SECOND: "2000"
       CAPTURE_SAMPLE_RATE: "1"
@@ -314,6 +317,9 @@ docker push isle204/nas-traffic-lens:arm64
 | `RETENTION_SECONDS` | `3600` | 内存中短期历史保留秒数 |
 | `PERSIST_INTERVAL_SECONDS` | `60` | 写入 SQLite 的间隔 |
 | `HISTORY_RETENTION_DAYS` | `400` | 历史数据保留天数 |
+| `COLLECTOR_PROFILE` | `balanced` | 采集档位：`low` 低负载近似公网总量、`balanced` Go/libpcap 优先、`diagnostic` 诊断模式 |
+| `COLLECTOR_MODE` | `auto` | 采集后端：`auto`/`golibpcap`/`python`/`off`；`ebpf` 目前仅实验提示并回退 Go |
+| `GO_COLLECTOR_ENABLED` | `true` | 是否允许启动 Go libpcap 外部采集器 |
 | `ENABLE_PACKET_CAPTURE` | `true` | 是否启用抓包归因；关闭后公网阶段和进程流量会不可用或变少 |
 | `CAPTURE_INTERFACES` | 自动 | 指定抓包接口，逗号分隔；`all` 表示抓所有启用接口 |
 | `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 抓包每秒精确记录阈值，超过后动态抽样并按倍率折算 |
@@ -616,7 +622,7 @@ cd front-end && npm run build
 ## 版本发布建议
 
 1. 修改代码。
-2. 更新 `VERSION`，例如 `2026.06.25-1`。
+2. 更新 `VERSION`，例如 `2026.06.25-3`。
 3. 运行后端和前端检查。
 4. 提交 Git。
 5. 分别构建 amd64 和 arm64。
@@ -631,17 +637,17 @@ cd front-end && npm run build
 
 - [doc/README.md](doc/README.md)
 
-## 采集后端（三层降级）
+## 采集后端与低负载模式
 
-启动时按优先级自动选择：**eBPF → Go + libpcap → Python Scapy**。
+启动时默认优先使用 **Go + libpcap**，不可用时回退 **Python Scapy**。eBPF 代码保留为实验方向，但当前生产镜像不启用 eBPF。
 
-| 层 | 技术 | 负载 | 要求 |
-|---|---|---|---|
-| 1 | eBPF TC 内核 hook | 最低 | Linux >= 5.4, BTF, privileged |
-| 2 | Go 编译二进制 + libpcap | 低 | Linux, libpcap |
-| 3 | Python Scapy（原方案） | 正常 | 无需额外依赖 |
+| 档位 | 适合场景 | 行为 |
+|---|---|---|
+| `low` | 长期常驻，接近宝塔这类面板的低负载统计 | 不抓包，按物理/默认网卡系统计数近似公网总量，不提供进程/端口归因 |
+| `balanced` | 默认推荐 | Go libpcap 抓包，保留公网/内网、进程、连接、端口归因 |
+| `diagnostic` | 排查偷跑或异常连接 | 保留详细采集能力，适合短时间打开 |
 
-可通过 `COLLECTOR_MODE=auto|ebpf|golibpcap` 环境变量强制指定。细节见 [doc/README.md § 采集后端架构](doc/README.md#采集后端架构三层降级)。
+可通过 `COLLECTOR_PROFILE=low|balanced|diagnostic` 和 `COLLECTOR_MODE=auto|golibpcap|python|off` 调整。细节见 [doc/README.md § 采集后端架构](doc/README.md#采集后端架构与低负载模式)。
 
 ## 开发
 

@@ -17,26 +17,26 @@ import (
 )
 
 var (
-	listenPort         = flag.Int("port", 18088, "HTTP listen port")
-	sampleSecondsF     = flag.Float64("sample-seconds", 1.0, "Sample interval in seconds")
-	captureIFacesF     = flag.String("capture-interfaces", "", "Capture interfaces (comma separated, auto if empty)")
-	maxEventsPerSecF   = flag.Int("max-events-per-second", 2000, "Max packet events per second")
-	baseSampleRateF    = flag.Int("sample-rate", 1, "Base sample rate")
-	maxSampleRateF     = flag.Int("max-sample-rate", 50, "Max dynamic sample rate")
-	dynamicSampleF     = flag.Bool("dynamic-sample", true, "Enable dynamic sampling")
-	sockRefreshSecF    = flag.Int("socket-refresh", 60, "Socket map refresh interval")
-	ctRefreshSecF      = flag.Int("conntrack-refresh", 30, "Conntrack refresh interval")
-	ctMaxLinesF        = flag.Int("conntrack-max-lines", 30000, "Conntrack max scan lines")
-	procRecentSecF     = flag.Int("process-recent-sec", 180, "Process recent memory window")
-	maxConnF           = flag.Int("max-conn-tracked", 10000, "Max tracked connections")
-	maxProcF           = flag.Int("max-proc-tracked", 2048, "Max tracked processes")
-	maxPortF           = flag.Int("max-port-tracked", 4096, "Max tracked ports")
-	procScanTimeoutF   = flag.Int("proc-scan-timeout", 1, "Proc scan timeout in seconds")
-	maxFDLinksF        = flag.Int("max-fd-links", 60000, "Max fd links per scan")
-	maxNetLinesF       = flag.Int("max-net-lines", 60000, "Max proc/net lines per file")
-	ctModeF            = flag.String("conntrack-mode", "active", "Conntrack mode: active or raw")
-	ctTCPStatesF       = flag.String("conntrack-tcp-states", "ESTABLISHED", "TCP states for active mode")
-	ctUDPAssuredF      = flag.Bool("conntrack-udp-assured", true, "UDP require ASSURED flag")
+	listenPort       = flag.Int("port", 18088, "HTTP listen port")
+	sampleSecondsF   = flag.Float64("sample-seconds", 1.0, "Sample interval in seconds")
+	captureIFacesF   = flag.String("capture-interfaces", "", "Capture interfaces (comma separated, auto if empty)")
+	maxEventsPerSecF = flag.Int("max-events-per-second", 2000, "Max packet events per second")
+	baseSampleRateF  = flag.Int("sample-rate", 1, "Base sample rate")
+	maxSampleRateF   = flag.Int("max-sample-rate", 50, "Max dynamic sample rate")
+	dynamicSampleF   = flag.Bool("dynamic-sample", true, "Enable dynamic sampling")
+	sockRefreshSecF  = flag.Int("socket-refresh", 60, "Socket map refresh interval")
+	ctRefreshSecF    = flag.Int("conntrack-refresh", 30, "Conntrack refresh interval")
+	ctMaxLinesF      = flag.Int("conntrack-max-lines", 30000, "Conntrack max scan lines")
+	procRecentSecF   = flag.Int("process-recent-sec", 180, "Process recent memory window")
+	maxConnF         = flag.Int("max-conn-tracked", 10000, "Max tracked connections")
+	maxProcF         = flag.Int("max-proc-tracked", 2048, "Max tracked processes")
+	maxPortF         = flag.Int("max-port-tracked", 4096, "Max tracked ports")
+	procScanTimeoutF = flag.Int("proc-scan-timeout", 1, "Proc scan timeout in seconds")
+	maxFDLinksF      = flag.Int("max-fd-links", 60000, "Max fd links per scan")
+	maxNetLinesF     = flag.Int("max-net-lines", 60000, "Max proc/net lines per file")
+	ctModeF          = flag.String("conntrack-mode", "active", "Conntrack mode: active or raw")
+	ctTCPStatesF     = flag.String("conntrack-tcp-states", "ESTABLISHED", "TCP states for active mode")
+	ctUDPAssuredF    = flag.Bool("conntrack-udp-assured", true, "UDP require ASSURED flag")
 )
 
 func main() {
@@ -177,6 +177,7 @@ func main() {
 		for name := range ifaces {
 			ifaceNames[name] = true
 		}
+		stageActive, stageStartedAt, stageIfaces := agg.StageSnapshot()
 
 		writeJSON(w, collector.SnapshotResponse{
 			Timestamp:         float64(time.Now().UnixNano()) / 1e9,
@@ -185,6 +186,11 @@ func main() {
 			ConnectionSummary: agg.ConnectionCounts(120, ifaceNames),
 			ConntrackSummary:  ctReader.ReadSummary(cml, 1*time.Second),
 			CaptureInterfaces: captureList,
+			Stage: collector.StageResponse{
+				Active:     stageActive,
+				StartedAt:  stageStartedAt,
+				Interfaces: stageIfaces,
+			},
 		})
 	})
 
@@ -225,26 +231,58 @@ func main() {
 
 	mux.HandleFunc("/api/connections", func(w http.ResponseWriter, r *http.Request) {
 		mode := r.URL.Query().Get("mode")
+		limit := queryInt(r, "limit", 120, 1, 300)
+		offset := queryInt(r, "offset", 0, 0, 1000000)
 		if mode == "conntrack" {
 			conns := ctReader.ReadConnections(cml, 1500*time.Millisecond)
 			if conns == nil {
 				conns = []collector.ConnectionEntry{}
 			}
+			total := len(conns)
+			if offset > total {
+				offset = total
+			}
+			end := offset + limit
+			if end > total {
+				end = total
+			}
+			pageRows := conns[offset:end]
+			if pageRows == nil {
+				pageRows = []collector.ConnectionEntry{}
+			}
 			writeJSON(w, map[string]interface{}{
-				"source": "conntrack", "connections": conns,
-				"summary": map[string]int{"total": len(conns)},
+				"source": "conntrack", "connections": pageRows,
+				"summary":    map[string]int{"total": total},
+				"pagination": pagination(total, limit, offset),
 			})
 			return
 		}
-		conns := agg.ConnectionEntries(120, 300)
+		conns, page, summary := agg.ConnectionEntries(120, limit, offset, collector.ConnectionFilters{
+			Iface:       defaultQuery(r, "iface", "all"),
+			Scope:       defaultQuery(r, "scope", "all"),
+			Proto:       defaultQuery(r, "proto", "all"),
+			Direction:   defaultQuery(r, "direction", "all"),
+			Owner:       r.URL.Query().Get("owner"),
+			Source:      r.URL.Query().Get("source"),
+			Dest:        r.URL.Query().Get("dest"),
+			MinBytes:    int64(queryInt(r, "min_bytes", 0, 0, 1_000_000_000_000_000)),
+			MinDuration: int64(queryInt(r, "min_duration", 0, 0, 31_536_000)),
+		})
 		writeJSON(w, map[string]interface{}{
 			"source": "capture", "connections": conns,
-			"summary": map[string]int{"total": len(conns)},
+			"summary":    summary,
+			"pagination": page,
 		})
 	})
 
 	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
 		dcap, dcache := agg.Diagnostics()
+		dcap.Enabled = len(captureList) > 0
+		dcap.Interfaces = captureList
+		dcap.MaxEventsPerSecond = maxEPS
+		dcap.SampleRate = bsr
+		dcap.DynamicSample = ds
+		dcap.MaxSampleRate = msr
 		var ms runtime.MemStats
 		runtime.ReadMemStats(&ms)
 		writeJSON(w, collector.DiagnosticsResponse{
@@ -259,6 +297,7 @@ func main() {
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{
 			"ok":                true,
+			"captureReady":      captureEng.Ready(),
 			"captureInterfaces": captureList,
 			"timestamp":         time.Now().Unix(),
 		})
@@ -294,6 +333,43 @@ func main() {
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func defaultQuery(r *http.Request, key, fallback string) string {
+	value := r.URL.Query().Get(key)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func queryInt(r *http.Request, key string, fallback, minVal, maxVal int) int {
+	value := r.URL.Query().Get(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	if parsed < minVal {
+		return minVal
+	}
+	if parsed > maxVal {
+		return maxVal
+	}
+	return parsed
+}
+
+func pagination(total, limit, offset int) collector.ConnectionPage {
+	if limit <= 0 {
+		limit = 120
+	}
+	pages := 1
+	if total > 0 {
+		pages = (total + limit - 1) / limit
+	}
+	return collector.ConnectionPage{Total: total, Limit: limit, Offset: offset, Page: offset/limit + 1, Pages: pages}
 }
 
 func envInt(key string, defaultVal int) int {

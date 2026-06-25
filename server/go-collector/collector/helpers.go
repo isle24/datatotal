@@ -20,7 +20,7 @@ func b64Decode(s string) ([]byte, error) {
 	return base64.URLEncoding.DecodeString(s)
 }
 
-func itoa(i int) string    { return strconv.Itoa(i) }
+func itoa(i int) string              { return strconv.Itoa(i) }
 func parseInt(s string) (int, error) { return strconv.Atoi(s) }
 
 func max64(a, b int64) int64 {

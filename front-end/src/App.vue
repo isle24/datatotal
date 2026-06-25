@@ -303,6 +303,8 @@
               <InfoItem label="数据库" :value="settings?.runtime?.dbPath" />
               <InfoItem label="日志目录" :value="settings?.runtime?.logDir" />
               <InfoItem label="Docker 发现" :value="settings?.runtime?.dockerDiscovery ? '启用' : '关闭'" />
+              <InfoItem label="采集档位" :value="`${settings?.runtime?.collectorProfile || '-'} / ${settings?.runtime?.collectorMode || '-'}`" />
+              <InfoItem label="Go 采集器" :value="settings?.runtime?.goCollectorAvailable ? '运行中' : (settings?.runtime?.goCollectorEnabled ? '未接入' : '关闭')" />
               <InfoItem label="抓包接口" :value="(settings?.runtime?.captureInterfaces || []).join('、') || '-'" />
               <InfoItem label="抓包限流" :value="settings?.runtime?.packetCapture ? `${settings?.runtime?.captureMaxEventsPerSecond || 0} 包/秒` : '关闭'" />
               <InfoItem label="动态抽样" :value="settings?.runtime?.captureDynamicSample ? `启用，最高 ${settings?.runtime?.captureMaxSampleRate || 1}x` : '关闭'" />

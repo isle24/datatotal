@@ -101,6 +101,9 @@ docker compose -f docker-compose.nas.yml up -d
 | `UVICORN_ACCESS_LOG` | `false` | 是否记录每次 HTTP 访问日志，默认关闭以减少写盘 |
 | `FILE_LOG` | `true` | 是否写入日志文件；设为 `false` 时直接输出到容器控制台 |
 | `CONSOLE_LOG` | `true` | 是否把文件日志同步输出到容器控制台 |
+| `COLLECTOR_PROFILE` | `balanced` | 采集档位：`low` 低负载近似公网总量、`balanced` Go/libpcap 优先、`diagnostic` 诊断模式 |
+| `COLLECTOR_MODE` | `auto` | 采集后端：`auto`/`golibpcap`/`python`/`off`；`ebpf` 当前为实验提示并回退 Go |
+| `GO_COLLECTOR_ENABLED` | `true` | 是否允许启动 Go libpcap 外部采集器 |
 | `ENABLE_PACKET_CAPTURE` | `true` | 是否启用抓包归因；关闭后公网阶段和进程流量会不可用或变少 |
 | `CAPTURE_INTERFACES` | 自动 | 指定抓包网卡，逗号分隔；设置为 `all` 才抓所有启用接口 |
 | `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 抓包每秒精确记录阈值，超过后动态抽样并按倍率折算 |
@@ -373,27 +376,13 @@ FILE_LOG: "false"
 - 加密流量不影响计量，但不会解析应用层域名。
 - 如果流量经过 Docker bridge、虚拟网卡或硬件卸载，系统网卡累计值和抓包累计值可能不完全一致。
 - UDP 无连接场景的进程归因比 TCP 更容易缺失。
-- 极空间系统如果限制容器权限，需要改用宿主机直接运行或安装 eBPF/pcap 权限更高的版本。
+- 极空间系统如果限制容器抓包权限，会自动回退 Python 或低负载系统计数；需要进程归因时优先确认 `privileged: true`、`network_mode: host` 和抓包接口权限。
 
-## 采集后端架构（三层降级）
+## 采集后端架构与低负载模式
 
-从 v2026.06.25 起，采集引擎支持三层自动降级：
+从 v2026.06.25-3 起，生产镜像默认使用 Go + libpcap，失败时自动回退 Python Scapy。eBPF 源码保留为实验方向，但当前镜像不构建、不启动 eBPF，避免半成品路径影响部署。
 
-```
-启动 → eBPF (内核态) → 不可用 → Go + libpcap → 不可用 → Python Scapy (原方案)
-```
-
-### 第一层：eBPF TC 采集（负载最低）
-
-- 通过 TC (Traffic Control) hook 在内核层直接捕获包事件
-- 零用户态拷贝：包数据通过 BPF ring buffer 从内核推到用户态
-- 每包不经过 Python 解释器，CPU 开销极低
-- **要求**：Linux >= 5.4、`CONFIG_DEBUG_INFO_BTF=y`、BTF vmlinux 存在
-- **源码**：[`ebpf/traffic_kern.c`](../server/go-collector/ebpf/traffic_kern.c)（BPF C 程序）+ [`ebpf/collector.go`](../server/go-collector/ebpf/collector.go)（Go 用户态加载器）
-- 容器需要 `privileged: true` 和 host 网络
-- 检测方式：启动时检查 `/sys/kernel/btf/vmlinux` 是否存在
-
-### 第二层：Go + libpcap 采集（负载较低）
+### Go + libpcap 采集（默认）
 
 - Go 编译为原生二进制，无 GC 停顿，goroutine channel 替代 Python RLock
 - gopacket (libpcap CGO 绑定) 抓包，直接读取 `/proc/net/dev` 做系统计数器
@@ -402,10 +391,35 @@ FILE_LOG: "false"
 - **源码**：[`go-collector/`](../server/go-collector/)（Go module，独立编译为二进制）
 - 启动为独立 HTTP 服务（默认端口 18088），Python 后端通过 HTTP 调用其 API
 
-### 第三层：Python Scapy（自动回退）
+### Python Scapy（自动回退）
 
-- 原方案完整保留，Go/eBPF 不可用时自动激活
+- 原方案完整保留，Go 不可用时自动激活
 - 所有流量统计、连接归因逻辑不变
+
+### 三个采集档位
+
+| 档位 | 推荐用途 | 行为 | 取舍 |
+|---|---|---|---|
+| `low` | 长期常驻、只看公网总量，追求接近宝塔的低负载 | 不启动 Go 和 Scapy 抓包，只用物理/默认网卡系统计数按公网近似累计 | 无进程、端口、连接归因，公网/内网无法精确拆分 |
+| `balanced` | 默认推荐 | Go libpcap 优先，失败回退 Python Scapy | 保留公网/内网、进程、端口、连接归因 |
+| `diagnostic` | 短时间排查偷跑和异常连接 | 与 balanced 一样保留详细采集，建议配合更短刷新或更高采样阈值 | CPU 开销高于 low |
+
+低负载示例：
+
+```yaml
+COLLECTOR_PROFILE: "low"
+COLLECTOR_MODE: "off"
+ENABLE_PACKET_CAPTURE: "false"
+```
+
+平衡模式示例：
+
+```yaml
+COLLECTOR_PROFILE: "balanced"
+COLLECTOR_MODE: "auto"
+GO_COLLECTOR_ENABLED: "true"
+ENABLE_PACKET_CAPTURE: "true"
+```
 
 ### 容器内自动选择
 
@@ -413,16 +427,17 @@ FILE_LOG: "false"
 
 ```bash
 # 强制指定模式
-COLLECTOR_MODE=ebpf       # 仅 eBPF
-COLLECTOR_MODE=golibpcap  # 仅 Go
-COLLECTOR_MODE=auto       # 自动（默认）
+COLLECTOR_MODE=auto       # 自动：Go libpcap，不可用回退 Python
+COLLECTOR_MODE=golibpcap  # 强制 Go libpcap
+COLLECTOR_MODE=python     # 禁用外部 Go，使用 Python Scapy
+COLLECTOR_MODE=off        # 不启动外部 Go，也不启动 Python 抓包
+COLLECTOR_MODE=ebpf       # 实验占位：当前生产镜像提示后回退 Go
 
 # Go collector HTTP 端口
 GO_COLLECTOR_PORT=18088
 
 # 二进制路径（Docker 镜像内默认）
 GO_COLLECTOR_BIN=/app/bin/go-collector
-GO_COLLECTOR_EBPF_BIN=/app/bin/go-collector-ebpf
 ```
 
 Python 后端探测方式：`GO_COLLECTOR_URL` 环境变量或 `server/services/go_collector_client.py` 中的默认 URL。
@@ -439,17 +454,17 @@ Python 后端探测方式：`GO_COLLECTOR_URL` 环境变量或 `server/services/
 | `/api/connections` (capture) | `/api/connections`（Go） | Python `conn_totals` |
 | `/api/diagnostics` | `/api/diagnostics`（Go） | Python 自诊断 |
 
-Go 不可用时所有 API 透明回退到 Python 原逻辑，前端无需任何修改。
+Go 不可用时所有 API 透明回退到 Python 原逻辑，前端无需任何修改。Go 能启动但没有成功打开任何抓包接口时不会接管，避免空数据覆盖页面。
 
 ## 性能对比（预估）
 
-| 指标 | Python Scapy | Go + libpcap | eBPF TC |
+| 指标 | low | Python Scapy | Go + libpcap |
 |---|---|---|---|
-| CPU（空载 1000 pps） | ~3-5% | ~0.5-1% | ~0.1-0.3% |
-| CPU（高峰 5000 pps） | ~15-25% | ~3-5% | ~0.5-1% |
-| 内存（稳定态） | ~80-120 MB | ~20-40 MB | ~15-30 MB |
-| 每包延迟 | ~50-100μs | ~5-10μs | ~1-2μs |
-| 丢包率（peak 10K pps） | 有动态抽样 | 有动态抽样 | 接近零 |
+| CPU（空载 1000 pps） | 接近 0 | ~3-5% | ~0.5-1% |
+| CPU（高峰 5000 pps） | 接近 0 | ~15-25% | ~3-5% |
+| 内存（稳定态） | 最低 | ~80-120 MB | ~20-40 MB |
+| 进程/端口归因 | 不支持 | 支持 | 支持 |
+| 公网/内网拆分 | 近似公网总量 | 精确抓包分类 | 精确抓包分类 |
 
 实际表现取决于 NAS CPU 型号、内核版本和网络负载。
 

@@ -36,7 +36,16 @@ from server.services.notifications import (
     send_notification_alert as dispatch_notification_alert,
 )
 from server.services.system_status import system_status
-from server.services.go_collector_client import probe as go_probe, snapshot as go_snapshot, processes as go_processes, connections as go_connections, diagnostics as go_diagnostics
+from server.services.go_collector_client import (
+    wait_for_probe as go_wait_for_probe,
+    snapshot as go_snapshot,
+    processes as go_processes,
+    connections as go_connections,
+    diagnostics as go_diagnostics,
+    stage_start as go_stage_start,
+    stage_stop as go_stage_stop,
+    stage_reset as go_stage_reset,
+)
 
 
 APP_NAME = "NAS Traffic Lens"
@@ -69,6 +78,9 @@ DOCKER_LIST_CACHE_SECONDS = float(os.getenv("DOCKER_LIST_CACHE_SECONDS", "20"))
 DOCKER_STATS_CACHE_SECONDS = float(os.getenv("DOCKER_STATS_CACHE_SECONDS", "5"))
 DOCKER_API_MAX_BYTES = int(os.getenv("DOCKER_API_MAX_BYTES", str(2 * 1024 * 1024)))
 ENABLE_PACKET_CAPTURE = os.getenv("ENABLE_PACKET_CAPTURE", "true").strip().lower() in {"1", "true", "yes", "on"}
+COLLECTOR_MODE = os.getenv("COLLECTOR_MODE", "auto").strip().lower()
+COLLECTOR_PROFILE = os.getenv("COLLECTOR_PROFILE", "balanced").strip().lower()
+GO_COLLECTOR_ENABLED = os.getenv("GO_COLLECTOR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 CAPTURE_MAX_EVENTS_PER_SECOND = int(os.getenv("CAPTURE_MAX_EVENTS_PER_SECOND", "2000"))
 CAPTURE_SAMPLE_RATE = int(os.getenv("CAPTURE_SAMPLE_RATE", "1"))
 CAPTURE_DYNAMIC_SAMPLE = os.getenv("CAPTURE_DYNAMIC_SAMPLE", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -1965,13 +1977,14 @@ class TrafficCollector:
             self.stage_totals = defaultdict(lambda: defaultdict(Counter))
             self.stage_accumulated_seconds = 0.0
 
-        # Probe Go collector; if available, delegate packet capture to it
+        # Probe Go collector; if available, delegate packet capture to it.
         go_available = self._probe_go_collector()
         self.go_collector_available = go_available
         if go_available:
             print("Go collector detected — delegating packet capture to Go backend", flush=True)
 
-        if ENABLE_PACKET_CAPTURE and not go_available:
+        python_capture_enabled = ENABLE_PACKET_CAPTURE and COLLECTOR_PROFILE != "low" and COLLECTOR_MODE not in {"off", "golibpcap"}
+        if python_capture_enabled and not go_available:
             for iface in self.capture_interfaces:
                 sniffer = AsyncSniffer(iface=iface, prn=lambda packet, name=iface: self.handle_packet(name, packet), store=False)
                 try:
@@ -1986,17 +1999,21 @@ class TrafficCollector:
         threading.Thread(target=self.conntrack_loop, daemon=True).start()
 
     def _probe_go_collector(self) -> bool:
+        if not GO_COLLECTOR_ENABLED or not ENABLE_PACKET_CAPTURE or COLLECTOR_PROFILE == "low" or COLLECTOR_MODE in {"off", "python"}:
+            return False
         try:
-            return go_probe()
+            return go_wait_for_probe()
         except Exception:
             return False
 
     def _merge_go_snapshot(self, go_data: dict, interface_view: str) -> dict:
-        go_ifaces = go_data.get("interfaces") or {}
+        go_ifaces = filter_interfaces(go_data.get("interfaces") or {}, interface_view)
         go_rates = go_data.get("rates") or {}
+        go_rates = filter_rates(go_rates, set(go_ifaces.keys()))
         go_conn_summary = go_data.get("connectionSummary") or {"total": 0, "wan": 0, "lan": 0}
+        go_stage = go_data.get("stage") or {}
         with self.lock:
-            stage = {
+            stage = go_stage or {
                 "active": bool(self.stage_started_at),
                 "startedAt": self.stage_started_at,
                 "interfaces": self.stage_interface_snapshots(),
@@ -2317,7 +2334,10 @@ class TrafficCollector:
             current_time = now()
             if previous:
                 elapsed = max(0.001, current_time - previous["timestamp"])
-                self.calibrate_system_traffic(previous["interfaces"], current)
+                if COLLECTOR_PROFILE == "low":
+                    self.record_low_profile_deltas(previous["interfaces"], current)
+                else:
+                    self.calibrate_system_traffic(previous["interfaces"], current)
                 current = self.snapshot_interfaces()
                 rates = diff_rates(previous["interfaces"], current, elapsed)
                 with self.lock:
@@ -2336,6 +2356,30 @@ class TrafficCollector:
                 last_persist = current_time
             previous = {"timestamp": current_time, "interfaces": current}
             time.sleep(max(0.5, SAMPLE_SECONDS))
+
+    def record_low_profile_deltas(self, previous_interfaces: dict, current_interfaces: dict) -> None:
+        with self.lock:
+            capture_set = set(self.capture_interfaces)
+            for iface, current_item in current_interfaces.items():
+                detail = current_item.get("detail") or {}
+                if capture_set and iface not in capture_set:
+                    continue
+                if not detail.get("captured"):
+                    continue
+                previous_item = previous_interfaces.get(iface, {"system": {}})
+                current_system = current_item.get("system") or {}
+                previous_system = previous_item.get("system") or {}
+                for direction, byte_key, packet_key in (
+                    ("rx", "rxBytes", "rxPackets"),
+                    ("tx", "txBytes", "txPackets"),
+                ):
+                    byte_delta = max(0, int(current_system.get(byte_key) or 0) - int(previous_system.get(byte_key) or 0))
+                    packet_delta = max(0, int(current_system.get(packet_key) or 0) - int(previous_system.get(packet_key) or 0))
+                    if byte_delta <= 0 and packet_delta <= 0:
+                        continue
+                    self.calibrated_iface_totals[iface]["wan"].add(direction, byte_delta, packet_delta)
+                    if self.stage_started_at:
+                        self.calibrated_stage_totals[iface]["wan"].add(direction, byte_delta, packet_delta)
 
     def calibrate_system_traffic(self, previous_interfaces: dict, current_interfaces: dict) -> None:
         if not ENABLE_SYSTEM_TRAFFIC_CALIBRATION:
@@ -2651,8 +2695,8 @@ class TrafficCollector:
         if self.go_collector_available:
             go_data = go_snapshot()
             if go_data:
-                go_ifaces = go_data.get("interfaces") or {}
-                go_rates = go_data.get("rates") or {}
+                go_ifaces = filter_interfaces(go_data.get("interfaces") or {}, interface_view)
+                go_rates = filter_rates(go_data.get("rates") or {}, set(go_ifaces.keys()))
                 alerts = list(self.alerts)[-8:]
                 capture_interfaces = list(self.capture_interfaces)
                 container_status = dict(self.container_status)
@@ -2788,7 +2832,20 @@ class TrafficCollector:
 
         # Use Go collector when available
         if self.go_collector_available and mode == "capture":
-            go_data = go_connections(mode)
+            go_data = go_connections(
+                mode=mode,
+                iface=iface,
+                scope=scope,
+                proto=proto,
+                direction=direction,
+                owner=owner,
+                source=source,
+                dest=dest,
+                min_bytes=min_bytes,
+                min_duration=min_duration,
+                limit=limit,
+                offset=offset,
+            )
             if go_data:
                 return go_data
 
@@ -3040,6 +3097,8 @@ class TrafficCollector:
                 }
 
     def start_stage(self, interface_view: str = "physical") -> dict:
+        if self.go_collector_available:
+            go_stage_start()
         with self.lock:
             self.stage_started_at = now()
             self.stage_totals = defaultdict(lambda: defaultdict(Counter))
@@ -3050,6 +3109,8 @@ class TrafficCollector:
         return self.api_snapshot(interface_view)
 
     def stop_stage(self, interface_view: str = "physical") -> dict:
+        if self.go_collector_available:
+            go_stage_stop()
         with self.lock:
             if self.stage_started_at:
                 self.stage_accumulated_seconds += max(0, now() - self.stage_started_at)
@@ -3058,6 +3119,8 @@ class TrafficCollector:
         return self.api_snapshot(interface_view)
 
     def resume_stage(self, interface_view: str = "physical") -> dict:
+        if self.go_collector_available:
+            go_stage_start()
         with self.lock:
             if not self.stage_started_at:
                 self.stage_started_at = now()
@@ -3065,6 +3128,8 @@ class TrafficCollector:
         return self.api_snapshot(interface_view)
 
     def reset_stage(self, interface_view: str = "physical") -> dict:
+        if self.go_collector_available:
+            go_stage_reset()
         with self.lock:
             self.stage_started_at = now() if AUTO_START_STAGE else None
             self.stage_totals = defaultdict(lambda: defaultdict(Counter))
@@ -3120,6 +3185,10 @@ class TrafficCollector:
                 "conntrackConnectionScanSeconds": CONNTRACK_CONNECTION_SCAN_SECONDS,
                 "minConntrackRefreshSeconds": MIN_CONNTRACK_REFRESH_SECONDS,
                 "packetCapture": ENABLE_PACKET_CAPTURE,
+                "collectorMode": COLLECTOR_MODE,
+                "collectorProfile": COLLECTOR_PROFILE,
+                "goCollectorEnabled": GO_COLLECTOR_ENABLED,
+                "goCollectorAvailable": self.go_collector_available,
                 "captureMaxEventsPerSecond": CAPTURE_MAX_EVENTS_PER_SECOND,
                 "captureSampleRate": CAPTURE_SAMPLE_RATE,
                 "captureDynamicSample": CAPTURE_DYNAMIC_SAMPLE,
@@ -3167,6 +3236,9 @@ class TrafficCollector:
                 },
                 "capture": {
                     "enabled": ENABLE_PACKET_CAPTURE,
+                    "collectorMode": COLLECTOR_MODE,
+                    "collectorProfile": COLLECTOR_PROFILE,
+                    "goCollectorAvailable": self.go_collector_available,
                     "interfaces": list(self.capture_interfaces),
                     "seenEvents": self.packet_seen,
                     "recordedEvents": self.recorded_packet_events,

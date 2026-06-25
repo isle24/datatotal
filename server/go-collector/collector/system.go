@@ -59,9 +59,9 @@ func (sm *SocketMapper) GetMap() map[string]ProcInfo {
 }
 
 type sockKey struct {
-	proto                     string
-	localIP, remoteIP         string
-	localPort, remotePort     int
+	proto                 string
+	localIP, remoteIP     string
+	localPort, remotePort int
 }
 
 func (sm *SocketMapper) scanFDs(timeout time.Duration, maxLinks int) map[int]ProcInfo {
@@ -172,7 +172,7 @@ func decodeHexAddr(hex string) (string, int) {
 	port, _ := strconv.ParseInt(parts[1], 16, 64)
 	if len(parts[0]) == 8 {
 		v, _ := strconv.ParseUint(parts[0], 16, 64)
-		return net.IPv4(byte(v>>24), byte(v>>16), byte(v>>8), byte(v)).String(), int(port)
+		return net.IPv4(byte(v), byte(v>>8), byte(v>>16), byte(v>>24)).String(), int(port)
 	}
 	// IPv6 — build from groups of 8 hex chars
 	raw := parts[0]
@@ -371,12 +371,12 @@ func DetermineCaptureInterfaces(details map[string]InterfaceDetail, requested st
 }
 
 type ConntrackReader struct {
-	paths             []string
-	mode              string
-	tcpStates         map[string]bool
-	udpAssured        bool
-	includeUnreplied  bool
-	minTimeout        int
+	paths            []string
+	mode             string
+	tcpStates        map[string]bool
+	udpAssured       bool
+	includeUnreplied bool
+	minTimeout       int
 }
 
 func NewConntrackReader(mode string, tcpStates []string, udpAssured, includeUnreplied bool, minTimeout int) *ConntrackReader {
@@ -481,13 +481,13 @@ func (cr *ConntrackReader) ReadConnections(maxLines int, timeBudget time.Duratio
 }
 
 type ctEntry struct {
-	proto, state                                   string
-	flags                                          map[string]bool
-	timeout                                        int
-	src, dst, replySrc, replyDst                   string
-	sport, dport, replySport, replyDport           int
-	txBytes, rxBytes, txPkts, rxPkts              int64
-	addresses                                      []string
+	proto, state                         string
+	flags                                map[string]bool
+	timeout                              int
+	src, dst, replySrc, replyDst         string
+	sport, dport, replySport, replyDport int
+	txBytes, rxBytes, txPkts, rxPkts     int64
+	addresses                            []string
 }
 
 func (cr *ConntrackReader) parseLine(line string) *ctEntry {
