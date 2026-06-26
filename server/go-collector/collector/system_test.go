@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +14,19 @@ func TestDecodeHexAddrIPv4UsesProcNetLittleEndian(t *testing.T) {
 	}
 	if port != 50000 {
 		t.Fatalf("port = %d, want 50000", port)
+	}
+}
+
+func TestClassifyIfaceRecommendsUpPhysicalDefaultRoute(t *testing.T) {
+	detail := classifyIface(
+		net.Interface{Name: "eth1", Flags: net.FlagUp},
+		map[string]bool{"eth1": true},
+	)
+	if !detail.CaptureRecommended {
+		t.Fatalf("CaptureRecommended = false, want true for up physical default route")
+	}
+	if detail.Virtual {
+		t.Fatalf("Virtual = true, want false for physical interface")
 	}
 }
 

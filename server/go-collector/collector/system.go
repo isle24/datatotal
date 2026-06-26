@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,7 +250,8 @@ func GetInterfaceDetails(captured map[string]bool) map[string]InterfaceDetail {
 func classifyIface(iface net.Interface, defaultRoutes map[string]bool) InterfaceDetail {
 	lowered := strings.ToLower(iface.Name)
 	isDefault := defaultRoutes[iface.Name]
-	d := InterfaceDetail{Role: "其他接口", Note: "系统网络接口", Virtual: true, Priority: 80}
+	isUp := iface.Flags&net.FlagUp != 0
+	d := InterfaceDetail{Role: "其他接口", Note: "系统网络接口", Virtual: true, Priority: 80, IsUp: isUp}
 
 	switch {
 	case lowered == "lo":
@@ -276,7 +278,7 @@ func classifyIface(iface net.Interface, defaultRoutes map[string]bool) Interface
 		}
 	}
 	d.DefaultRoute = isDefault
-	d.CaptureRecommended = d.IsUp && lowered != "lo" && (!d.Virtual || isDefault)
+	d.CaptureRecommended = isUp && lowered != "lo" && (!d.Virtual || isDefault)
 	return d
 }
 
@@ -342,6 +344,13 @@ func DetermineCaptureInterfaces(details map[string]InterfaceDetail, requested st
 			}
 		}
 		if len(selected) > 0 {
+			sort.Slice(selected, func(i, j int) bool {
+				left, right := details[selected[i]], details[selected[j]]
+				if left.Priority != right.Priority {
+					return left.Priority < right.Priority
+				}
+				return selected[i] < selected[j]
+			})
 			return selected
 		}
 		for name, d := range details {
