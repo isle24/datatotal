@@ -92,8 +92,7 @@ func (a *Aggregator) Record(event PacketEvent) {
 		Cmdline: getStrVal(event.Process, "cmdline"),
 	}, containerFromMap(event.Process), true)
 	connKey := event.Iface + "|" + event.Scope + "|" + event.Proto + "|" +
-		event.Src + ":" + itoa(event.Sport) + "|" +
-		event.Dst + ":" + itoa(event.Dport) + "|" + connProcKey
+		event.Src + "|" + event.Dst + "|" + connProcKey
 	cc := a.getOrCreateCounter(a.ConnTotals, connKey)
 	cc.Add(event.Direction, weightedSize, weight)
 

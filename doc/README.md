@@ -380,7 +380,7 @@ FILE_LOG: "false"
 
 ## 采集后端架构与低负载模式
 
-从 v2026.06.25-3 起，生产镜像默认使用 Go + libpcap，失败时自动回退 Python Scapy。eBPF 源码保留为实验方向，但当前镜像不构建、不启动 eBPF，避免半成品路径影响部署。
+从 v2026.06.26-1 起，生产镜像默认使用 Go + libpcap，失败时自动回退 Python Scapy。eBPF 源码保留为实验方向，但当前镜像不构建、不启动 eBPF，避免半成品路径影响部署。
 
 ### Go + libpcap 采集（默认）
 

@@ -53,6 +53,37 @@ func TestConnectionEntriesReturnsEmptySliceAndPagination(t *testing.T) {
 	}
 }
 
+func TestRecordConnectionUsesEndpointOnce(t *testing.T) {
+	agg := NewAggregator()
+	agg.Record(PacketEvent{
+		Timestamp: nowUnixMillis(),
+		Iface:     "eth0",
+		Scope:     "wan",
+		Direction: "tx",
+		Proto:     "tcp",
+		SrcIP:     "192.168.3.56",
+		DstIP:     "8.8.8.8",
+		Src:       "192.168.3.56:50000",
+		Dst:       "8.8.8.8:443",
+		Sport:     50000,
+		Dport:     443,
+		Size:      1000,
+		Process:   map[string]interface{}{"pid": 1, "name": "xunlei"},
+		Weight:    1,
+	})
+
+	rows, _, _ := agg.ConnectionEntries(120, 20, 0, ConnectionFilters{})
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if rows[0].Source != "192.168.3.56:50000" {
+		t.Fatalf("Source = %q, want endpoint once", rows[0].Source)
+	}
+	if rows[0].Dest != "8.8.8.8:443" {
+		t.Fatalf("Dest = %q, want endpoint once", rows[0].Dest)
+	}
+}
+
 func nowUnixMillis() int64 {
 	return time.Now().UnixMilli()
 }

@@ -2012,6 +2012,8 @@ class TrafficCollector:
         go_rates = filter_rates(go_rates, set(go_ifaces.keys()))
         go_conn_summary = go_data.get("connectionSummary") or {"total": 0, "wan": 0, "lan": 0}
         go_stage = go_data.get("stage") or {}
+        if not go_ifaces:
+            return self._local_snapshot(interface_view)
         with self.lock:
             stage = go_stage or {
                 "active": bool(self.stage_started_at),
@@ -2035,6 +2037,35 @@ class TrafficCollector:
             "stage": stage,
             "alerts": alerts,
             "alertSettings": self.alert_settings.model_dump(),
+        }
+
+    def _local_snapshot(self, interface_view: str) -> dict:
+        totals = self.snapshot_totals(interface_view)
+        with self.lock:
+            stage = {
+                "active": bool(self.stage_started_at),
+                "startedAt": self.stage_started_at,
+                "interfaces": self.stage_interface_snapshots(),
+            }
+            rates = filter_rates(self.last_rates, set(totals["interfaces"].keys()))
+            alerts = list(self.alerts)[-20:]
+            settings = self.alert_settings.model_dump()
+            capture_interfaces = list(self.capture_interfaces)
+            container_status = dict(self.container_status)
+
+        return {
+            "app": APP_NAME,
+            "version": APP_VERSION,
+            "timestamp": now(),
+            "authEnabled": bool(DASHBOARD_PASSWORD),
+            "interfaceView": interface_view,
+            "captureInterfaces": capture_interfaces,
+            "containerStatus": container_status,
+            "rates": rates,
+            "stage": stage,
+            "alerts": alerts,
+            "alertSettings": settings,
+            **totals,
         }
 
     def load_saved_settings(self) -> None:
@@ -2659,42 +2690,16 @@ class TrafficCollector:
         # Use Go collector data when available
         if self.go_collector_available:
             go_data = go_snapshot()
-            if go_data:
+            if go_data and (go_data.get("interfaces") or go_data.get("rates") or (go_data.get("connectionSummary") or {}).get("total")):
                 return self._merge_go_snapshot(go_data, interface_view)
-        totals = self.snapshot_totals(interface_view)
-        with self.lock:
-            stage = {
-                "active": bool(self.stage_started_at),
-                "startedAt": self.stage_started_at,
-                "interfaces": self.stage_interface_snapshots(),
-            }
-            rates = filter_rates(self.last_rates, set(totals["interfaces"].keys()))
-            alerts = list(self.alerts)[-20:]
-            settings = self.alert_settings.model_dump()
-            capture_interfaces = list(self.capture_interfaces)
-            container_status = dict(self.container_status)
-
-        return {
-            "app": APP_NAME,
-            "version": APP_VERSION,
-            "timestamp": now(),
-            "authEnabled": bool(DASHBOARD_PASSWORD),
-            "interfaceView": interface_view,
-            "captureInterfaces": capture_interfaces,
-            "containerStatus": container_status,
-            "rates": rates,
-            "stage": stage,
-            "alerts": alerts,
-            "alertSettings": settings,
-            **totals,
-        }
+        return self._local_snapshot(interface_view)
 
     def api_overview(self, interface_view: str = "physical") -> dict:
         interface_view = normalize_interface_view(interface_view)
         # Use Go collector data when available
         if self.go_collector_available:
             go_data = go_snapshot()
-            if go_data:
+            if go_data and (go_data.get("interfaces") or go_data.get("rates") or (go_data.get("connectionSummary") or {}).get("total")):
                 go_ifaces = filter_interfaces(go_data.get("interfaces") or {}, interface_view)
                 go_rates = filter_rates(go_data.get("rates") or {}, set(go_ifaces.keys()))
                 alerts = list(self.alerts)[-8:]
@@ -2742,7 +2747,7 @@ class TrafficCollector:
         # Use Go collector when available for memory period
         if self.go_collector_available and period == "30s" and not (start and end):
             go_data = go_processes(period, limit)
-            if go_data:
+            if go_data and go_data.get("processes"):
                 return go_data
         period = normalize_process_period(period)
         limit = max(1, min(100, int(limit or 30)))
@@ -2846,7 +2851,7 @@ class TrafficCollector:
                 limit=limit,
                 offset=offset,
             )
-            if go_data:
+            if go_data and (go_data.get("connections") or (go_data.get("summary") or {}).get("total")):
                 return go_data
 
         interface_view = normalize_interface_view(interface_view)
