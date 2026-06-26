@@ -67,6 +67,52 @@ def test_go_snapshot_empty_interfaces_falls_back_to_local_interfaces():
     assert result["rates"]["eth0"]["systemRxBps"] == 128
 
 
+def test_go_snapshot_prefers_conntrack_summary_for_router_like_connection_counts():
+    collector = make_collector()
+    go_interfaces = {
+        "eth0": {
+            "detail": {
+                "name": "eth0",
+                "isUp": True,
+                "captured": True,
+                "virtual": False,
+                "defaultRoute": True,
+            },
+            "scopes": {},
+            "system": {
+                "rxBytes": 1234,
+                "txBytes": 5678,
+                "rxPackets": 10,
+                "txPackets": 20,
+            },
+        }
+    }
+
+    result = collector._merge_go_snapshot(
+        {
+            "interfaces": go_interfaces,
+            "rates": {},
+            "connectionSummary": {"total": 1800, "wan": 1200, "lan": 600},
+            "conntrackSummary": {
+                "available": True,
+                "source": "conntrack",
+                "total": 8,
+                "wan": 3,
+                "lan": 5,
+                "rawTotal": 80,
+                "mode": "active",
+            },
+        },
+        "physical",
+    )
+
+    assert result["connectionSummary"]["source"] == "conntrack"
+    assert result["connectionSummary"]["total"] == 8
+    assert result["connectionSummary"]["wan"] == 3
+    assert result["connectionSummary"]["lan"] == 5
+    assert result["connectionSummary"]["rawTotal"] == 80
+
+
 def test_go_processes_empty_list_falls_back_to_local_rank():
     collector = make_collector()
     collector.go_collector_available = True
@@ -120,6 +166,7 @@ def test_go_connections_empty_list_falls_back_to_local_connections():
 
 if __name__ == "__main__":
     test_go_snapshot_empty_interfaces_falls_back_to_local_interfaces()
+    test_go_snapshot_prefers_conntrack_summary_for_router_like_connection_counts()
     test_go_processes_empty_list_falls_back_to_local_rank()
     test_go_connections_empty_list_falls_back_to_local_connections()
     print("go snapshot merge tests passed")

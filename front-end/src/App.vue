@@ -49,16 +49,8 @@
           <MetricCard title="内网实时上行" accent="green" :value="formatRate(summary.lan?.txBps)">
             <ArrowUp :size="18" />
           </MetricCard>
-          <MetricCard title="公网 / 总连接数" accent="red" :value="`${connectionSummary.wan || 0} / ${connectionSummary.total || 0}`" @click="openWanConnections">
+          <MetricCard title="公网连接数" accent="red" :value="`${connectionSummary.wan || 0}`" @click="openWanConnections">
             <Network :size="18" />
-          </MetricCard>
-          <MetricCard title="阶段公网" accent="teal" :value="`↓ ${formatBytes(stageWan.rxBytes)} / ↑ ${formatBytes(stageWan.txBytes)}`" wide>
-            <Gauge :size="18" />
-            <template #footer>
-              <span>{{ stageSummary.active ? `运行 ${formatDuration(stageSummary.durationSeconds)}` : "已暂停" }}</span>
-              <button type="button" @click.stop="updateStage('reset')">重置</button>
-              <button type="button" @click.stop="updateStage(stageSummary.active ? 'stop' : 'resume')">{{ stageSummary.active ? "暂停" : "继续" }}</button>
-            </template>
           </MetricCard>
         </div>
 
@@ -67,6 +59,7 @@
             <CardHead title="运行状态" :meta="lastUpdated" />
             <div class="info-grid">
               <InfoItem label="公网累计" :value="`↓ ${formatBytes(summary.wan?.rxBytes)} / ↑ ${formatBytes(summary.wan?.txBytes)}`" />
+              <InfoItem label="总连接数" :value="`${connectionSummary.total || 0}`" />
               <InfoItem label="连接数口径" :value="connectionSourceLabel" />
               <InfoItem label="原始条目" :value="connectionSummary.rawTotal != null ? `${connectionSummary.rawTotal} 条` : '-'" />
               <InfoItem label="活跃网卡" :value="`${summary.interfaces?.up || 0} / ${summary.interfaces?.total || 0}`" />
@@ -292,7 +285,6 @@
               <label>活跃连接窗口秒<input v-model.number="runtimeForm.connectionActiveSeconds" type="number" min="10" /></label>
               <label>连接缓存秒<input v-model.number="runtimeForm.connectionRetentionSeconds" type="number" min="60" /></label>
               <label>Conntrack 刷新秒<input v-model.number="runtimeForm.conntrackRefreshSeconds" type="number" :min="settings?.runtime?.minConntrackRefreshSeconds || 15" /></label>
-              <label class="check"><input v-model="runtimeForm.autoStartStage" type="checkbox" /> 阶段公网默认统计</label>
             </div>
           </section>
 
@@ -548,7 +540,6 @@ const metricLabels = {
   lan_rx_bps: "内网下载速率",
   wan_connections: "公网连接数",
   total_connections: "总连接数",
-  stage_wan_tx_bytes: "阶段公网上传总量",
   daily_wan_tx_bytes: "每日公网上传总量",
 };
 const templateVariables = ["app", "version", "channel_id", "channel_name", "channel_type", "alert_id", "rule_id", "rule_name", "message", "severity", "value", "threshold", "timestamp", "iso_time"];
@@ -610,8 +601,6 @@ const connFilters = reactive({ mode: "capture", iface: "all", scope: "all", prot
 const currentTitle = computed(() => navItems.find((item) => item.key === activeView.value)?.label || "概览");
 const subtitle = computed(() => (overview.value?.timestamp ? `版本 ${overview.value.version || "-"} · ${formatDate(overview.value.timestamp)}` : "正在连接采集器..."));
 const summary = computed(() => overview.value?.summary || {});
-const stageSummary = computed(() => overview.value?.stageSummary || {});
-const stageWan = computed(() => stageSummary.value.wan || {});
 const connectionSummary = computed(() => overview.value?.connectionSummary || {});
 const lastUpdated = computed(() => (overview.value?.timestamp ? new Date(overview.value.timestamp * 1000).toLocaleTimeString() : "-"));
 const connectionSourceLabel = computed(() => {
@@ -1010,10 +999,6 @@ function debounceConnections() {
 function pageConnections(direction) {
   connOffset.value = Math.max(0, connOffset.value + direction * connLimit);
   refreshConnections(false);
-}
-async function updateStage(action) {
-  await api(`/api/stage/${action}?interfaces=${encodeURIComponent(interfaceView.value)}`, { method: "POST" });
-  refreshOverview();
 }
 async function clearAlerts() {
   await api("/api/alerts/clear", { method: "POST" });

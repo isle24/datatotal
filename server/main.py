@@ -994,19 +994,6 @@ def default_monitor_rules() -> List[dict]:
             "channelIds": ["webhook"],
         },
         {
-            "id": "stage_wan_upload",
-            "name": "阶段公网上传超限",
-            "metric": "stage_wan_tx_bytes",
-            "operator": "gte",
-            "threshold": ALERT_STAGE_TX_BYTES,
-            "durationSeconds": 0,
-            "scope": "wan",
-            "direction": "tx",
-            "window": "stage",
-            "enabled": ALERT_STAGE_TX_BYTES > 0,
-            "channelIds": ["webhook"],
-        },
-        {
             "id": "daily_wan_upload",
             "name": "今日公网上传超限",
             "metric": "daily_wan_tx_bytes",
@@ -1870,6 +1857,31 @@ def summarize_stage(
     return summary
 
 
+def go_connection_summary(go_data: dict) -> dict:
+    conntrack = go_data.get("conntrackSummary") or {}
+    if conntrack.get("available") and conntrack.get("total") is not None:
+        return {
+            "source": "conntrack",
+            "available": True,
+            "total": int(conntrack.get("total") or 0),
+            "wan": int(conntrack.get("wan") or 0),
+            "lan": int(conntrack.get("lan") or 0),
+            "rawTotal": conntrack.get("rawTotal"),
+            "countMode": conntrack.get("mode"),
+            "mode": conntrack.get("mode"),
+            "truncated": bool(conntrack.get("truncated")),
+            "scannedLines": conntrack.get("scannedLines"),
+        }
+    capture = go_data.get("connectionSummary") or {}
+    return {
+        "source": "capture",
+        "available": False,
+        "total": int(capture.get("total") or 0),
+        "wan": int(capture.get("wan") or 0),
+        "lan": int(capture.get("lan") or 0),
+    }
+
+
 def calibration_scope_proportions(scope_deltas: dict) -> dict:
     wan = max(0, int(scope_deltas.get("wan") or 0))
     lan = max(0, int(scope_deltas.get("lan") or 0))
@@ -2010,7 +2022,7 @@ class TrafficCollector:
         go_ifaces = filter_interfaces(go_data.get("interfaces") or {}, interface_view)
         go_rates = go_data.get("rates") or {}
         go_rates = filter_rates(go_rates, set(go_ifaces.keys()))
-        go_conn_summary = go_data.get("connectionSummary") or {"total": 0, "wan": 0, "lan": 0}
+        go_conn_summary = go_connection_summary(go_data)
         go_stage = go_data.get("stage") or {}
         if not go_ifaces:
             return self._local_snapshot(interface_view)
@@ -2715,7 +2727,7 @@ class TrafficCollector:
                     "interfaceView": interface_view,
                     "summary": summarize_interfaces(go_ifaces, go_rates),
                     "stageSummary": stage_summary,
-                    "connectionSummary": go_data.get("connectionSummary", {"total": 0, "wan": 0, "lan": 0}),
+                    "connectionSummary": go_connection_summary(go_data),
                     "alerts": alerts,
                     "captureInterfaces": capture_interfaces,
                     "containerStatus": container_status,

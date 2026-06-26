@@ -233,8 +233,19 @@ func main() {
 		mode := r.URL.Query().Get("mode")
 		limit := queryInt(r, "limit", 120, 1, 300)
 		offset := queryInt(r, "offset", 0, 0, 1000000)
+		filters := collector.ConnectionFilters{
+			Iface:       defaultQuery(r, "iface", "all"),
+			Scope:       defaultQuery(r, "scope", "all"),
+			Proto:       defaultQuery(r, "proto", "all"),
+			Direction:   defaultQuery(r, "direction", "all"),
+			Owner:       r.URL.Query().Get("owner"),
+			Source:      r.URL.Query().Get("source"),
+			Dest:        r.URL.Query().Get("dest"),
+			MinBytes:    int64(queryInt(r, "min_bytes", 0, 0, 1_000_000_000_000_000)),
+			MinDuration: int64(queryInt(r, "min_duration", 0, 0, 31_536_000)),
+		}
 		if mode == "conntrack" {
-			conns := ctReader.ReadConnections(cml, 1500*time.Millisecond)
+			conns := ctReader.ReadConnections(cml, 1500*time.Millisecond, filters)
 			if conns == nil {
 				conns = []collector.ConnectionEntry{}
 			}
@@ -252,22 +263,12 @@ func main() {
 			}
 			writeJSON(w, map[string]interface{}{
 				"source": "conntrack", "connections": pageRows,
-				"summary":    map[string]int{"total": total},
+				"summary":    summarizeConnectionEntries(conns),
 				"pagination": pagination(total, limit, offset),
 			})
 			return
 		}
-		conns, page, summary := agg.ConnectionEntries(120, limit, offset, collector.ConnectionFilters{
-			Iface:       defaultQuery(r, "iface", "all"),
-			Scope:       defaultQuery(r, "scope", "all"),
-			Proto:       defaultQuery(r, "proto", "all"),
-			Direction:   defaultQuery(r, "direction", "all"),
-			Owner:       r.URL.Query().Get("owner"),
-			Source:      r.URL.Query().Get("source"),
-			Dest:        r.URL.Query().Get("dest"),
-			MinBytes:    int64(queryInt(r, "min_bytes", 0, 0, 1_000_000_000_000_000)),
-			MinDuration: int64(queryInt(r, "min_duration", 0, 0, 31_536_000)),
-		})
+		conns, page, summary := agg.ConnectionEntries(120, limit, offset, filters)
 		writeJSON(w, map[string]interface{}{
 			"source": "capture", "connections": conns,
 			"summary":    summary,
@@ -370,6 +371,19 @@ func pagination(total, limit, offset int) collector.ConnectionPage {
 		pages = (total + limit - 1) / limit
 	}
 	return collector.ConnectionPage{Total: total, Limit: limit, Offset: offset, Page: offset/limit + 1, Pages: pages}
+}
+
+func summarizeConnectionEntries(rows []collector.ConnectionEntry) collector.ConnectionSummary {
+	summary := collector.ConnectionSummary{}
+	for _, row := range rows {
+		summary.Total++
+		if row.Scope == "lan" {
+			summary.LAN++
+		} else {
+			summary.WAN++
+		}
+	}
+	return summary
 }
 
 func envInt(key string, defaultVal int) int {

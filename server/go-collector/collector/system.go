@@ -438,7 +438,7 @@ func (cr *ConntrackReader) ReadSummary(maxLines int, timeBudget time.Duration) C
 	return s
 }
 
-func (cr *ConntrackReader) ReadConnections(maxLines int, timeBudget time.Duration) []ConnectionEntry {
+func (cr *ConntrackReader) ReadConnections(maxLines int, timeBudget time.Duration, filters ConnectionFilters) []ConnectionEntry {
 	path := cr.FindPath()
 	if path == "" {
 		return nil
@@ -469,13 +469,21 @@ func (cr *ConntrackReader) ReadConnections(maxLines int, timeBudget time.Duratio
 			dstText = fmt.Sprintf("%s:%d", e.dst, e.dport)
 		}
 		total := e.rxBytes + e.txBytes
-		conns = append(conns, ConnectionEntry{
+		item := ConnectionEntry{
 			Iface: "conntrack", Scope: scope, Proto: e.proto,
 			Source: srcText, Dest: dstText,
 			RxBytes: e.rxBytes, TxBytes: e.txBytes, TotalBytes: total,
 			Duration: float64(e.timeout),
 			Process:  map[string]interface{}{"pid": nil, "name": "conntrack", "cmdline": ""},
-		})
+		}
+		item.Direction = "rx"
+		if item.TxBytes >= item.RxBytes {
+			item.Direction = "tx"
+		}
+		if !connectionMatches(item, filters) {
+			continue
+		}
+		conns = append(conns, item)
 	}
 	return conns
 }

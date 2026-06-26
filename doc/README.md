@@ -1,6 +1,6 @@
 # NAS Traffic Lens
 
-极空间 NAS 自带界面如果没有实时流量和阶段流量统计，可以先考虑这些现成镜像：
+极空间 NAS 自带界面如果没有实时流量和公网累计统计，可以先考虑这些现成镜像：
 
 | 方案 | 适合做什么 | 不足 |
 | --- | --- | --- |
@@ -14,10 +14,10 @@
 
 - 实时展示公网/内网的上下行速率。
 - 展示每个网卡的公网、内网实时上下行和系统累计上下行。
-- 展示公网累计上下行和“阶段公网”上下行；两者都来自抓包后的公网分类，阶段公网默认启动即统计，除非手动暂停或关闭。
+- 展示公网累计上下行；公网累计来自抓包后的公网分类，避免直接读取系统网卡总量时混入内网和 Docker bridge 流量。
 - 展示进程级累计流量、PID、命令行和使用时长。
 - 展示连接与端口维度的协议、源、目标、进程、上下行总量和时长。
-- 阶段公网默认使用抓包分类后的公网流量，不读取系统网卡累计，因此不会混入内网、组播和 Docker bridge 的系统总流量。
+- 公网累计默认使用抓包分类后的公网流量，不读取系统网卡累计，因此不会混入内网、组播和 Docker bridge 的系统总流量。
 - 支持访问密码、监控规则、SQLite 历史统计、日志目录映射。
 - 支持监控中心和通知渠道模块，可按规则触发 Webhook、IYUU、MeoW 等渠道。
 - 支持在页面可视化保存监控规则、通知渠道、消息模板和可热更新运行参数，配置写入 SQLite，重启后保留。
@@ -133,14 +133,14 @@ docker compose -f docker-compose.nas.yml up -d
 | `LOGIN_LOCK_SECONDS` | `300` | 登录失败达到上限后的限制时间 |
 | `ALERT_WAN_TX_BPS` | `0` | 默认监控规则：公网上传速率阈值，单位 B/s |
 | `ALERT_WAN_TX_SECONDS` | `0` | 默认监控规则：高上传持续秒数 |
-| `ALERT_STAGE_TX_BYTES` | `0` | 默认监控规则：阶段公网上传上限，单位 B |
+| `ALERT_STAGE_TX_BYTES` | `0` | 兼容旧阶段上传规则，首页不再展示阶段公网 |
 | `ALERT_DAILY_TX_BYTES` | `0` | 默认监控规则：每日公网上传上限，单位 B |
 | `ALERT_NOTIFY_CHANNEL` | `webhook` | 默认通知渠道类型，支持 `webhook`、`iyuu`、`meow` |
 | `ALERT_WEBHOOK_URL` | 空 | 默认 Webhook 地址，设置后启用默认通知渠道 |
 | `ALERT_WEBHOOK_TIMEOUT` | `5` | 默认通知渠道超时，单位秒 |
 | `CONNECTION_ACTIVE_SECONDS` | `120` | 连接数统计窗口，越小越接近路由器“当前会话数” |
 | `CONNECTION_RETENTION_SECONDS` | `900` | 连接明细缓存保留时长 |
-| `AUTO_START_STAGE` | `true` | 启动后自动开始阶段公网统计，设为 `false` 后需手动开始 |
+| `AUTO_START_STAGE` | `true` | 兼容旧阶段统计逻辑，首页不再展示阶段公网 |
 | `CONNECTION_COUNT_SOURCE` | `conntrack` | 首页连接数来源，支持 `conntrack`、`socket`、`capture` |
 | `CONNTRACK_REFRESH_SECONDS` | `30` | conntrack 连接数刷新间隔，单位秒 |
 | `CONNTRACK_COUNT_MODE` | `active` | conntrack 计数模式，`active` 只算活跃会话，`raw` 算原始表条目 |
@@ -185,13 +185,9 @@ docker compose -f docker-compose.nas.yml up -d
 时间：{timestamp}
 ```
 
-## 阶段公网统计
+## 公网累计统计
 
-首页“公网累计”和“阶段公网”都统计抓包分类后的公网下行/上行，不是系统网卡累计值。系统累计会包含内网复制、Docker bridge、组播/广播等流量，不能代表真实公网消耗；阶段公网默认从容器启动后开始累计，更适合判断偷跑上传。
-
-- `重置`：清空阶段公网累计，并立即重新开始统计。
-- `暂停`：停止继续累计，已有阶段数据保留。
-- `继续`：从已有阶段数据继续累计。
+首页“公网累计”统计抓包分类后的公网下行/上行，不是系统网卡累计值。系统累计会包含内网复制、Docker bridge、组播/广播等流量，不能代表真实公网消耗；公网累计更适合判断是否存在异常下载或偷跑上传。
 - 如果你确实不想默认统计，设置 `AUTO_START_STAGE=false`。
 
 ## 数据和日志映射
@@ -380,7 +376,7 @@ FILE_LOG: "false"
 
 ## 采集后端架构与低负载模式
 
-从 v2026.06.26-1 起，生产镜像默认使用 Go + libpcap，失败时自动回退 Python Scapy。eBPF 源码保留为实验方向，但当前镜像不构建、不启动 eBPF，避免半成品路径影响部署。
+从 v2026.06.26-2 起，生产镜像默认使用 Go + libpcap，失败时自动回退 Python Scapy。eBPF 源码保留为实验方向，但当前镜像不构建、不启动 eBPF，避免半成品路径影响部署。
 
 ### Go + libpcap 采集（默认）
 
