@@ -978,7 +978,8 @@ function openConnections(options = {}) {
   startConnectionTimer();
 }
 function openWanConnections() {
-  Object.assign(connFilters, { mode: "conntrack", iface: "all", scope: "wan", direction: "all", owner: "", source: "", dest: "" });
+  const mode = connectionSummary.value.source === "conntrack" ? "conntrack" : "capture";
+  Object.assign(connFilters, { mode, iface: "all", scope: "wan", direction: "all", owner: "", source: "", dest: "" });
   connOffset.value = 0;
   if (!connectionDialog.value.open) connectionDialog.value.showModal();
   refreshConnections();

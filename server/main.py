@@ -1857,7 +1857,7 @@ def summarize_stage(
     return summary
 
 
-def go_connection_summary(go_data: dict) -> dict:
+def go_connection_summary(go_data: dict, socket_summary: Optional[dict] = None) -> dict:
     conntrack = go_data.get("conntrackSummary") or {}
     if conntrack.get("available") and conntrack.get("total") is not None:
         return {
@@ -1871,6 +1871,14 @@ def go_connection_summary(go_data: dict) -> dict:
             "mode": conntrack.get("mode"),
             "truncated": bool(conntrack.get("truncated")),
             "scannedLines": conntrack.get("scannedLines"),
+        }
+    if socket_summary and socket_summary.get("available"):
+        return {
+            "source": "socket",
+            "available": True,
+            "total": int(socket_summary.get("total") or 0),
+            "wan": int(socket_summary.get("wan") or 0),
+            "lan": int(socket_summary.get("lan") or 0),
         }
     capture = go_data.get("connectionSummary") or {}
     return {
@@ -2022,11 +2030,11 @@ class TrafficCollector:
         go_ifaces = filter_interfaces(go_data.get("interfaces") or {}, interface_view)
         go_rates = go_data.get("rates") or {}
         go_rates = filter_rates(go_rates, set(go_ifaces.keys()))
-        go_conn_summary = go_connection_summary(go_data)
         go_stage = go_data.get("stage") or {}
         if not go_ifaces:
             return self._local_snapshot(interface_view)
         with self.lock:
+            go_conn_summary = go_connection_summary(go_data, socket_connection_summary(self.socket_map))
             stage = go_stage or {
                 "active": bool(self.stage_started_at),
                 "startedAt": self.stage_started_at,
@@ -2717,6 +2725,7 @@ class TrafficCollector:
                 alerts = list(self.alerts)[-8:]
                 capture_interfaces = list(self.capture_interfaces)
                 container_status = dict(self.container_status)
+                connection_summary = go_connection_summary(go_data, socket_connection_summary(self.socket_map))
                 stage_summary = summarize_stage(self.stage_totals, self.stage_started_at, self.calibrated_stage_totals)
                 stage_summary["durationSeconds"] += int(self.stage_accumulated_seconds)
                 return {
@@ -2727,7 +2736,7 @@ class TrafficCollector:
                     "interfaceView": interface_view,
                     "summary": summarize_interfaces(go_ifaces, go_rates),
                     "stageSummary": stage_summary,
-                    "connectionSummary": go_connection_summary(go_data),
+                    "connectionSummary": connection_summary,
                     "alerts": alerts,
                     "captureInterfaces": capture_interfaces,
                     "containerStatus": container_status,
