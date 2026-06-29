@@ -292,6 +292,14 @@ td p { font-size: 12px; line-height: 1.5; white-space: normal; }
   gap: 12px;
   padding: 14px;
 }
+.rule-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.docker-badges,
+.condition-row,
+.docker-status.subtle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .docker-grid { grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
 .docker-card {
   display: grid;
@@ -307,6 +315,7 @@ td p { font-size: 12px; line-height: 1.5; white-space: normal; }
   align-items: center;
   gap: 10px;
 }
+.docker-badges { justify-content: flex-end; flex-wrap: wrap; }
 .docker-title strong, .docker-title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .docker-icon {
   display: grid;
@@ -326,6 +335,7 @@ td p { font-size: 12px; line-height: 1.5; white-space: normal; }
   font-size: 12px;
   line-height: 1.45;
 }
+.docker-protection-state { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .docker-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -352,6 +362,10 @@ td p { font-size: 12px; line-height: 1.5; white-space: normal; }
 .pill.ok {
   color: var(--green);
   background: color-mix(in srgb, var(--green) 14%, var(--panel));
+}
+.pill.warn {
+  color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 16%, var(--panel));
 }
 .port-list {
   display: grid;
@@ -566,6 +580,9 @@ label.check input, label.switch input { width: auto; min-height: auto; }
   color: var(--muted);
   font-size: 12px;
 }
+.field-block.wide {
+  grid-column: 1 / -1;
+}
 .channel-checks {
   display: flex;
   flex-wrap: wrap;
@@ -600,6 +617,28 @@ label.check input, label.switch input { width: auto; min-height: auto; }
   background: var(--panel);
   color: var(--blue);
   padding: 2px 6px;
+}
+.field-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.condition-list {
+  display: grid;
+  gap: 8px;
+}
+.condition-row {
+  flex-wrap: wrap;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px;
+}
+.condition-row label {
+  min-width: 120px;
+  flex: 1 1 140px;
 }
 .edit-card {
   display: grid;
@@ -665,6 +704,7 @@ label.check input, label.switch input { width: auto; min-height: auto; }
     grid-template-columns: 1fr;
   }
   .metric-card.wide { grid-column: auto; }
+  .rule-grid { grid-template-columns: 1fr; }
   .connection-filters { grid-template-columns: 1fr; }
   .docker-grid, .docker-stats, .port-editor {
     grid-template-columns: 1fr;
@@ -673,4 +713,11 @@ label.check input, label.switch input { width: auto; min-height: auto; }
   .search-input { width: 100%; }
   .card-head { align-items: flex-start; flex-direction: column; }
   .history-chart { height: 340px; }
+}
+
+@media (max-width: 720px) {
+  .topbar, .docker-title, .edit-title, .card-head { gap: 8px; }
+  .main { padding: 10px; }
+  .card, .metric-card, .edit-card, .docker-card { border-radius: 8px; }
+  .process-grid, .rule-grid, .channel-grid, .docker-grid { padding: 12px; }
 }

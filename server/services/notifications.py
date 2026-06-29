@@ -44,6 +44,8 @@ def channel_target_url(channel: dict) -> str:
 
 def notification_context(alert: dict, channel: dict, app_name: str, app_version: str) -> dict:
     ts = float(alert.get("timestamp") or datetime.now().timestamp())
+    metrics = alert.get("metrics") or []
+    matched_metrics = alert.get("matchedMetrics") or []
     return {
         "app": app_name,
         "version": app_version,
@@ -59,6 +61,17 @@ def notification_context(alert: dict, channel: dict, app_name: str, app_version:
         "threshold": alert.get("threshold", ""),
         "timestamp": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
         "iso_time": datetime.fromtimestamp(ts).isoformat(timespec="seconds"),
+        "container_id": alert.get("containerId") or "",
+        "container_name": alert.get("containerName") or "",
+        "container_action": alert.get("action") or "",
+        "container_state": (alert.get("state") or {}).get("lastAction") or "",
+        "container_reason": (alert.get("state") or {}).get("reason") or "",
+        "matched_metrics": ", ".join(str(item) for item in matched_metrics if item) or "",
+        "container_metrics": ", ".join(
+            f"{item.get('metric')}={item.get('value')}"
+            for item in metrics
+            if isinstance(item, dict)
+        ),
     }
 
 

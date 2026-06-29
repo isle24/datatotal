@@ -237,15 +237,24 @@
                   <strong>{{ container.name }}</strong>
                   <p>{{ container.image }}</p>
                 </div>
-                <span :class="['pill', container.state === 'running' ? 'ok' : '']">{{ container.state || "-" }}</span>
+                <div class="docker-badges">
+                  <span v-if="container.protection?.enabled" class="pill warn">保护</span>
+                  <span :class="['pill', container.state === 'running' ? 'ok' : '']">{{ container.state || "-" }}</span>
+                </div>
               </div>
               <p class="docker-status">{{ container.status || "-" }} · 网络 {{ container.networkMode || "-" }}</p>
+              <p class="docker-status subtle" v-if="container.protection?.enabled">
+                保护规则 {{ container.protection.rules?.length || 0 }} 条 · {{ container.protection.state?.active ? "监控中" : "待命" }}
+              </p>
               <div v-if="container.showStats" class="docker-stats">
                 <span>CPU {{ formatPercent(container.stats?.cpuPercent) }}</span>
                 <span>内存 {{ formatBytes(container.stats?.memoryUsedBytes) }}</span>
                 <span>↓ {{ formatBytes(container.stats?.netRxBytes) }} / ↑ {{ formatBytes(container.stats?.netTxBytes) }}</span>
               </div>
               <button v-else type="button" class="subtle-button" @click="showDockerStats(container)"><Gauge :size="15" />显示占用</button>
+              <p v-if="container.protection?.state?.lastAction" class="docker-protection-state">
+                上次动作：{{ container.protection.state.lastAction }} · {{ container.protection.state.reason || "-" }}
+              </p>
               <div class="port-list">
                 <div v-for="port in container.ports" :key="`${port.proto}-${port.hostPort}`" class="port-row">
                   <div>
@@ -339,6 +348,68 @@
         </section>
 
         <section class="card">
+          <CardHead title="容器保护" meta="监控触发后可复用现有告警渠道">
+            <button type="button" @click="addContainerRule"><Plus :size="16" />新增</button>
+            <button type="button" @click="saveContainerRules"><Save :size="16" />保存</button>
+          </CardHead>
+          <div class="rule-grid">
+            <div v-for="rule in containerRules" :key="rule.id" class="edit-card">
+              <div class="edit-title">
+                <input v-model="rule.name" placeholder="规则名称" />
+                <label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label>
+              </div>
+              <div class="form-grid mini">
+                <div class="field-block wide">
+                  <span>选择容器</span>
+                  <input
+                    v-model="rule.containerSearch"
+                    :list="`container-options-${rule.id}`"
+                    placeholder="搜索容器名 / Compose 服务 / 镜像 / ID"
+                    @change="selectContainerForRule(rule)"
+                  />
+                  <datalist :id="`container-options-${rule.id}`">
+                    <option v-for="container in dockerContainerOptions" :key="container.optionValue" :value="container.optionValue">
+                      {{ container.optionLabel }}
+                    </option>
+                  </datalist>
+                  <p class="field-hint">
+                    {{ containerRuleTargetText(rule) }}
+                  </p>
+                </div>
+                <label>容器名<input v-model="rule.containerName" placeholder="容器名称，更新后优先匹配" /></label>
+                <label>逻辑<select v-model="rule.logic"><option v-for="item in containerProtectionLogicOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+                <label>动作<select v-model="rule.action"><option v-for="item in containerProtectionActions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+                <label>最大次数<input v-model.number="rule.maxActions" type="number" min="1" /></label>
+                <label>冷却秒<input v-model.number="rule.cooldownSeconds" type="number" min="0" /></label>
+                <div class="field-block wide">
+                  <span>告警渠道</span>
+                  <div class="channel-checks">
+                    <label v-for="channel in channels" :key="channel.id" class="check-chip">
+                      <input :checked="rule.channelIds?.includes(channel.id)" type="checkbox" @change="toggleContainerRuleChannel(rule, channel.id)" />
+                      {{ channel.name }}
+                    </label>
+                  </div>
+                </div>
+                <div class="field-block wide">
+                  <span>条件</span>
+                  <div class="condition-list">
+                    <div v-for="(condition, index) in rule.conditions || []" :key="`${rule.id}-${index}`" class="condition-row">
+                      <label>指标<select v-model="condition.metric"><option v-for="(label, key) in containerProtectionMetricLabels" :key="key" :value="key">{{ label }}</option></select></label>
+                      <label>比较<select v-model="condition.operator"><option v-for="item in containerProtectionOperators" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+                      <label>阈值<input v-model.number="condition.threshold" type="number" min="0" /></label>
+                      <label>持续秒<input v-model.number="condition.durationSeconds" type="number" min="0" /></label>
+                      <button class="danger" type="button" @click="removeContainerCondition(rule, index)"><Trash2 :size="16" />删除</button>
+                    </div>
+                    <button type="button" class="subtle-button" @click="addContainerCondition(rule)"><Plus :size="16" />添加条件</button>
+                  </div>
+                </div>
+              </div>
+              <button class="danger" type="button" @click="removeContainerRule(rule.id)"><Trash2 :size="16" />删除</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
           <CardHead title="通知渠道" meta="Webhook / IYUU / MeoW">
             <button type="button" @click="addChannel"><Plus :size="16" />新增</button>
             <button type="button" @click="saveChannels"><Save :size="16" />保存</button>
@@ -359,7 +430,8 @@
                 <label>跳转 URL 模板<input v-model="channel.urlTemplate" placeholder="可用 {rule_id} 等变量" /></label>
               </div>
               <div class="template-help">
-                可用变量：<code v-for="name in templateVariables" :key="name">{{ templateVar(name) }}</code>
+                <span>可用变量：</span>
+                <code v-for="item in templateVariables" :key="templateKey(item)">{{ templateVar(templateKey(item)) }} · {{ templateLabel(item) }}</code>
               </div>
               <label class="textarea-label">标题模板<textarea v-model="channel.titleTemplate" rows="2"></textarea></label>
               <label class="textarea-label">正文模板<textarea v-model="channel.bodyTemplate" rows="5"></textarea></label>
@@ -542,7 +614,48 @@ const metricLabels = {
   total_connections: "总连接数",
   daily_wan_tx_bytes: "每日公网上传总量",
 };
-const templateVariables = ["app", "version", "channel_id", "channel_name", "channel_type", "alert_id", "rule_id", "rule_name", "message", "severity", "value", "threshold", "timestamp", "iso_time"];
+const templateVariables = [
+  ["app", "应用名"],
+  ["version", "版本"],
+  ["channel_id", "渠道ID"],
+  ["channel_name", "渠道名"],
+  ["channel_type", "渠道类型"],
+  ["alert_id", "告警ID"],
+  ["rule_id", "规则ID"],
+  ["rule_name", "规则名"],
+  ["message", "消息"],
+  ["severity", "级别"],
+  ["value", "当前值"],
+  ["threshold", "阈值"],
+  ["timestamp", "时间"],
+  ["iso_time", "ISO 时间"],
+  ["container_id", "容器ID"],
+  ["container_name", "容器名"],
+  ["container_action", "动作"],
+  ["container_reason", "原因"],
+  ["matched_metrics", "匹配指标"],
+  ["container_metrics", "指标详情"],
+];
+const containerProtectionMetricLabels = {
+  cpuPercent: "CPU",
+  memoryPercent: "内存%",
+  memoryUsedBytes: "内存用量",
+  blkReadBps: "块读速率",
+  blkWriteBps: "块写速率",
+  blkIoBps: "块 I/O",
+};
+const containerProtectionOperators = [
+  { value: "gte", label: "大于等于" },
+  { value: "lte", label: "小于等于" },
+];
+const containerProtectionLogicOptions = [
+  { value: "and", label: "AND" },
+  { value: "or", label: "OR" },
+];
+const containerProtectionActions = [
+  { value: "restart", label: "重启" },
+  { value: "stop", label: "停止" },
+];
 const historyPeriods = [
   { key: "day", label: "今日" },
   { key: "week", label: "本周" },
@@ -574,6 +687,7 @@ const processEnd = ref("");
 const processSearch = ref("");
 const dockerSearch = ref("");
 const monitorRules = ref([]);
+const containerRules = ref([]);
 const channels = ref([]);
 const runtimeForm = reactive({});
 const historyChartEl = ref(null);
@@ -618,7 +732,8 @@ const dockerContainers = computed(() => {
   return (dockerData.value?.containers || []).filter((container) => {
     if (!keyword) return true;
     const portText = (container.ports || []).map((port) => `${port.hostPort} ${port.containerPort} ${port.proto} ${port.label} ${port.service}`).join(" ");
-    return `${container.name} ${container.image} ${container.state} ${container.status} ${container.networkMode} ${portText}`.toLowerCase().includes(keyword);
+    const protectionText = `${container.protection?.enabled ? "protect" : ""} ${container.protection?.state?.lastAction || ""}`;
+    return `${container.name} ${container.image} ${container.state} ${container.status} ${container.networkMode} ${portText} ${protectionText}`.toLowerCase().includes(keyword);
   });
 });
 const dockerStatusText = computed(() => {
@@ -627,6 +742,17 @@ const dockerStatusText = computed(() => {
   if (!dockerData.value?.enabled) return `Docker 发现未启用${suffix}`;
   return `${status.containerCount || dockerData.value?.containers?.length || 0} 个容器，${status.count || 0} 个端口${suffix}`;
 });
+const dockerProtectionCount = computed(() => (dockerData.value?.containers || []).filter((item) => item.protection?.enabled).length);
+const dockerContainerOptions = computed(() => (dockerData.value?.containers || []).map((container) => {
+  const id = (container.id || "").slice(0, 12);
+  const compose = [container.composeProject, container.composeService].filter(Boolean).join("/");
+  const title = [container.name || id || "unknown", compose || "", container.image || ""].filter(Boolean).join(" · ");
+  return {
+    ...container,
+    optionValue: `${container.name || id} | ${compose || "no-compose"} | ${container.image || ""} | ${id}`,
+    optionLabel: title,
+  };
+}));
 const temperatureGroups = computed(() => system.value?.temperatureGroups || []);
 const gpuSummary = computed(() => {
   const gpus = system.value?.gpu || [];
@@ -690,6 +816,12 @@ function processBar(value) {
 }
 function templateVar(name) {
   return `{${name}}`;
+}
+function templateLabel(item) {
+  return Array.isArray(item) ? item[1] : item;
+}
+function templateKey(item) {
+  return Array.isArray(item) ? item[0] : item;
 }
 function serviceLabel(value) {
   const labels = {
@@ -774,8 +906,10 @@ async function refreshProcesses() {
 async function refreshSettings() {
   settings.value = await api("/api/settings");
   monitorRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.rules || []));
+  containerRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.containerRules || [])).map(normalizeContainerRuleForm);
   channels.value = JSON.parse(JSON.stringify(settings.value.monitor?.channels || []));
   Object.assign(runtimeForm, settings.value.runtime || {});
+  refreshDockerContainerOptions();
 }
 async function refreshSystem() {
   if (systemLoading) return;
@@ -792,9 +926,17 @@ async function refreshDocker() {
   try {
   const data = await api("/api/docker/containers");
   dockerData.value = { ...data, containers: mergeDockerContainers(data.containers || []) };
-  hydrateDockerDetails();
+  if (activeView.value === "docker") hydrateDockerDetails();
   } finally {
     dockerLoading = false;
+  }
+}
+async function refreshDockerContainerOptions() {
+  if (dockerLoading || (dockerData.value?.containers || []).length) return;
+  try {
+    await refreshDocker();
+  } catch (error) {
+    console.warn("load docker container options failed", error);
   }
 }
 function dockerKey(container) {
@@ -823,6 +965,51 @@ function replaceDockerContainer(container) {
     ...dockerData.value,
     containers: (dockerData.value?.containers || []).map((item) => (dockerKey(item) === key ? normalizeDockerContainer(container, item) : item)),
   };
+}
+function containerOptionValue(container = {}) {
+  const id = (container.id || "").slice(0, 12);
+  const compose = [container.composeProject, container.composeService].filter(Boolean).join("/");
+  return `${container.name || id} | ${compose || "no-compose"} | ${container.image || ""} | ${id}`;
+}
+function normalizeContainerRuleForm(rule = {}) {
+  const normalized = {
+    composeProject: "",
+    composeService: "",
+    containerSearch: "",
+    ...rule,
+  };
+  normalized.containerSearch = normalized.containerSearch || containerOptionValue({
+    id: normalized.containerId,
+    name: normalized.containerName,
+    image: normalized.image || "",
+    composeProject: normalized.composeProject,
+    composeService: normalized.composeService,
+  });
+  return normalized;
+}
+function selectContainerForRule(rule) {
+  const keyword = String(rule.containerSearch || "").trim().toLowerCase();
+  const selected = dockerContainerOptions.value.find((container) => container.optionValue.toLowerCase() === keyword)
+    || dockerContainerOptions.value.find((container) => {
+      const id = String(container.id || "").slice(0, 12).toLowerCase();
+      return keyword && (
+        String(container.name || "").toLowerCase() === keyword
+        || id === keyword
+        || String(container.composeService || "").toLowerCase() === keyword
+      );
+    });
+  if (!selected) return;
+  rule.containerId = String(selected.id || "").slice(0, 12);
+  rule.containerName = selected.name || rule.containerName || "";
+  rule.composeProject = selected.composeProject || "";
+  rule.composeService = selected.composeService || "";
+  rule.containerSearch = selected.optionValue;
+}
+function containerRuleTargetText(rule = {}) {
+  const id = rule.containerId ? `当前ID ${String(rule.containerId).slice(0, 12)}` : "未绑定当前ID";
+  const name = rule.containerName ? `容器名 ${rule.containerName}` : "未设置容器名";
+  const compose = rule.composeProject && rule.composeService ? `Compose ${rule.composeProject}/${rule.composeService}` : "无 Compose 标识";
+  return `${name} · ${compose} · ${id}`;
 }
 async function loadDockerDetail(container) {
   if (!container?.id && !container?.name) return null;
@@ -1015,6 +1202,30 @@ async function saveRules() {
   await refreshSettings();
   showToast("监控规则已保存");
 }
+async function saveContainerRules() {
+  const payload = containerRules.value.map((rule) => ({
+    ...rule,
+    containerSearch: undefined,
+    containerId: String(rule.containerId || "").slice(0, 12),
+    containerName: String(rule.containerName || "").trim(),
+    composeProject: String(rule.composeProject || "").trim(),
+    composeService: String(rule.composeService || "").trim(),
+    maxActions: Number(rule.maxActions || 1),
+    cooldownSeconds: Number(rule.cooldownSeconds || 0),
+    conditions: (rule.conditions || []).map((condition) => ({
+      ...condition,
+      threshold: Number(condition.threshold || 0),
+      durationSeconds: Number(condition.durationSeconds || 0),
+    })),
+  }));
+  settings.value = await api("/api/settings/container-protection", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rules: payload }),
+  });
+  await refreshSettings();
+  showToast("容器保护已保存");
+}
 async function saveChannels() {
   settings.value = await api("/api/settings/channels", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ channels: channels.value }) });
   await refreshSettings();
@@ -1031,7 +1242,43 @@ function addRule() {
 function removeRule(id) {
   monitorRules.value = monitorRules.value.filter((item) => item.id !== id);
 }
+function addContainerRule() {
+  containerRules.value.push({
+    id: `protection-${Date.now()}`,
+    name: "新容器保护",
+    containerId: "",
+    containerName: "",
+    composeProject: "",
+    composeService: "",
+    containerSearch: "",
+    enabled: false,
+    channelIds: [],
+    logic: "and",
+    action: "restart",
+    maxActions: 3,
+    cooldownSeconds: 60,
+    conditions: [
+      { metric: "cpuPercent", operator: "gte", threshold: 90, durationSeconds: 30 },
+    ],
+  });
+}
+function removeContainerRule(id) {
+  containerRules.value = containerRules.value.filter((item) => item.id !== id);
+}
+function addContainerCondition(rule) {
+  rule.conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
+  rule.conditions.push({ metric: "cpuPercent", operator: "gte", threshold: 90, durationSeconds: 30 });
+}
+function removeContainerCondition(rule, index) {
+  rule.conditions.splice(index, 1);
+}
 function toggleRuleChannel(rule, channelId) {
+  const values = new Set(rule.channelIds || []);
+  if (values.has(channelId)) values.delete(channelId);
+  else values.add(channelId);
+  rule.channelIds = Array.from(values);
+}
+function toggleContainerRuleChannel(rule, channelId) {
   const values = new Set(rule.channelIds || []);
   if (values.has(channelId)) values.delete(channelId);
   else values.add(channelId);

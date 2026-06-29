@@ -544,6 +544,33 @@ class MonitorRulesPayload(BaseModel):
     rules: List[MonitorRule]
 
 
+class ContainerProtectionCondition(BaseModel):
+    metric: str = "cpuPercent"
+    operator: str = "gte"
+    threshold: int = 0
+    durationSeconds: int = 0
+
+
+class ContainerProtectionRule(BaseModel):
+    id: str
+    name: str
+    containerId: str = ""
+    containerName: str = ""
+    composeProject: str = ""
+    composeService: str = ""
+    enabled: bool = True
+    channelIds: List[str] = Field(default_factory=list)
+    logic: str = "and"
+    action: str = "restart"
+    maxActions: int = 3
+    cooldownSeconds: int = 60
+    conditions: List[ContainerProtectionCondition] = Field(default_factory=list)
+
+
+class ContainerProtectionRulesPayload(BaseModel):
+    rules: List[ContainerProtectionRule]
+
+
 class NotificationChannel(BaseModel):
     id: str
     name: str
@@ -1057,6 +1084,10 @@ def default_notification_channels() -> List[dict]:
     ]
 
 
+def default_container_protection_rules() -> List[dict]:
+    return []
+
+
 def sanitize_monitor_rule(rule: MonitorRule) -> dict:
     cleaned = MonitorRule(
         id=(rule.id or f"rule-{int(now())}").strip()[:64],
@@ -1102,10 +1133,75 @@ def sanitize_notification_channel(channel: NotificationChannel) -> dict:
     return cleaned.model_dump()
 
 
+def sanitize_container_protection_condition(condition: ContainerProtectionCondition) -> dict:
+    cleaned = ContainerProtectionCondition(
+        metric=(condition.metric or "cpuPercent").strip(),
+        operator=(condition.operator or "gte").strip(),
+        threshold=max(0, int(condition.threshold or 0)),
+        durationSeconds=max(0, int(condition.durationSeconds or 0)),
+    )
+    if cleaned.operator not in {"gte", "lte"}:
+        cleaned.operator = "gte"
+    if cleaned.metric not in {"cpuPercent", "memoryPercent", "memoryUsedBytes", "blkReadBps", "blkWriteBps", "blkIoBps"}:
+        cleaned.metric = "cpuPercent"
+    return cleaned.model_dump()
+
+
+def sanitize_container_protection_rule(rule: ContainerProtectionRule) -> dict:
+    cleaned = ContainerProtectionRule(
+        id=(rule.id or f"protection-{int(now())}").strip()[:64],
+        name=(rule.name or "容器保护").strip()[:80],
+        containerId=(rule.containerId or "").strip()[:64],
+        containerName=(rule.containerName or "").strip()[:120],
+        composeProject=(rule.composeProject or "").strip()[:120],
+        composeService=(rule.composeService or "").strip()[:120],
+        enabled=bool(rule.enabled),
+        channelIds=[str(item).strip()[:64] for item in (rule.channelIds or []) if str(item).strip()],
+        logic=(rule.logic or "and").strip().lower(),
+        action=(rule.action or "restart").strip().lower(),
+        maxActions=max(1, int(rule.maxActions or 1)),
+        cooldownSeconds=max(0, int(rule.cooldownSeconds or 0)),
+        conditions=[sanitize_container_protection_condition(item) for item in (rule.conditions or [])],
+    )
+    if cleaned.logic not in {"and", "or"}:
+        cleaned.logic = "and"
+    if cleaned.action not in {"restart", "stop"}:
+        cleaned.action = "restart"
+    if not cleaned.conditions:
+        cleaned.conditions = [sanitize_container_protection_condition(ContainerProtectionCondition())]
+    return cleaned.model_dump()
+
+
 def docker_container_key(container_id: str = "", container_name: str = "") -> str:
     cid = str(container_id or "").strip().lstrip("/")[:12]
     name = str(container_name or "").strip().lstrip("/")
     return cid or name
+
+
+def docker_compose_identity(labels: dict) -> Tuple[str, str]:
+    if not isinstance(labels, dict):
+        return "", ""
+    project = str(labels.get("com.docker.compose.project") or "").strip()
+    service = str(labels.get("com.docker.compose.service") or "").strip()
+    return project, service
+
+
+def container_rule_matches_row(rule: dict, row: dict) -> bool:
+    if not isinstance(rule, dict) or not isinstance(row, dict):
+        return False
+    rule_id = str(rule.get("containerId") or "").strip().lstrip("/")[:12]
+    row_id = str(row.get("id") or "").strip().lstrip("/")[:12]
+    if rule_id and row_id and rule_id == row_id:
+        return True
+    rule_project = str(rule.get("composeProject") or "").strip()
+    rule_service = str(rule.get("composeService") or "").strip()
+    row_project = str(row.get("composeProject") or "").strip()
+    row_service = str(row.get("composeService") or "").strip()
+    if rule_project and rule_service and rule_project == row_project and rule_service == row_service:
+        return True
+    rule_name = str(rule.get("containerName") or "").strip().lstrip("/")
+    row_name = str(row.get("name") or "").strip().lstrip("/")
+    return bool(rule_name and row_name and rule_name == row_name)
 
 
 def normalize_docker_scheme(value: str) -> str:
@@ -1219,6 +1315,7 @@ def docker_container_stats(container_id: str) -> dict:
     memory_detail = memory_stats.get("stats") if isinstance(memory_stats.get("stats"), dict) else {}
     inactive_file = int(memory_detail.get("inactive_file") or memory_detail.get("total_inactive_file") or 0)
     memory_working_set = max(0, memory_usage - inactive_file) if inactive_file else memory_usage
+    memory_percent = round((memory_working_set / memory_limit) * 100.0, 2) if memory_working_set and memory_limit else 0.0
 
     network_rx = 0
     network_tx = 0
@@ -1229,13 +1326,29 @@ def docker_container_stats(container_id: str) -> dict:
         network_rx += int(item.get("rx_bytes") or 0)
         network_tx += int(item.get("tx_bytes") or 0)
 
+    blk_read_bytes = 0
+    blk_write_bytes = 0
+    blkio_stats = stats.get("blkio_stats") if isinstance(stats.get("blkio_stats"), dict) else {}
+    for item in blkio_stats.get("io_service_bytes_recursive") or []:
+        if not isinstance(item, dict):
+            continue
+        op = str(item.get("op") or "").strip().lower()
+        value = int(item.get("value") or 0)
+        if op == "read":
+            blk_read_bytes += value
+        elif op == "write":
+            blk_write_bytes += value
+
     return {
         "cpuPercent": cpu_percent,
         "memoryUsedBytes": memory_working_set,
         "memoryUsageBytes": memory_usage,
         "memoryLimitBytes": memory_limit,
+        "memoryPercent": memory_percent,
         "netRxBytes": network_rx,
         "netTxBytes": network_tx,
+        "blkReadBytes": blk_read_bytes,
+        "blkWriteBytes": blk_write_bytes,
     }
 
 
@@ -1437,6 +1550,10 @@ def empty_docker_overrides() -> dict:
     return {"containers": {}}
 
 
+def empty_container_protection_rules() -> dict:
+    return {"rules": []}
+
+
 def docker_override_for(overrides: dict, container_id: str, container_name: str) -> dict:
     containers = overrides.get("containers") if isinstance(overrides, dict) else {}
     if not isinstance(containers, dict):
@@ -1506,12 +1623,16 @@ def discover_containers(
     labels: Dict[str, str],
     overrides: Optional[dict] = None,
     stats_cache: Optional[dict] = None,
+    protection_rules: Optional[List[dict]] = None,
+    protection_states: Optional[dict] = None,
     web_probes: Optional[dict] = None,
 ) -> Tuple[Dict[Tuple[str, int], dict], List[dict]]:
     ports: Dict[Tuple[str, int], dict] = {}
     rows: List[dict] = []
     overrides = overrides or empty_docker_overrides()
     stats_cache = stats_cache or {}
+    protection_rules = protection_rules or []
+    protection_states = protection_states or {}
     if not ENABLE_DOCKER_DISCOVERY:
         for override in (overrides.get("containers") or {}).values():
             if not isinstance(override, dict):
@@ -1519,6 +1640,14 @@ def discover_containers(
             container_id = str(override.get("containerId") or "")[:12]
             name = str(override.get("containerName") or container_id or "manual").lstrip("/")
             container_ports = merge_container_ports([], override, container_id, name, web_probes)
+            state = next(
+                (
+                    protection_states.get(str(rule.get("id") or ""))
+                    for rule in protection_rules
+                    if str(rule.get("containerId") or "").strip()[:12] == container_id and bool(rule.get("enabled"))
+                ),
+                {},
+            )
             for item in container_ports:
                 ports[(item["proto"], int(item["hostPort"]))] = item
             rows.append(
@@ -1532,6 +1661,18 @@ def discover_containers(
                     "networkMode": "manual",
                     "containerIcon": sanitize_docker_icon(override.get("icon") or ""),
                     "ports": container_ports,
+                    "protection": {
+                        "enabled": any(
+                            str(rule.get("containerId") or "").strip()[:12] == container_id and bool(rule.get("enabled"))
+                            for rule in protection_rules
+                        ),
+                        "rules": [
+                            rule
+                            for rule in protection_rules
+                            if str(rule.get("containerId") or "").strip()[:12] == container_id
+                        ],
+                        "state": state or {},
+                    },
                     "manualOnly": True,
                 }
             )
@@ -1550,6 +1691,8 @@ def discover_containers(
             raw_name = str(names[0]) if names else cid
             name = raw_name.lstrip("/") or cid or "unknown"
             image = str(container.get("Image") or "")
+            container_labels = container.get("Labels") if isinstance(container.get("Labels"), dict) else {}
+            compose_project, compose_service = docker_compose_identity(container_labels)
             state = str(container.get("State") or "")
             status = str(container.get("Status") or "")
             created = int(container.get("Created") or 0)
@@ -1580,11 +1723,28 @@ def discover_containers(
             for item in container_ports:
                 ports[(item["proto"], int(item["hostPort"]))] = item
             stats = stats_cache.get(cid) or {}
+            row_identity = {
+                "id": cid,
+                "name": name,
+                "composeProject": compose_project,
+                "composeService": compose_service,
+            }
+            protection_rule_rows = [rule for rule in protection_rules if container_rule_matches_row(rule, row_identity)]
+            protection_state = next(
+                (
+                    protection_states.get(str(rule.get("id") or ""))
+                    for rule in protection_rule_rows
+                    if protection_states.get(str(rule.get("id") or ""))
+                ),
+                {},
+            )
             rows.append(
                 {
                     "id": cid,
                     "name": name,
                     "image": image,
+                    "composeProject": compose_project,
+                    "composeService": compose_service,
                     "state": state,
                     "status": status,
                     "created": created,
@@ -1593,6 +1753,11 @@ def discover_containers(
                     "uptimeSeconds": max(0, int(now()) - created) if created else None,
                     "containerIcon": sanitize_docker_icon((override or {}).get("icon") or ""),
                     "ports": container_ports,
+                    "protection": {
+                        "enabled": any(bool(rule.get("enabled")) for rule in protection_rule_rows),
+                        "rules": protection_rule_rows,
+                        "state": protection_state or {},
+                    },
                 }
             )
         except Exception as exc:
@@ -1757,6 +1922,7 @@ def docker_container_summary(row: dict) -> dict:
     } | {
         "portCount": len(ports),
         "hasIcon": bool(row.get("containerIcon")),
+        "protection": row.get("protection") or {},
     }
 
 
@@ -1933,6 +2099,7 @@ class TrafficCollector:
         self.alerts = deque(maxlen=200)
         self.monitor_rules = default_monitor_rules()
         self.notification_channels = default_notification_channels()
+        self.container_protection_rules = default_container_protection_rules()
         self.alert_settings = AlertSettings(**alert_settings_from_rules(self.monitor_rules))
         self.notify_settings = NotifySettings(
             channel=self.notification_channels[0]["type"],
@@ -1978,6 +2145,7 @@ class TrafficCollector:
         self.stage_accumulated_seconds = 0.0
         self.daily_alert_date = ""
         self.rule_states: Dict[str, dict] = {}
+        self.container_protection_states: Dict[str, dict] = {}
 
     def start(self) -> None:
         if getattr(self, "started", False):
@@ -2094,6 +2262,7 @@ class TrafficCollector:
         alerts = self.db.get_setting("alerts")
         notify = self.db.get_setting("notify")
         rules = self.db.get_setting("monitor_rules")
+        protection = self.db.get_setting("container_protection_rules")
         channels = self.db.get_setting("notification_channels")
         runtime = self.db.get_setting("runtime_settings")
         docker_overrides = self.db.get_setting("docker_overrides")
@@ -2107,6 +2276,12 @@ class TrafficCollector:
                 self.monitor_rules = rules_from_alert_settings(AlertSettings(**alerts))
             except Exception as exc:
                 print(f"ignore invalid saved alert settings: {exc}", flush=True)
+
+        if protection and isinstance(protection.get("rules"), list):
+            try:
+                self.container_protection_rules = [sanitize_container_protection_rule(ContainerProtectionRule(**item)) for item in protection["rules"]]
+            except Exception as exc:
+                print(f"ignore invalid saved container protection rules: {exc}", flush=True)
 
         if channels and isinstance(channels.get("channels"), list):
             try:
@@ -2144,6 +2319,7 @@ class TrafficCollector:
         if docker_overrides and isinstance(docker_overrides.get("containers"), dict):
             self.docker_overrides = docker_overrides
 
+        self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
         self.sync_legacy_settings()
 
     def sync_legacy_settings(self) -> None:
@@ -2155,6 +2331,244 @@ class TrafficCollector:
             webhookUrl=primary.get("url") or "",
             webhookTimeout=primary.get("timeout") or 5,
         )
+
+    def normalize_container_stats(self, stats: dict) -> dict:
+        memory_limit = max(0, int(stats.get("memoryLimitBytes") or 0))
+        memory_used = max(0, int(stats.get("memoryUsedBytes") or 0))
+        memory_usage = max(memory_used, int(stats.get("memoryUsageBytes") or 0))
+        memory_percent = stats.get("memoryPercent")
+        if memory_percent is None:
+            memory_percent = round((memory_used / memory_limit) * 100.0, 2) if memory_limit and memory_used else 0.0
+        blk_read = max(0, int(stats.get("blkReadBytes") or 0))
+        blk_write = max(0, int(stats.get("blkWriteBytes") or 0))
+        blk_io = max(0, int(stats.get("blkIoBytes") or 0)) or (blk_read + blk_write)
+        return {
+            "cpuPercent": float(stats.get("cpuPercent") or 0),
+            "memoryUsedBytes": memory_used,
+            "memoryUsageBytes": memory_usage,
+            "memoryLimitBytes": memory_limit,
+            "memoryPercent": float(memory_percent or 0),
+            "netRxBytes": max(0, int(stats.get("netRxBytes") or 0)),
+            "netTxBytes": max(0, int(stats.get("netTxBytes") or 0)),
+            "blkReadBytes": blk_read,
+            "blkWriteBytes": blk_write,
+            "blkIoBytes": blk_io,
+            "blkReadBps": float(stats.get("blkReadBps") or 0),
+            "blkWriteBps": float(stats.get("blkWriteBps") or 0),
+            "blkIoBps": float(stats.get("blkIoBps") or 0),
+        }
+
+    def container_protection_metric_value(self, state: dict, stats: dict, metric: str, timestamp: float) -> float:
+        if metric == "cpuPercent":
+            return float(stats.get("cpuPercent") or 0)
+        if metric == "memoryPercent":
+            return float(stats.get("memoryPercent") or 0)
+        if metric == "memoryUsedBytes":
+            return float(stats.get("memoryUsedBytes") or 0)
+        if metric in {"blkReadBps", "blkReadBytes"}:
+            if stats.get("blkReadBps") is not None:
+                return float(stats.get("blkReadBps") or 0)
+            metric_state = state.setdefault("metrics", {}).setdefault(metric, {})
+            current = float(stats.get("blkReadBytes") or 0)
+            previous = metric_state.get("sampleValue")
+            previous_at = metric_state.get("sampleAt")
+            metric_state["sampleValue"] = current
+            metric_state["sampleAt"] = timestamp
+            if previous is None or previous_at is None or timestamp <= float(previous_at or 0):
+                return 0.0
+            return max(0.0, (current - float(previous)) / max(0.001, timestamp - float(previous_at)))
+        if metric in {"blkWriteBps", "blkWriteBytes"}:
+            if stats.get("blkWriteBps") is not None:
+                return float(stats.get("blkWriteBps") or 0)
+            metric_state = state.setdefault("metrics", {}).setdefault(metric, {})
+            current = float(stats.get("blkWriteBytes") or 0)
+            previous = metric_state.get("sampleValue")
+            previous_at = metric_state.get("sampleAt")
+            metric_state["sampleValue"] = current
+            metric_state["sampleAt"] = timestamp
+            if previous is None or previous_at is None or timestamp <= float(previous_at or 0):
+                return 0.0
+            return max(0.0, (current - float(previous)) / max(0.001, timestamp - float(previous_at)))
+        if metric in {"blkIoBps", "blkIoBytes"}:
+            if stats.get("blkIoBps") is not None:
+                return float(stats.get("blkIoBps") or 0)
+            metric_state = state.setdefault("metrics", {}).setdefault(metric, {})
+            current = float(stats.get("blkIoBytes") or 0)
+            previous = metric_state.get("sampleValue")
+            previous_at = metric_state.get("sampleAt")
+            metric_state["sampleValue"] = current
+            metric_state["sampleAt"] = timestamp
+            if previous is None or previous_at is None or timestamp <= float(previous_at or 0):
+                return 0.0
+            return max(0.0, (current - float(previous)) / max(0.001, timestamp - float(previous_at)))
+        return 0.0
+
+    def docker_container_action(self, container_id: str, action: str) -> dict:
+        selected = str(container_id or "").strip().lstrip("/")[:12]
+        selected_action = str(action or "").strip().lower()
+        if not selected:
+            return {"ok": False, "detail": "missing container id"}
+        if selected_action not in {"restart", "stop"}:
+            return {"ok": False, "detail": "unsupported action"}
+        result = docker_api_request("POST", f"/containers/{selected}/{selected_action}")
+        if not result.get("ok"):
+            detail = result.get("detail") or result.get("body") or f"docker {selected_action} failed"
+            return {"ok": False, "detail": detail, "status": result.get("status")}
+        return {"ok": True, "action": selected_action, "status": result.get("status")}
+
+    def resolve_container_protection_target(self, rule: dict) -> Optional[dict]:
+        self.refresh_container_ports()
+        with self.lock:
+            rows = list(self.container_rows)
+            by_id = dict(self.container_rows_by_id)
+        for row in rows:
+            if container_rule_matches_row(rule, row):
+                return {
+                    "id": str(row.get("id") or "").strip()[:12],
+                    "name": str(row.get("name") or "").strip().lstrip("/"),
+                    "composeProject": str(row.get("composeProject") or "").strip(),
+                    "composeService": str(row.get("composeService") or "").strip(),
+                }
+        selected = str(rule.get("containerId") or "").strip().lstrip("/")[:12]
+        row = by_id.get(selected)
+        if row:
+            return {
+                "id": str(row.get("id") or "").strip()[:12],
+                "name": str(row.get("name") or "").strip().lstrip("/"),
+                "composeProject": str(row.get("composeProject") or "").strip(),
+                "composeService": str(row.get("composeService") or "").strip(),
+            }
+        return {"id": selected, "name": str(rule.get("containerName") or selected), "composeProject": "", "composeService": ""} if selected else None
+
+    def match_container_protection(self, rule: dict, stats: dict, timestamp: float) -> Tuple[bool, float, List[dict], List[dict], bool]:
+        rule_id = str(rule.get("id") or "").strip()
+        state = self.container_protection_states.setdefault(
+            rule_id,
+            {"count": 0, "lastActionAt": None, "lastAction": "", "reason": "", "active": False, "locked": False, "metrics": {}},
+        )
+        conditions = [condition for condition in (rule.get("conditions") or []) if isinstance(condition, dict)]
+        logic = str(rule.get("logic") or "and").lower()
+        ready = []
+        hot = []
+        details = []
+        for condition in conditions:
+            metric = str(condition.get("metric") or "cpuPercent").strip()
+            threshold = int(condition.get("threshold") or 0)
+            duration = max(0, int(condition.get("durationSeconds") or 0))
+            if threshold <= 0:
+                continue
+            metric_state = state["metrics"].setdefault(metric, {"startedAt": None, "active": False})
+            value = self.container_protection_metric_value(metric_state, stats, metric, timestamp)
+            operator = str(condition.get("operator") or "gte").strip().lower()
+            is_hot = value >= threshold if operator != "lte" else value <= threshold
+            if is_hot:
+                hot.append(metric)
+                if metric_state.get("startedAt") is None:
+                    metric_state["startedAt"] = timestamp
+                sustained = max(0.0, timestamp - float(metric_state.get("startedAt") or timestamp))
+                metric_state["active"] = sustained >= duration
+                if metric_state["active"]:
+                    ready.append(metric)
+            else:
+                metric_state["startedAt"] = None
+                metric_state["active"] = False
+            details.append(
+                {
+                    "metric": metric,
+                    "value": value,
+                    "threshold": threshold,
+                    "durationSeconds": duration,
+                    "hot": is_hot,
+                    "ready": bool(metric_state.get("active")),
+                }
+            )
+        if not details:
+            return False, 0.0, [], [], False
+        if logic == "or":
+            matched = bool(ready)
+        else:
+            matched = len(ready) == len(details) and len(details) > 0
+        value = max((item["value"] for item in details), default=0.0)
+        return matched, value, ready, details, bool(hot)
+
+    def evaluate_container_protection(self, timestamp: float) -> List[dict]:
+        actions = []
+        for rule in list(self.container_protection_rules):
+            if not rule.get("enabled"):
+                continue
+            target = self.resolve_container_protection_target(rule)
+            if not target or not target.get("id"):
+                continue
+            container_id = str(target.get("id") or "").strip()[:12]
+            if rule.get("containerId") != container_id:
+                rule["containerId"] = container_id
+                db = getattr(self, "db", None)
+                if db:
+                    db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
+            state = self.container_protection_states.setdefault(
+                str(rule.get("id") or container_id),
+                {"count": 0, "lastActionAt": None, "lastAction": "", "reason": "", "active": False, "locked": False, "metrics": {}},
+            )
+            state["containerId"] = container_id
+            state["containerName"] = str(target.get("name") or rule.get("containerName") or container_id)
+            if target.get("composeProject"):
+                state["composeProject"] = target.get("composeProject")
+            if target.get("composeService"):
+                state["composeService"] = target.get("composeService")
+            stats_result = self.docker_container_stats(container_id)
+            if not isinstance(stats_result, dict) or not stats_result.get("ok"):
+                continue
+            stats = self.normalize_container_stats(stats_result.get("stats") or {})
+            matched, value, ready_metrics, details, hot = self.match_container_protection(rule, stats, timestamp)
+            if not hot:
+                state["count"] = 0
+                state["locked"] = False
+                state["active"] = False
+                continue
+            state["active"] = bool(matched)
+            cooldown = max(0, int(rule.get("cooldownSeconds") or 0))
+            last_action_at = float(state.get("lastActionAt") or 0)
+            if cooldown and last_action_at and timestamp - last_action_at < cooldown:
+                continue
+            if state.get("locked"):
+                continue
+            desired_action = str(rule.get("action") or "restart").strip().lower()
+            max_actions = max(1, int(rule.get("maxActions") or 1))
+            if int(state.get("count") or 0) >= max_actions:
+                desired_action = "stop"
+                state["locked"] = True
+            if not matched and desired_action != "stop":
+                continue
+            action_result = self.docker_container_action(container_id, desired_action)
+            state["count"] = int(state.get("count") or 0) + 1
+            state["lastActionAt"] = timestamp
+            state["lastAction"] = desired_action
+            state["reason"] = f"{desired_action} after " + ", ".join(item["metric"] for item in details)
+            if desired_action == "stop":
+                state["locked"] = True
+            alert_rule = {
+                **rule,
+                "containerId": container_id,
+                "containerName": state.get("containerName") or container_id,
+                "composeProject": state.get("composeProject") or rule.get("composeProject") or "",
+                "composeService": state.get("composeService") or rule.get("composeService") or "",
+                "logic": rule.get("logic") or "and",
+                "action": desired_action,
+                "matchedMetrics": ready_metrics,
+                "actionResult": action_result,
+                "metrics": details,
+                "state": dict(state),
+            }
+            self.record_alert(
+                "container_protection",
+                "critical" if desired_action == "stop" else "warning",
+                f"{rule.get('name') or '容器保护'}: {desired_action} {state.get('containerName') or container_id}",
+                int(value or 0),
+                int(max((item["threshold"] for item in details), default=0)),
+                alert_rule,
+            )
+            actions.append(alert_rule)
+        return actions
 
     def refresh_interface_details(self) -> None:
         details = get_interface_details(set(self.capture_interfaces))
@@ -2203,7 +2617,16 @@ class TrafficCollector:
                 labels = self.db.get_labels()
                 overrides = dict(self.docker_overrides)
                 web_probes = dict(self.docker_web_probe_cache)
-            ports, rows = discover_containers(labels, overrides, web_probes=web_probes)
+            with self.lock:
+                protection_rules = list(self.container_protection_rules)
+                protection_states = dict(self.container_protection_states)
+            ports, rows = discover_containers(
+                labels,
+                overrides,
+                protection_rules=protection_rules,
+                protection_states=protection_states,
+                web_probes=web_probes,
+            )
             rows_by_id = {}
             for row in rows:
                 for key in docker_container_lookup_keys(row):
@@ -2395,6 +2818,7 @@ class TrafficCollector:
                     self.last_rates = rates
                     self.history.append({"timestamp": current_time, "rates": rates})
                 self.evaluate_alerts(rates, current_time)
+                self.evaluate_container_protection(current_time)
             if current_time - last_prune >= 60:
                 self.prune_stale()
                 self.prune_recent_processes(current_time)
@@ -3200,6 +3624,7 @@ class TrafficCollector:
             "monitor": {
                 "rules": self.monitor_rules,
                 "channels": self.notification_channels,
+                "containerRules": self.container_protection_rules,
             },
             "runtime": {
                 "appPort": APP_PORT,
@@ -3248,6 +3673,10 @@ class TrafficCollector:
                 "labels": self.db.get_labels(),
                 "dockerOverrides": self.docker_overrides,
                 "dockerDiscovery": self.container_status,
+                "containerProtection": {
+                    "rules": self.container_protection_rules,
+                    "states": self.container_protection_states,
+                },
         }
 
     def diagnostics(self) -> dict:
@@ -3324,6 +3753,10 @@ class TrafficCollector:
                 "status": dict(self.container_status),
                 "containers": [docker_container_summary(row) for row in self.container_rows],
                 "overrides": self.docker_overrides,
+                "protection": {
+                    "rules": self.container_protection_rules,
+                    "states": self.container_protection_states,
+                },
             }
 
     def docker_container_detail(self, container_id: str) -> dict:
@@ -3412,6 +3845,11 @@ class TrafficCollector:
         self.notification_channels = [sanitize_notification_channel(channel) for channel in payload.channels]
         self.db.set_setting("notification_channels", {"channels": self.notification_channels})
         self.sync_legacy_settings()
+        return self.get_settings()
+
+    def update_container_protection_rules(self, payload: ContainerProtectionRulesPayload) -> dict:
+        self.container_protection_rules = [sanitize_container_protection_rule(rule) for rule in payload.rules]
+        self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
         return self.get_settings()
 
     def update_runtime_settings(self, payload: RuntimeSettingsPayload) -> dict:
@@ -4203,6 +4641,11 @@ async def update_monitor(payload: MonitorRulesPayload) -> dict:
 @app.post("/api/settings/channels")
 async def update_channels(payload: NotificationChannelsPayload) -> dict:
     return collector.update_notification_channels(payload)
+
+
+@app.post("/api/settings/container-protection")
+async def update_container_protection(payload: ContainerProtectionRulesPayload) -> dict:
+    return collector.update_container_protection_rules(payload)
 
 
 @app.post("/api/settings/runtime")
