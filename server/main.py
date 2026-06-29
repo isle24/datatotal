@@ -2401,12 +2401,22 @@ class TrafficCollector:
                 self.db.prune_old(int(current_time - HISTORY_RETENTION_DAYS * 86400))
                 last_prune = current_time
             if current_time - last_persist >= PERSIST_INTERVAL_SECONDS:
-                self.persist_minute(current, current_time)
+                persist_interfaces = self.history_persist_interfaces(current)
+                self.persist_minute(persist_interfaces, current_time)
                 self.persist_process_minute(current_time)
                 self.evaluate_daily_alert(current_time)
                 last_persist = current_time
             previous = {"timestamp": current_time, "interfaces": current}
             time.sleep(max(0.5, SAMPLE_SECONDS))
+
+    def history_persist_interfaces(self, current_interfaces: dict) -> dict:
+        if not self.go_collector_available:
+            return current_interfaces
+        go_data = go_snapshot()
+        go_interfaces = (go_data or {}).get("interfaces") or {}
+        if go_interfaces:
+            return go_interfaces
+        return current_interfaces
 
     def record_low_profile_deltas(self, previous_interfaces: dict, current_interfaces: dict) -> None:
         with self.lock:
@@ -2920,6 +2930,9 @@ class TrafficCollector:
             for scope, counter in item.get("scopes", {}).items():
                 current_totals.setdefault(iface, {})[scope] = counter
 
+        if not current_totals:
+            return
+
         if self.last_persist_totals is None:
             self.last_persist_totals = current_totals
             return
@@ -2952,6 +2965,9 @@ class TrafficCollector:
                 key: counter.snapshot()
                 for key, counter in self.process_totals.items()
             }
+
+        if not current_totals:
+            return
 
         if self.last_process_persist_totals is None:
             self.last_process_persist_totals = current_totals

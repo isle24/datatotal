@@ -12,6 +12,7 @@ def make_collector():
     collector = main.TrafficCollector.__new__(main.TrafficCollector)
     collector.lock = main.threading.RLock()
     collector.capture_interfaces = ["eth0"]
+    collector.go_collector_available = False
     collector.conntrack_summary = {"available": False, "source": "capture", "total": 0, "wan": 0, "lan": 0, "rawTotal": 0, "mode": "active"}
     collector.socket_map = {}
     collector.conn_totals = {}
@@ -205,10 +206,62 @@ def test_go_connections_empty_list_falls_back_to_local_connections():
     assert result["summary"]["total"] == 1
 
 
+def test_history_persist_prefers_go_snapshot_when_available_and_ignores_empty_local_snapshot():
+    collector = make_collector()
+    collector.go_collector_available = True
+    collector.last_persist_totals = None
+
+    go_interfaces = {
+        "eth1": {
+            "detail": {
+                "name": "eth1",
+                "isUp": True,
+                "captured": True,
+                "virtual": False,
+                "defaultRoute": True,
+            },
+            "scopes": {
+                "wan": {
+                    "rxBytes": 1000,
+                    "txBytes": 2000,
+                    "rxPackets": 10,
+                    "txPackets": 20,
+                    "totalBytes": 3000,
+                    "firstSeen": 1,
+                    "lastSeen": 2,
+                    "durationSeconds": 1,
+                }
+            },
+            "system": {
+                "rxBytes": 4000,
+                "txBytes": 5000,
+                "rxPackets": 30,
+                "txPackets": 40,
+            },
+        }
+    }
+
+    with patch.object(main, "go_snapshot", return_value={"interfaces": go_interfaces}):
+        persist_interfaces = collector.history_persist_interfaces({})
+
+    assert persist_interfaces == go_interfaces
+
+    collector.persist_minute(persist_interfaces, 12345)
+    assert collector.last_persist_totals["eth1"]["wan"]["rxBytes"] == 1000
+
+    with patch.object(main, "go_snapshot", return_value={"interfaces": {}}):
+        empty_result = collector.history_persist_interfaces({})
+
+    assert empty_result == {}
+    collector.persist_minute(empty_result, 12346)
+    assert collector.last_persist_totals["eth1"]["wan"]["rxBytes"] == 1000
+
+
 if __name__ == "__main__":
     test_go_snapshot_empty_interfaces_falls_back_to_local_interfaces()
     test_go_snapshot_prefers_conntrack_summary_for_router_like_connection_counts()
     test_go_snapshot_uses_socket_summary_when_go_conntrack_is_unavailable()
     test_go_processes_empty_list_falls_back_to_local_rank()
     test_go_connections_empty_list_falls_back_to_local_connections()
+    test_history_persist_prefers_go_snapshot_when_available_and_ignores_empty_local_snapshot()
     print("go snapshot merge tests passed")
