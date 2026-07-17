@@ -184,6 +184,6 @@ Build amd64 tags `latest`, `latest-amd64`, `2026.07.17-1`, `2026.07.17-1-amd64`;
 
 Use `docker image inspect` for architecture and run each architecture image with `cat /app/VERSION`; both must report `2026.07.17-1`.
 
-- [ ] **Step 5: Commit and push GitHub**
+- [x] **Step 5: Commit and push GitHub**
 
 Run `git add` for the plan, source, tests, compose, docs and version; commit with `feat: simplify compose runtime configuration`; push `main` to `origin`.
