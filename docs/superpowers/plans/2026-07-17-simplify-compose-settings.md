@@ -29,7 +29,7 @@
 - Consumes: `server.main.env_bool`, `server.main.RuntimeSettingsPayload`, `docker-compose.yml`, `docker-compose.nas.yml`.
 - Produces: regression checks for compose environment keys, required mounts, and Docker discovery defaults.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 import os
@@ -57,13 +57,13 @@ def test_docker_discovery_defaults_on_and_can_be_disabled():
     assert main.RuntimeSettingsPayload().dockerDiscovery is True
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `python3 server/tests/test_deployment_config.py`
 
 Expected: fail because compose contains extra variables and `env_bool`/`dockerDiscovery` do not exist.
 
-- [ ] **Step 3: Leave tests failing until Tasks 2 and 3 implement the behavior**
+- [x] **Step 3: Leave tests failing until Tasks 2 and 3 implement the behavior**
 
 No production code is changed in this task.
 
@@ -78,7 +78,7 @@ No production code is changed in this task.
 - Consumes: existing `RuntimeSettingsPayload`, `TrafficCollector.load_saved_settings`, `TrafficCollector.update_runtime_settings`.
 - Produces: `env_bool(name: str, default: bool) -> bool` and `RuntimeSettingsPayload.dockerDiscovery: bool`.
 
-- [ ] **Step 1: Add environment boolean parsing and default Docker discovery to enabled**
+- [x] **Step 1: Add environment boolean parsing and default Docker discovery to enabled**
 
 ```python
 def env_bool(name: str, default: bool) -> bool:
@@ -91,7 +91,7 @@ DEFAULT_ENABLE_DOCKER_DISCOVERY = env_bool("ENABLE_DOCKER_DISCOVERY", True)
 ENABLE_DOCKER_DISCOVERY = DEFAULT_ENABLE_DOCKER_DISCOVERY
 ```
 
-- [ ] **Step 2: Add Docker discovery to SQLite runtime settings**
+- [x] **Step 2: Add Docker discovery to SQLite runtime settings**
 
 ```python
 class RuntimeSettingsPayload(BaseModel):
@@ -101,11 +101,11 @@ class RuntimeSettingsPayload(BaseModel):
 
 `load_saved_settings()` constructs `RuntimeSettingsPayload(**(runtime or {}))`, applies all values including `dockerDiscovery`, and writes `runtime_settings` to SQLite when no row exists. `update_runtime_settings()` applies and saves the same field, invalidates the Docker list cache, and refreshes container metadata.
 
-- [ ] **Step 3: Add the Web toggle**
+- [x] **Step 3: Add the Web toggle**
 
 Add a checkbox/toggle bound to `runtimeForm.dockerDiscovery` in the editable runtime settings card. Keep Docker socket path read-only in the startup information card.
 
-- [ ] **Step 4: Run the configuration tests**
+- [x] **Step 4: Run the configuration tests**
 
 Run: `python3 server/tests/test_deployment_config.py`
 
@@ -124,7 +124,7 @@ Expected: Docker default assertions pass; compose assertions remain failing unti
 - Consumes: bootstrap defaults `/data/traffic.db`, `/logs`, port `8088`, password example `123456`.
 - Produces: two minimal compose templates and aligned deployment documentation.
 
-- [ ] **Step 1: Replace compose environment and volume sections**
+- [x] **Step 1: Replace compose environment and volume sections**
 
 Both compose files use exactly:
 
@@ -138,11 +138,11 @@ volumes:
   - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-- [ ] **Step 2: Rewrite deployment guidance**
+- [x] **Step 2: Rewrite deployment guidance**
 
 README examples match `docker-compose.nas.yml`. Explain that monitoring, notifications, Docker discovery, sampling and retention are configured in the Web UI and stored in SQLite. Move low-level environment variables under an explicitly optional advanced section.
 
-- [ ] **Step 3: Run configuration tests**
+- [x] **Step 3: Run configuration tests**
 
 Run: `python3 server/tests/test_deployment_config.py`
 
@@ -157,7 +157,7 @@ Expected: all deployment configuration tests pass.
 - Consumes: completed implementation and tests.
 - Produces: version `2026.07.17-1`, local amd64/arm64 images, Git commit, and GitHub `main` push.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run:
 
@@ -172,15 +172,15 @@ docker compose -f docker-compose.nas.yml config
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Bump version**
+- [x] **Step 2: Bump version**
 
 Set `VERSION` to `2026.07.17-1`, then rerun `python3 server/tests/test_deployment_config.py`.
 
-- [ ] **Step 3: Build Docker images**
+- [x] **Step 3: Build Docker images**
 
 Build amd64 tags `latest`, `latest-amd64`, `2026.07.17-1`, `2026.07.17-1-amd64`; build arm64 tags `latest-arm64`, `2026.07.17-1-arm64`. Use `--load` and do not push Docker Hub.
 
-- [ ] **Step 4: Verify image architecture and embedded version**
+- [x] **Step 4: Verify image architecture and embedded version**
 
 Use `docker image inspect` for architecture and run each architecture image with `cat /app/VERSION`; both must report `2026.07.17-1`.
 

@@ -51,6 +51,13 @@ from server.services.go_collector_client import (
 APP_NAME = "NAS Traffic Lens"
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_app_version() -> str:
     version_file = Path(os.getenv("APP_VERSION_FILE", Path(__file__).resolve().parents[1] / "VERSION"))
     try:
@@ -69,7 +76,8 @@ DEFAULT_RETENTION_SECONDS = int(os.getenv("RETENTION_SECONDS", "3600"))
 DEFAULT_CONNECTION_ACTIVE_SECONDS = int(os.getenv("CONNECTION_ACTIVE_SECONDS", "120"))
 DEFAULT_CONNECTION_RETENTION_SECONDS = int(os.getenv("CONNECTION_RETENTION_SECONDS", "900"))
 CONNECTION_COUNT_SOURCE = os.getenv("CONNECTION_COUNT_SOURCE", "conntrack").strip().lower()
-DEFAULT_AUTO_START_STAGE = os.getenv("AUTO_START_STAGE", "true").strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_AUTO_START_STAGE = env_bool("AUTO_START_STAGE", True)
+DEFAULT_ENABLE_DOCKER_DISCOVERY = env_bool("ENABLE_DOCKER_DISCOVERY", True)
 MIN_CONNTRACK_REFRESH_SECONDS = int(os.getenv("MIN_CONNTRACK_REFRESH_SECONDS", "15"))
 DEFAULT_CONNTRACK_REFRESH_SECONDS = max(MIN_CONNTRACK_REFRESH_SECONDS, int(os.getenv("CONNTRACK_REFRESH_SECONDS", "30")))
 DOCKER_WEB_PROBE_TTL_SECONDS = int(os.getenv("DOCKER_WEB_PROBE_TTL_SECONDS", "86400"))
@@ -134,7 +142,7 @@ PERSIST_INTERVAL_SECONDS = DEFAULT_PERSIST_INTERVAL_SECONDS
 HISTORY_RETENTION_DAYS = DEFAULT_HISTORY_RETENTION_DAYS
 FRONTEND_DIR = Path(os.getenv("FRONTEND_DIR", Path(__file__).resolve().parents[1] / "front-end"))
 DB_PATH = Path(os.getenv("DB_PATH", "/data/traffic.db"))
-ENABLE_DOCKER_DISCOVERY = os.getenv("ENABLE_DOCKER_DISCOVERY", "false").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_DOCKER_DISCOVERY = DEFAULT_ENABLE_DOCKER_DISCOVERY
 DOCKER_SOCKET = os.getenv("DOCKER_SOCKET", "/var/run/docker.sock")
 
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
@@ -599,6 +607,25 @@ class RuntimeSettingsPayload(BaseModel):
     connectionRetentionSeconds: int = Field(default=DEFAULT_CONNECTION_RETENTION_SECONDS, ge=60, le=86400)
     conntrackRefreshSeconds: int = Field(default=DEFAULT_CONNTRACK_REFRESH_SECONDS, ge=2, le=300)
     autoStartStage: bool = DEFAULT_AUTO_START_STAGE
+    dockerDiscovery: bool = DEFAULT_ENABLE_DOCKER_DISCOVERY
+
+
+def apply_runtime_settings(settings: RuntimeSettingsPayload) -> RuntimeSettingsPayload:
+    global SAMPLE_SECONDS, RETENTION_SECONDS, CONNECTION_ACTIVE_SECONDS, CONNECTION_RETENTION_SECONDS
+    global AUTO_START_STAGE, CONNTRACK_REFRESH_SECONDS, PERSIST_INTERVAL_SECONDS, HISTORY_RETENTION_DAYS
+    global ENABLE_DOCKER_DISCOVERY
+
+    SAMPLE_SECONDS = float(settings.sampleSeconds)
+    RETENTION_SECONDS = int(settings.retentionSeconds)
+    PERSIST_INTERVAL_SECONDS = int(settings.persistIntervalSeconds)
+    HISTORY_RETENTION_DAYS = int(settings.historyRetentionDays)
+    CONNECTION_ACTIVE_SECONDS = int(settings.connectionActiveSeconds)
+    CONNECTION_RETENTION_SECONDS = int(settings.connectionRetentionSeconds)
+    CONNTRACK_REFRESH_SECONDS = max(MIN_CONNTRACK_REFRESH_SECONDS, int(settings.conntrackRefreshSeconds))
+    settings.conntrackRefreshSeconds = CONNTRACK_REFRESH_SECONDS
+    AUTO_START_STAGE = bool(settings.autoStartStage)
+    ENABLE_DOCKER_DISCOVERY = bool(settings.dockerDiscovery)
+    return settings
 
 
 class NotificationTestPayload(BaseModel):
@@ -2257,8 +2284,6 @@ class TrafficCollector:
         }
 
     def load_saved_settings(self) -> None:
-        global SAMPLE_SECONDS, RETENTION_SECONDS, CONNECTION_ACTIVE_SECONDS, CONNECTION_RETENTION_SECONDS
-        global AUTO_START_STAGE, CONNTRACK_REFRESH_SECONDS, PERSIST_INTERVAL_SECONDS, HISTORY_RETENTION_DAYS
         alerts = self.db.get_setting("alerts")
         notify = self.db.get_setting("notify")
         rules = self.db.get_setting("monitor_rules")
@@ -2302,23 +2327,21 @@ class TrafficCollector:
             except Exception as exc:
                 print(f"ignore invalid saved notify settings: {exc}", flush=True)
 
-        if runtime:
-            try:
-                settings = RuntimeSettingsPayload(**runtime)
-                SAMPLE_SECONDS = float(settings.sampleSeconds)
-                RETENTION_SECONDS = int(settings.retentionSeconds)
-                PERSIST_INTERVAL_SECONDS = int(settings.persistIntervalSeconds)
-                HISTORY_RETENTION_DAYS = int(settings.historyRetentionDays)
-                CONNECTION_ACTIVE_SECONDS = int(settings.connectionActiveSeconds)
-                CONNECTION_RETENTION_SECONDS = int(settings.connectionRetentionSeconds)
-                CONNTRACK_REFRESH_SECONDS = max(MIN_CONNTRACK_REFRESH_SECONDS, int(settings.conntrackRefreshSeconds))
-                AUTO_START_STAGE = bool(settings.autoStartStage)
-            except Exception as exc:
-                print(f"ignore invalid saved runtime settings: {exc}", flush=True)
+        try:
+            runtime_settings = RuntimeSettingsPayload(**(runtime or {}))
+        except Exception as exc:
+            print(f"ignore invalid saved runtime settings: {exc}", flush=True)
+            runtime_settings = RuntimeSettingsPayload()
+        apply_runtime_settings(runtime_settings)
+        if hasattr(self, "container_status"):
+            self.container_status["enabled"] = ENABLE_DOCKER_DISCOVERY
 
         if docker_overrides and isinstance(docker_overrides.get("containers"), dict):
             self.docker_overrides = docker_overrides
 
+        self.db.set_setting("runtime_settings", runtime_settings.model_dump())
+        self.db.set_setting("monitor_rules", {"rules": self.monitor_rules})
+        self.db.set_setting("notification_channels", {"channels": self.notification_channels})
         self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
         self.sync_legacy_settings()
 
@@ -3853,19 +3876,14 @@ class TrafficCollector:
         return self.get_settings()
 
     def update_runtime_settings(self, payload: RuntimeSettingsPayload) -> dict:
-        global SAMPLE_SECONDS, RETENTION_SECONDS, CONNECTION_ACTIVE_SECONDS, CONNECTION_RETENTION_SECONDS
-        global AUTO_START_STAGE, CONNTRACK_REFRESH_SECONDS, PERSIST_INTERVAL_SECONDS, HISTORY_RETENTION_DAYS
-        settings = RuntimeSettingsPayload(**payload.model_dump())
-        SAMPLE_SECONDS = float(settings.sampleSeconds)
-        RETENTION_SECONDS = int(settings.retentionSeconds)
-        PERSIST_INTERVAL_SECONDS = int(settings.persistIntervalSeconds)
-        HISTORY_RETENTION_DAYS = int(settings.historyRetentionDays)
-        CONNECTION_ACTIVE_SECONDS = int(settings.connectionActiveSeconds)
-        CONNECTION_RETENTION_SECONDS = int(settings.connectionRetentionSeconds)
-        CONNTRACK_REFRESH_SECONDS = max(MIN_CONNTRACK_REFRESH_SECONDS, int(settings.conntrackRefreshSeconds))
-        settings.conntrackRefreshSeconds = CONNTRACK_REFRESH_SECONDS
-        AUTO_START_STAGE = bool(settings.autoStartStage)
+        previous_docker_discovery = ENABLE_DOCKER_DISCOVERY
+        settings = apply_runtime_settings(RuntimeSettingsPayload(**payload.model_dump()))
         self.db.set_setting("runtime_settings", settings.model_dump())
+        if previous_docker_discovery != ENABLE_DOCKER_DISCOVERY:
+            with self.lock:
+                self.last_container_refresh = 0.0
+                self.container_status["enabled"] = ENABLE_DOCKER_DISCOVERY
+            self.refresh_container_ports(force=True)
         return self.get_settings()
 
     def test_notification_channel(self, channel_id: str) -> dict:

@@ -42,7 +42,7 @@ NAS Traffic Lens 是一个面向极空间、家庭 NAS 和 x86/ARM Linux 主机�
 - `network_mode: host`
 - `pid: host`
 - `privileged: true`
-- 可选映射 `/var/run/docker.sock`
+- 默认映射 `/var/run/docker.sock`，用于 Docker 容器发现和保护规则
 
 ## 快速部署
 
@@ -88,74 +88,16 @@ services:
     platform: linux/amd64
     privileged: true
     environment:
+      # Web 服务监听端口；host 网络模式下无需配置 ports。
       APP_PORT: "8088"
-      SAMPLE_SECONDS: "1"
-      RETENTION_SECONDS: "3600"
-      DB_PATH: "/data/traffic.db"
-      LOG_DIR: "/logs"
-      ENABLE_DOCKER_DISCOVERY: "false"
-      DOCKER_LIST_CACHE_SECONDS: "20"
-      DOCKER_STATS_CACHE_SECONDS: "5"
-      DOCKER_WEB_PROBE_TTL_SECONDS: "86400"
-      DOCKER_WEB_PROBE_TIMEOUT: "1"
-      DOCKER_API_MAX_BYTES: "2097152"
-      COLLECTOR_MODE: "auto"
-      COLLECTOR_PROFILE: "balanced"
-      GO_COLLECTOR_ENABLED: "true"
-      ENABLE_PACKET_CAPTURE: "true"
-      CAPTURE_MAX_EVENTS_PER_SECOND: "2000"
-      CAPTURE_SAMPLE_RATE: "1"
-      CAPTURE_DYNAMIC_SAMPLE: "true"
-      CAPTURE_MAX_SAMPLE_RATE: "50"
-      ENABLE_SYSTEM_TRAFFIC_CALIBRATION: "true"
-      SYSTEM_TRAFFIC_CALIBRATION_THRESHOLD: "1.25"
-      SYSTEM_TRAFFIC_CALIBRATION_MIN_BYTES: "262144"
-      SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR: "20"
-      SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN: "false"
-      MAX_RATE_HISTORY_POINTS: "180"
-      PROCESS_RECENT_SECONDS: "180"
-      MAX_CONNECTION_TRACKED: "10000"
-      MAX_PROCESS_TRACKED: "2048"
-      MAX_PORT_TRACKED: "4096"
-      MAX_DOCKER_CACHE_ENTRIES: "512"
-      MAX_DOCKER_ICON_DATA_CHARS: "2097152"
-      UVICORN_ACCESS_LOG: "false"
-      FILE_LOG: "true"
-      CONSOLE_LOG: "true"
+      # 首次部署请修改。留空或删除该项会关闭登录验证。
       DASHBOARD_PASSWORD: "123456"
-      ALERT_WAN_TX_BPS: "10485760"
-      ALERT_WAN_TX_SECONDS: "300"
-      ALERT_STAGE_TX_BYTES: "10737418240"
-      ALERT_DAILY_TX_BYTES: "53687091200"
-      ALERT_NOTIFY_CHANNEL: "webhook"
-      ALERT_WEBHOOK_URL: ""
-      ALERT_WEBHOOK_TIMEOUT: "5"
-      CONNECTION_ACTIVE_SECONDS: "120"
-      CONNECTION_RETENTION_SECONDS: "900"
-      AUTO_START_STAGE: "true"
-      CONNECTION_COUNT_SOURCE: "conntrack"
-      CONNTRACK_REFRESH_SECONDS: "30"
-      CONNTRACK_COUNT_MODE: "active"
-      CONNTRACK_TCP_STATES: "ESTABLISHED"
-      CONNTRACK_UDP_REQUIRE_ASSURED: "true"
-      CONNTRACK_INCLUDE_UNREPLIED: "false"
-      CONNTRACK_MIN_TIMEOUT_SECONDS: "3"
-      CONNTRACK_MAX_LINES: "30000"
-      CONNTRACK_SCAN_SECONDS: "1"
-      CONNTRACK_CONNECTION_MAX_LINES: "30000"
-      CONNTRACK_CONNECTION_SCAN_SECONDS: "1.5"
-      SOCKET_REFRESH_SECONDS: "60"
-      PROC_SCAN_TIMEOUT_SECONDS: "1"
-      MAX_PROC_FD_LINKS: "60000"
-      MAX_PROC_NET_LINES: "60000"
-      # CAPTURE_INTERFACES: "eth0"
     volumes:
+      # SQLite、上传图标和日志持久化。
       - ./data:/data
       - ./logs:/logs
-      # 需要 Docker 容器名、端口映射、容器列表时再打开。
-      # Docker socket 权限很高，确认需要后再启用。
-      # 同时需要设置 ENABLE_DOCKER_DISCOVERY: "true"
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
+      # 默认启用 Docker 容器发现、端口识别和容器保护。
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     # 可选：暴露 Intel 核显 / NPU 设备，极空间 UI 支持 devices 时再打开。
     # devices:
     #   - /dev/dri:/dev/dri
@@ -300,16 +242,30 @@ docker push isle204/nas-traffic-lens:arm64
 
 日常部署推荐使用 `latest`，这样文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag，例如当前 `VERSION` 文件中的版本。
 
-## 环境变量
+## 配置方式
+
+普通部署只需要 compose 中的 `APP_PORT` 和 `DASHBOARD_PASSWORD`。监控规则、通知渠道、消息模板、采样间隔、历史保留、连接窗口、Conntrack 刷新、阶段统计和 Docker 自动发现都可以在“监控中心”修改，并写入 `/data/traffic.db`。
+
+首次启动没有 SQLite 配置时，程序使用代码默认值；保存后 SQLite 配置优先于对应环境变量。因此更新镜像时不需要把几十个默认参数复制到 compose。
+
+### 启动期环境变量
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `APP_PORT` | `8088` | Web 服务端口 |
 | `DASHBOARD_PASSWORD` | 空 | 设置后启用访问密码 |
-| `APP_SECRET` | 空 | 会话签名密钥；不填时根据密码派生，生产环境建议设置 |
+| `APP_SECRET` | 空 | 会话签名密钥；不填时根据密码派生 |
+| `DB_PATH` | `/data/traffic.db` | SQLite 路径；推荐保持默认并映射 `/data` |
+| `LOG_DIR` | `/logs` | 日志目录；推荐保持默认并映射 `/logs` |
+| `CAPTURE_INTERFACES` | 自动 | 高级选项，指定抓包网卡，逗号分隔 |
+
+### 高级环境变量覆盖（可选）
+
+下表用于诊断、低负载调优或首次启动默认值覆盖，不需要放进推荐 compose。已有 SQLite 运行配置时，页面保存值优先。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
 | `SESSION_TTL_SECONDS` | `604800` | 登录会话有效期，默认 7 天 |
-| `DB_PATH` | `/data/traffic.db` | SQLite 数据库路径 |
-| `LOG_DIR` | `/logs` | 日志目录 |
 | `UVICORN_ACCESS_LOG` | `false` | 是否开启 HTTP access log，默认关闭以降低写盘 |
 | `FILE_LOG` | `true` | 是否写入 `LOG_DIR` 文件；设为 `false` 时直接输出到容器 stdout/stderr |
 | `CONSOLE_LOG` | `true` | 是否把日志同步输出到容器控制台 |
@@ -321,7 +277,6 @@ docker push isle204/nas-traffic-lens:arm64
 | `COLLECTOR_MODE` | `auto` | 采集后端：`auto`/`golibpcap`/`python`/`off`；`ebpf` 目前仅实验提示并回退 Go |
 | `GO_COLLECTOR_ENABLED` | `true` | 是否允许启动 Go libpcap 外部采集器 |
 | `ENABLE_PACKET_CAPTURE` | `true` | 是否启用抓包归因；关闭后公网累计和进程流量会不可用或变少 |
-| `CAPTURE_INTERFACES` | 自动 | 指定抓包接口，逗号分隔；`all` 表示抓所有启用接口 |
 | `CAPTURE_MAX_EVENTS_PER_SECOND` | `2000` | 抓包每秒精确记录阈值，超过后动态抽样并按倍率折算 |
 | `CAPTURE_SAMPLE_RATE` | `1` | 固定抓包采样率，`1` 表示不固定抽样 |
 | `CAPTURE_DYNAMIC_SAMPLE` | `true` | 高包量时是否自动抽样并按倍率折算流量 |
@@ -332,7 +287,7 @@ docker push isle204/nas-traffic-lens:arm64
 | `SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR` | `20` | 单次校准最大补齐倍率 |
 | `SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN` | `false` | 抓包没有公网/内网比例时是否默认补到公网 |
 | `MAX_RATE_HISTORY_POINTS` | `180` | 内存中的实时速率诊断点数，历史图表使用 SQLite |
-| `ENABLE_DOCKER_DISCOVERY` | `false` | 是否读取 Docker socket 自动发现容器和端口 |
+| `ENABLE_DOCKER_DISCOVERY` | `true` | 首次启动的 Docker 发现默认值；之后可在监控中心修改 |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket 路径 |
 | `DOCKER_LIST_CACHE_SECONDS` | `20` | Docker 容器列表缓存秒数 |
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数 |
@@ -374,7 +329,7 @@ docker push isle204/nas-traffic-lens:arm64
 | `MAX_PROC_NET_LINES` | `60000` | 单个 `/proc/net/*` 文件最多读取行数 |
 | `INTERFACE_REFRESH_SECONDS` | `30` | 网卡元信息刷新间隔 |
 
-页面“监控中心”可以修改监控规则、通知渠道、消息模板和部分运行参数。页面保存后的配置会写入 SQLite，优先级高于环境变量。端口、日志目录、Docker 发现、Docker socket、抓包接口属于启动期配置，修改后需要重启容器。
+端口、密码、数据库路径、日志路径、Docker socket 和抓包接口属于部署边界；其余常用配置优先在监控中心修改。
 
 ## 数据和日志
 
@@ -384,6 +339,7 @@ docker push isle204/nas-traffic-lens:arm64
 volumes:
   - ./data:/data
   - ./logs:/logs
+  - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
 文件说明：
@@ -409,22 +365,14 @@ docker restart nas-traffic-lens
 
 ## Docker 容器发现
 
-默认关闭 Docker 自动发现：
+推荐 compose 默认映射 Docker socket 并开启自动发现，可在页面显示容器列表、端口、备注、快捷访问和容器保护状态：
 
 ```yaml
-ENABLE_DOCKER_DISCOVERY: "false"
-```
-
-如果需要在页面显示容器列表、容器端口、端口备注和快捷访问，打开：
-
-```yaml
-environment:
-  ENABLE_DOCKER_DISCOVERY: "true"
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-Docker socket 权限很高，即使只读映射也能暴露大量宿主 Docker 信息。只在内网可信环境使用。
+Docker socket 权限很高，即使只读映射也允许调用 Docker API。只在内网可信环境使用。不需要 Docker 功能时，可在监控中心关闭“Docker 自动发现”并删除 socket 挂载；首次启动也可用 `ENABLE_DOCKER_DISCOVERY=false` 覆盖默认值。
 
 性能策略：
 
@@ -484,7 +432,7 @@ tail -f ./logs/uvicorn-error.log
 - 只抓必要网卡，设置 `CAPTURE_INTERFACES: "eth0"` 或实际物理网卡名。
 - 保持默认只展示物理网卡，需要排查时再切换“全部接口”。
 - 保持 Docker stats 按需查看，不要让页面长期打开大量容器详情。
-- `ENABLE_DOCKER_DISCOVERY` 出问题时先设为 `false`，再确认 Docker socket 是否可映射。
+- Docker 发现异常时先在监控中心关闭“Docker 自动发现”，再确认 Docker socket 是否可映射。
 - 查看 `/api/diagnostics` 可以看到当前 RSS 内存、线程数、连接缓存、进程缓存、Docker 缓存规模。
 
 ### 运行几天后 CPU 或内存变高
@@ -526,10 +474,9 @@ CONNTRACK_CONNECTION_MAX_LINES: "15000"
 CAPTURE_INTERFACES: "eth0"
 ```
 
-如果 Docker 引擎或宿主负载异常，先用保守模式验证：
+如果 Docker 引擎或宿主负载异常，先在监控中心关闭 Docker 自动发现，并用以下高级覆盖验证：
 
 ```yaml
-ENABLE_DOCKER_DISCOVERY: "false"
 CONNECTION_COUNT_SOURCE: "socket"
 ENABLE_PACKET_CAPTURE: "false"
 FILE_LOG: "false"

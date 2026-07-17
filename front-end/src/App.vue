@@ -294,6 +294,14 @@
               <label>活跃连接窗口秒<input v-model.number="runtimeForm.connectionActiveSeconds" type="number" min="10" /></label>
               <label>连接缓存秒<input v-model.number="runtimeForm.connectionRetentionSeconds" type="number" min="60" /></label>
               <label>Conntrack 刷新秒<input v-model.number="runtimeForm.conntrackRefreshSeconds" type="number" :min="settings?.runtime?.minConntrackRefreshSeconds || 15" /></label>
+              <div class="field-block">
+                <span>Docker 自动发现</span>
+                <label class="switch"><input v-model="runtimeForm.dockerDiscovery" type="checkbox" />启用</label>
+              </div>
+              <div class="field-block">
+                <span>阶段统计</span>
+                <label class="switch"><input v-model="runtimeForm.autoStartStage" type="checkbox" />自动启动</label>
+              </div>
             </div>
           </section>
 
@@ -303,7 +311,7 @@
               <InfoItem label="端口" :value="settings?.runtime?.appPort" />
               <InfoItem label="数据库" :value="settings?.runtime?.dbPath" />
               <InfoItem label="日志目录" :value="settings?.runtime?.logDir" />
-              <InfoItem label="Docker 发现" :value="settings?.runtime?.dockerDiscovery ? '启用' : '关闭'" />
+              <InfoItem label="Docker Socket" :value="settings?.runtime?.dockerSocket || '-'" />
               <InfoItem label="采集档位" :value="`${settings?.runtime?.collectorProfile || '-'} / ${settings?.runtime?.collectorMode || '-'}`" />
               <InfoItem label="Go 采集器" :value="settings?.runtime?.goCollectorAvailable ? '运行中' : (settings?.runtime?.goCollectorEnabled ? '未接入' : '关闭')" />
               <InfoItem label="抓包接口" :value="(settings?.runtime?.captureInterfaces || []).join('、') || '-'" />

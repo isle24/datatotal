@@ -49,7 +49,28 @@ docker compose up -d --build
 http://NAS-IP:8088
 ```
 
-如果 8088 端口被占用，设置环境变量 `APP_PORT`，默认是 `8088`。
+推荐 compose 只需要保留端口、密码和三个持久化挂载：
+
+```yaml
+services:
+  nas-traffic-lens:
+    image: isle204/nas-traffic-lens:latest
+    container_name: nas-traffic-lens
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    platform: linux/amd64
+    privileged: true
+    environment:
+      APP_PORT: "8088"
+      DASHBOARD_PASSWORD: "123456"
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+如果 8088 端口被占用，修改 `APP_PORT`。首次部署请修改示例密码。
 
 ## amd64 打包
 
@@ -90,7 +111,11 @@ docker push isle204/nas-traffic-lens:latest
 docker compose -f docker-compose.nas.yml up -d
 ```
 
-## 环境变量
+## 配置方式
+
+普通用户不需要把所有默认值写进 compose。监控规则、通知渠道、消息模板、采样与历史保留、连接窗口、阶段统计和 Docker 自动发现都可以在监控中心修改，并保存到 SQLite。首次启动使用代码默认值，之后 SQLite 值优先。
+
+下面的环境变量仅用于启动边界、首次启动默认值和高级诊断覆盖：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -117,7 +142,7 @@ docker compose -f docker-compose.nas.yml up -d
 | `SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN` | `false` | 抓包没有公网/内网比例时是否默认补到公网 |
 | `MAX_RATE_HISTORY_POINTS` | `180` | 内存实时速率诊断点数，历史图表使用 SQLite |
 | `HISTORY_RETENTION_DAYS` | `400` | SQLite 历史数据保留天数 |
-| `ENABLE_DOCKER_DISCOVERY` | `false` | 是否读取 Docker socket 自动识别容器名 |
+| `ENABLE_DOCKER_DISCOVERY` | `true` | 首次启动的 Docker 发现默认值；之后可在监控中心修改 |
 | `DOCKER_LIST_CACHE_SECONDS` | `20` | Docker 容器列表缓存秒数，避免频繁扫 socket |
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数，只对已点开“显示占用”的容器生效 |
 | `DOCKER_WEB_PROBE_TTL_SECONDS` | `86400` | 端口是否 Web 的探测缓存秒数 |
@@ -157,7 +182,7 @@ docker compose -f docker-compose.nas.yml up -d
 | `MAX_PROC_FD_LINKS` | `60000` | 单次最多读取的进程 fd 链接数 |
 | `MAX_PROC_NET_LINES` | `60000` | 单个 `/proc/net/*` 文件最多读取行数 |
 
-监控规则、通知渠道和部分运行参数都可以在页面“监控中心”里修改。页面保存后的值会写入 SQLite，并优先于环境变量。端口、日志目录、Docker 发现、抓包接口这类启动期配置会在页面只读展示，修改仍建议通过 compose 环境变量并重启容器。
+端口、密码、数据库路径、日志路径、Docker socket 和抓包接口属于部署边界；其余常用配置优先在监控中心修改。
 
 ## 通知渠道和模板
 
@@ -244,16 +269,14 @@ ip link
 
 ## Docker 容器识别和备注
 
-连接表会优先显示 Docker 容器名、镜像名和端口映射。为了让容器内能读取 Docker 容器列表，需要可选映射 Docker socket：
+连接表会优先显示 Docker 容器名、镜像名和端口映射。推荐 compose 默认映射 Docker socket：
 
 ```yaml
-environment:
-  ENABLE_DOCKER_DISCOVERY: "true"
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-Docker socket 权限很高，所以默认关闭自动发现。只有你确认需要容器名自动识别时，再开启 `ENABLE_DOCKER_DISCOVERY` 并映射 socket。
+Docker 自动发现默认开启，也可以在监控中心关闭。Docker socket 权限很高，即使只读映射也允许调用 Docker API，因此只应在可信内网环境使用。不需要 Docker 功能时，关闭自动发现并删除该挂载。
 
 如果极空间 UI 不允许映射 Docker socket，服务仍然可用，只是容器名自动识别会缺失。新版会把 Docker 发现失败降级为空，不应该导致容器重启。可以通过 `/api/health` 或 `/api/snapshot` 里的 `containerStatus` 查看是否启用、socket 路径和识别到的端口数量。
 
@@ -322,10 +345,9 @@ devices:
 
 如果 NAS CPU 余量足，可以把 `CAPTURE_MAX_EVENTS_PER_SECOND` 提到 `5000`，或把 `CAPTURE_MAX_SAMPLE_RATE` 提到 `100`。
 
-如果宿主或 Docker 引擎负载异常，可以先用保守模式定位压力来源：
+如果宿主或 Docker 引擎负载异常，可以先在监控中心关闭 Docker 自动发现，再用高级覆盖定位压力来源：
 
 ```yaml
-ENABLE_DOCKER_DISCOVERY: "false"
 CONNECTION_COUNT_SOURCE: "socket"
 ENABLE_PACKET_CAPTURE: "false"
 FILE_LOG: "false"
