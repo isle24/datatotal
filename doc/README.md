@@ -276,7 +276,7 @@ volumes:
   - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-Docker 自动发现默认开启，也可以在监控中心关闭。Docker socket 权限很高，即使只读映射也允许调用 Docker API，因此只应在可信内网环境使用。不需要 Docker 功能时，关闭自动发现并删除该挂载。
+Docker 自动发现默认开启，也可以在监控中心关闭。Docker socket 应视为主机级控制权限：`:ro` 只限制挂载点的文件系统写入，不会把 Docker API 变成只读；容器保护会通过它执行 `restart`/`stop`。请使用强登录密码并只在可信内网部署。不需要 Docker 功能时，关闭自动发现并删除该挂载。
 
 如果极空间 UI 不允许映射 Docker socket，服务仍然可用，只是容器名自动识别会缺失。新版会把 Docker 发现失败降级为空，不应该导致容器重启。可以通过 `/api/health` 或 `/api/snapshot` 里的 `containerStatus` 查看是否启用、socket 路径和识别到的端口数量。
 

@@ -372,7 +372,7 @@ volumes:
   - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-Docker socket 权限很高，即使只读映射也允许调用 Docker API。只在内网可信环境使用。不需要 Docker 功能时，可在监控中心关闭“Docker 自动发现”并删除 socket 挂载；首次启动也可用 `ENABLE_DOCKER_DISCOVERY=false` 覆盖默认值。
+Docker socket 应视为主机级控制权限：`:ro` 只限制挂载点的文件系统写入，不会把 Docker API 变成只读；本项目的容器保护也会通过它执行 `restart`/`stop`。请使用强登录密码并只在可信内网部署。不需要 Docker 功能时，在监控中心关闭“Docker 自动发现”并删除 socket 挂载；首次启动也可用 `ENABLE_DOCKER_DISCOVERY=false` 覆盖默认值。
 
 性能策略：
 

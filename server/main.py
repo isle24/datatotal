@@ -2327,11 +2327,13 @@ class TrafficCollector:
             except Exception as exc:
                 print(f"ignore invalid saved notify settings: {exc}", flush=True)
 
+        runtime_valid = True
         try:
             runtime_settings = RuntimeSettingsPayload(**(runtime or {}))
         except Exception as exc:
             print(f"ignore invalid saved runtime settings: {exc}", flush=True)
             runtime_settings = RuntimeSettingsPayload()
+            runtime_valid = False
         apply_runtime_settings(runtime_settings)
         if hasattr(self, "container_status"):
             self.container_status["enabled"] = ENABLE_DOCKER_DISCOVERY
@@ -2339,10 +2341,18 @@ class TrafficCollector:
         if docker_overrides and isinstance(docker_overrides.get("containers"), dict):
             self.docker_overrides = docker_overrides
 
-        self.db.set_setting("runtime_settings", runtime_settings.model_dump())
-        self.db.set_setting("monitor_rules", {"rules": self.monitor_rules})
-        self.db.set_setting("notification_channels", {"channels": self.notification_channels})
-        self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
+        if runtime is None:
+            self.db.set_setting("runtime_settings", runtime_settings.model_dump())
+        elif runtime_valid and isinstance(runtime, dict):
+            migrated_runtime = {**runtime, **runtime_settings.model_dump()}
+            if migrated_runtime != runtime:
+                self.db.set_setting("runtime_settings", migrated_runtime)
+        if rules is None:
+            self.db.set_setting("monitor_rules", {"rules": self.monitor_rules})
+        if channels is None:
+            self.db.set_setting("notification_channels", {"channels": self.notification_channels})
+        if protection is None:
+            self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
         self.sync_legacy_settings()
 
     def sync_legacy_settings(self) -> None:
