@@ -36,6 +36,25 @@
       </header>
 
       <section v-if="activeView === 'overview'" class="view">
+        <section class="dashboard-hero card">
+          <div class="dashboard-hero-copy">
+            <span class="dashboard-kicker"><Activity :size="14" /> 实时监控</span>
+            <h3>公网流量总览</h3>
+            <p>{{ lastUpdated }} · {{ connectionSourceLabel }}</p>
+          </div>
+          <div class="dashboard-hero-total">
+            <span>公网累计</span>
+            <strong>↓ {{ formatBytes(summary.wan?.rxBytes) }}</strong>
+            <strong class="tx-value">↑ {{ formatBytes(summary.wan?.txBytes) }}</strong>
+          </div>
+          <div class="dashboard-live-state">
+            <span :class="['live-dot', { pending: !overviewIsFresh }]"></span>
+            <div>
+              <strong>{{ overviewStatusLabel }}</strong>
+              <p>{{ overviewIsFresh ? (overview?.containerStatus?.enabled ? "Docker 已接入" : "Docker 未接入") : "数据等待更新" }}</p>
+            </div>
+          </div>
+        </section>
         <div class="metric-grid">
           <MetricCard title="公网实时下行" accent="blue" :value="formatRate(summary.wan?.rxBps)" @click="openConnections({ scope: 'wan', direction: 'rx' })">
             <ArrowDown :size="18" />
@@ -54,7 +73,7 @@
           </MetricCard>
         </div>
 
-        <div class="grid two">
+        <div class="dashboard-status-grid grid two">
           <section class="card">
             <CardHead title="运行状态" :meta="lastUpdated" />
             <div class="info-grid">
@@ -239,10 +258,16 @@
                 </div>
                 <div class="docker-badges">
                   <span v-if="container.protection?.enabled" class="pill warn">保护</span>
-                  <span :class="['pill', container.state === 'running' ? 'ok' : '']">{{ container.state || "-" }}</span>
+                  <span :class="['state-badge', `state-${dockerStateMeta(container.state).key}`]" :title="container.state || 'unknown'">
+                    <component :is="dockerStateIcon(container.state)" :size="14" />
+                    <span>{{ dockerStateMeta(container.state).label }}</span>
+                  </span>
                 </div>
               </div>
-              <p class="docker-status">{{ container.status || "-" }} · 网络 {{ container.networkMode || "-" }}</p>
+              <p class="docker-status">
+                <span class="status-inline"><component :is="dockerStateIcon(container.state)" :size="14" />{{ dockerStatusLabel(container) }}</span>
+                <span>· 网络 {{ dockerNetworkLabel(container.networkMode) }}</span>
+              </p>
               <p class="docker-status subtle" v-if="container.protection?.enabled">
                 保护规则 {{ container.protection.rules?.length || 0 }} 条 · {{ container.protection.state?.active ? "监控中" : "待命" }}
               </p>
@@ -326,47 +351,76 @@
         </div>
 
         <section class="card">
-          <CardHead title="监控规则" meta="支持多规则多渠道">
+          <CardHead title="监控规则" :meta="`${monitorRules.length} 条 · 支持多规则多渠道`">
             <button type="button" @click="addRule"><Plus :size="16" />新增</button>
             <button type="button" @click="saveRules"><Save :size="16" />保存</button>
           </CardHead>
           <div class="rule-grid">
-            <div v-for="rule in monitorRules" :key="rule.id" class="edit-card">
-              <div class="edit-title">
-                <input v-model="rule.name" />
-                <label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label>
-              </div>
-              <div class="form-grid mini">
-                <label>指标<select v-model="rule.metric"><option v-for="(label, key) in metricLabels" :key="key" :value="key">{{ label }}</option></select></label>
-                <label>阈值<input v-model.number="rule.threshold" type="number" min="0" /></label>
-                <label>持续秒<input v-model.number="rule.durationSeconds" type="number" min="0" /></label>
-                <div class="field-block">
-                  <span>渠道</span>
-                  <div class="channel-checks">
-                    <label v-for="channel in channels" :key="channel.id" class="check-chip">
-                      <input :checked="rule.channelIds?.includes(channel.id)" type="checkbox" @change="toggleRuleChannel(rule, channel.id)" />
-                      {{ channel.name }}
-                    </label>
-                  </div>
+            <div v-for="rule in monitorRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('traffic', rule.id) }]">
+              <div class="edit-title card-summary-row">
+                <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('traffic', rule.id)" @click="toggleMonitorCard('traffic', rule.id)">
+                  <component :is="isMonitorCardExpanded('traffic', rule.id) ? ChevronUp : ChevronDown" :size="16" />
+                  <span>
+                    <strong>{{ rule.name || "未命名规则" }}</strong>
+                    <small>{{ monitorRuleSummary(rule) }}</small>
+                  </span>
+                </button>
+                <div class="summary-actions">
+                  <span :class="['rule-state', rule.enabled ? 'enabled' : 'disabled']">
+                    <component :is="rule.enabled ? CheckCircle2 : CircleOff" :size="14" />{{ rule.enabled ? "启用" : "停用" }}
+                  </span>
                 </div>
               </div>
-              <button class="danger" type="button" @click="removeRule(rule.id)"><Trash2 :size="16" />删除</button>
+              <div v-if="isMonitorCardExpanded('traffic', rule.id)" class="card-editor">
+                <div class="form-grid mini">
+                  <label>规则名称<input v-model="rule.name" /></label>
+                  <div class="field-block"><span>状态</span><label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label></div>
+                  <label>指标<select v-model="rule.metric"><option v-for="(label, key) in metricLabels" :key="key" :value="key">{{ label }}</option></select></label>
+                  <label>阈值<input v-model.number="rule.threshold" type="number" min="0" /></label>
+                  <label>持续秒<input v-model.number="rule.durationSeconds" type="number" min="0" /></label>
+                  <div class="field-block wide">
+                    <span>通知渠道</span>
+                    <div class="channel-checks">
+                      <label v-for="channel in channels" :key="channel.id" class="check-chip">
+                        <input :checked="rule.channelIds?.includes(channel.id)" type="checkbox" @change="toggleRuleChannel(rule, channel.id)" />
+                        {{ channel.name }}
+                      </label>
+                      <span v-if="!channels.length" class="field-hint">请先添加通知渠道</span>
+                    </div>
+                  </div>
+                </div>
+                <button class="danger" type="button" @click="removeRule(rule.id)"><Trash2 :size="16" />删除规则</button>
+              </div>
             </div>
+            <div v-if="!monitorRules.length" class="empty card-empty">暂无流量监控规则</div>
           </div>
         </section>
 
         <section class="card">
-          <CardHead title="容器保护" meta="监控触发后可复用现有告警渠道">
+          <CardHead title="容器保护" :meta="`${containerRules.length} 条 · 监控触发后可复用现有告警渠道`">
             <button type="button" @click="addContainerRule"><Plus :size="16" />新增</button>
             <button type="button" @click="saveContainerRules"><Save :size="16" />保存</button>
           </CardHead>
           <div class="rule-grid">
-            <div v-for="rule in containerRules" :key="rule.id" class="edit-card">
-              <div class="edit-title">
-                <input v-model="rule.name" placeholder="规则名称" />
-                <label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label>
+            <div v-for="rule in containerRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('container', rule.id) }]">
+              <div class="edit-title card-summary-row">
+                <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('container', rule.id)" @click="toggleMonitorCard('container', rule.id)">
+                  <component :is="isMonitorCardExpanded('container', rule.id) ? ChevronUp : ChevronDown" :size="16" />
+                  <span>
+                    <strong>{{ rule.name || "未命名容器保护" }}</strong>
+                    <small>{{ containerProtectionSummary(rule) }}</small>
+                  </span>
+                </button>
+                <div class="summary-actions">
+                  <span :class="['rule-state', rule.enabled ? 'enabled' : 'disabled']">
+                    <component :is="rule.enabled ? ShieldCheck : CircleOff" :size="14" />{{ rule.enabled ? "监控中" : "停用" }}
+                  </span>
+                </div>
               </div>
-              <div class="form-grid mini">
+              <div v-if="isMonitorCardExpanded('container', rule.id)" class="card-editor">
+                <div class="form-grid mini">
+                <label>规则名称<input v-model="rule.name" placeholder="规则名称" /></label>
+                <div class="field-block"><span>状态</span><label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label></div>
                 <div class="field-block wide">
                   <span>选择容器</span>
                   <input
@@ -412,23 +466,38 @@
                   </div>
                 </div>
               </div>
-              <button class="danger" type="button" @click="removeContainerRule(rule.id)"><Trash2 :size="16" />删除</button>
+                <button class="danger" type="button" @click="removeContainerRule(rule.id)"><Trash2 :size="16" />删除规则</button>
+              </div>
             </div>
+            <div v-if="!containerRules.length" class="empty card-empty">暂无容器保护规则</div>
           </div>
         </section>
 
         <section class="card">
-          <CardHead title="通知渠道" meta="Webhook / IYUU / MeoW">
+          <CardHead title="通知渠道" :meta="`${channels.length} 个 · Webhook / IYUU / MeoW`">
             <button type="button" @click="addChannel"><Plus :size="16" />新增</button>
             <button type="button" @click="saveChannels"><Save :size="16" />保存</button>
           </CardHead>
           <div class="channel-grid">
-            <div v-for="channel in channels" :key="channel.id" class="edit-card channel-card">
-              <div class="edit-title">
-                <input v-model="channel.name" />
-                <label class="switch"><input v-model="channel.enabled" type="checkbox" />启用</label>
+            <div v-for="channel in channels" :key="channel.id" :class="['edit-card', 'channel-card', 'collapsible-card', { expanded: isMonitorCardExpanded('channel', channel.id) }]">
+              <div class="edit-title card-summary-row">
+                <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('channel', channel.id)" @click="toggleMonitorCard('channel', channel.id)">
+                  <component :is="isMonitorCardExpanded('channel', channel.id) ? ChevronUp : ChevronDown" :size="16" />
+                  <span>
+                    <strong>{{ channel.name || "未命名渠道" }}</strong>
+                    <small>{{ channelTypeLabel(channel.type) }} · {{ channel.enabled ? "启用" : "停用" }}</small>
+                  </span>
+                </button>
+                <div class="summary-actions">
+                  <span :class="['rule-state', channel.enabled ? 'enabled' : 'disabled']">
+                    <component :is="channel.enabled ? CheckCircle2 : CircleOff" :size="14" />{{ channel.enabled ? "启用" : "停用" }}
+                  </span>
+                </div>
               </div>
-              <div class="form-grid mini">
+              <div v-if="isMonitorCardExpanded('channel', channel.id)" class="card-editor">
+                <div class="form-grid mini">
+                  <label>渠道名称<input v-model="channel.name" /></label>
+                  <div class="field-block"><span>状态</span><label class="switch"><input v-model="channel.enabled" type="checkbox" />启用</label></div>
                 <label>类型<select v-model="channel.type"><option value="webhook">Webhook</option><option value="iyuu">IYUU</option><option value="meow">MeoW</option></select></label>
                 <label>URL<input v-model="channel.url" type="url" placeholder="Webhook 可填；IYUU/MeoW 可留空" /></label>
                 <label>Token / 昵称<input v-model="channel.token" placeholder="IYUU token 或 MeoW 昵称" /></label>
@@ -437,17 +506,19 @@
                 <label>HTML 高度<input v-model.number="channel.htmlHeight" type="number" min="100" max="1200" /></label>
                 <label>跳转 URL 模板<input v-model="channel.urlTemplate" placeholder="可用 {rule_id} 等变量" /></label>
               </div>
-              <div class="template-help">
+                <div class="template-help">
                 <span>可用变量：</span>
                 <code v-for="item in templateVariables" :key="templateKey(item)">{{ templateVar(templateKey(item)) }} · {{ templateLabel(item) }}</code>
-              </div>
-              <label class="textarea-label">标题模板<textarea v-model="channel.titleTemplate" rows="2"></textarea></label>
-              <label class="textarea-label">正文模板<textarea v-model="channel.bodyTemplate" rows="5"></textarea></label>
-              <div class="edit-actions">
-                <button type="button" @click="testChannel(channel.id)"><Send :size="16" />测试</button>
-                <button class="danger" type="button" @click="removeChannel(channel.id)"><Trash2 :size="16" />删除</button>
+                </div>
+                <label class="textarea-label">标题模板<textarea v-model="channel.titleTemplate" rows="2"></textarea></label>
+                <label class="textarea-label">正文模板<textarea v-model="channel.bodyTemplate" rows="5"></textarea></label>
+                <div class="edit-actions">
+                  <button type="button" @click="testChannel(channel.id)"><Send :size="16" />测试</button>
+                  <button class="danger" type="button" @click="removeChannel(channel.id)"><Trash2 :size="16" />删除</button>
+                </div>
               </div>
             </div>
+            <div v-if="!channels.length" class="empty card-empty">暂无通知渠道</div>
           </div>
         </section>
       </section>
@@ -551,12 +622,17 @@ import {
   ArrowDown,
   ArrowUp,
   Bell,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  CircleOff,
   Copy,
   Cpu,
   Database,
   ExternalLink,
   Gauge,
   HardDrive,
+  HelpCircle,
   History,
   ImagePlus,
   Moon,
@@ -568,6 +644,7 @@ import {
   Save,
   Send,
   Server,
+  ShieldCheck,
   Settings,
   Sun,
   Trash2,
@@ -664,6 +741,16 @@ const containerProtectionActions = [
   { value: "restart", label: "重启" },
   { value: "stop", label: "停止" },
 ];
+const dockerStateMetaMap = {
+  running: { key: "running", label: "运行中", icon: CheckCircle2 },
+  exited: { key: "stopped", label: "已停止", icon: CircleOff },
+  stopped: { key: "stopped", label: "已停止", icon: CircleOff },
+  restarting: { key: "restarting", label: "重启中", icon: RefreshCw },
+  paused: { key: "paused", label: "已暂停", icon: CircleOff },
+  created: { key: "created", label: "已创建", icon: HelpCircle },
+  dead: { key: "error", label: "异常", icon: CircleOff },
+  manual: { key: "manual", label: "手动配置", icon: Pencil },
+};
 const historyPeriods = [
   { key: "day", label: "今日" },
   { key: "week", label: "本周" },
@@ -675,6 +762,7 @@ const activeView = ref("overview");
 const toast = ref("");
 const theme = ref(localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 const overview = ref(null);
+const overviewFresh = ref(false);
 const snapshot = ref(null);
 const settings = ref(null);
 const system = ref(null);
@@ -697,6 +785,7 @@ const dockerSearch = ref("");
 const monitorRules = ref([]);
 const containerRules = ref([]);
 const channels = ref([]);
+const expandedMonitorCards = reactive(new Set());
 const runtimeForm = reactive({});
 const historyChartEl = ref(null);
 const connectionDialog = ref(null);
@@ -725,6 +814,15 @@ const subtitle = computed(() => (overview.value?.timestamp ? `版本 ${overview.
 const summary = computed(() => overview.value?.summary || {});
 const connectionSummary = computed(() => overview.value?.connectionSummary || {});
 const lastUpdated = computed(() => (overview.value?.timestamp ? new Date(overview.value.timestamp * 1000).toLocaleTimeString() : "-"));
+const overviewIsFresh = computed(() => {
+  if (!overviewFresh.value || !overview.value) return false;
+  const timestamp = Number(overview.value.timestamp || 0);
+  return !timestamp || (Date.now() / 1000 - timestamp) <= 10;
+});
+const overviewStatusLabel = computed(() => {
+  if (overviewIsFresh.value) return "采集正常";
+  return overview.value ? "采集延迟" : "连接中";
+});
 const connectionSourceLabel = computed(() => {
   const source = connectionSummary.value.source;
   if (source === "conntrack") return `系统 conntrack (${connectionSummary.value.countMode || "active"})`;
@@ -851,6 +949,62 @@ function serviceLabel(value) {
   };
   return labels[value] || value || "未知服务";
 }
+function dockerStateMeta(state) {
+  return dockerStateMetaMap[String(state || "").toLowerCase()] || { key: "unknown", label: "未知", icon: HelpCircle };
+}
+function dockerStateIcon(state) {
+  return dockerStateMeta(state).icon;
+}
+function dockerStatusLabel(container = {}) {
+  if (container.manualOnly || String(container.state || "").toLowerCase() === "manual") return "手动端口配置";
+  const state = dockerStateMeta(container.state);
+  const status = String(container.status || "").toLowerCase();
+  if (status.includes("unhealthy")) return `${state.label} · 健康检查异常`;
+  if (status.includes("healthy")) return `${state.label} · 健康`;
+  if (state.key === "running") {
+    const runningFor = status.match(/^up\s+(.+)$/i)?.[1];
+    return runningFor ? `运行中 · 已运行 ${runningFor.replace(/\s+\(healthy\)$/i, "")}` : state.label;
+  }
+  if (state.key === "stopped") {
+    const exitCode = status.match(/^exited\s+\((\d+)\)/i)?.[1];
+    return exitCode ? `已停止 · 退出码 ${exitCode}` : state.label;
+  }
+  return state.label;
+}
+function dockerNetworkLabel(mode) {
+  const value = String(mode || "").trim();
+  const labels = { host: "主机", bridge: "桥接", none: "无网络", default: "默认", manual: "手动配置" };
+  return labels[value.toLowerCase()] || value || "未知";
+}
+function monitorCardKey(type, id) {
+  return `${type}:${id}`;
+}
+function isMonitorCardExpanded(type, id) {
+  return expandedMonitorCards.has(monitorCardKey(type, id));
+}
+function toggleMonitorCard(type, id) {
+  const key = monitorCardKey(type, id);
+  if (expandedMonitorCards.has(key)) expandedMonitorCards.delete(key);
+  else expandedMonitorCards.add(key);
+}
+function expandMonitorCard(type, id) {
+  expandedMonitorCards.add(monitorCardKey(type, id));
+}
+function monitorRuleSummary(rule = {}) {
+  const metric = metricLabels[rule.metric] || "未选择指标";
+  const duration = Number(rule.durationSeconds || 0);
+  return `${metric} · 阈值 ${Number(rule.threshold || 0)}${duration ? ` · 持续 ${duration} 秒` : ""}`;
+}
+function containerProtectionSummary(rule = {}) {
+  const target = rule.containerName || rule.composeService || "未选择容器";
+  const logic = rule.logic === "or" ? "任一条件" : "全部条件";
+  const action = containerProtectionActions.find((item) => item.value === rule.action)?.label || "重启";
+  return `${target} · ${logic} · ${rule.conditions?.length || 0} 条 · ${action}`;
+}
+function channelTypeLabel(type) {
+  const labels = { webhook: "Webhook", iyuu: "IYUU", meow: "MeoW" };
+  return labels[String(type || "").toLowerCase()] || "自定义";
+}
 function rateOf(name, scope, key) {
   return snapshot.value?.rates?.[name]?.scopes?.[scope]?.[key] || 0;
 }
@@ -877,7 +1031,11 @@ async function refreshOverview() {
   if (overviewLoading) return;
   overviewLoading = true;
   try {
-  overview.value = await api(`/api/overview?interfaces=${encodeURIComponent(interfaceView.value)}`);
+    overview.value = await api(`/api/overview?interfaces=${encodeURIComponent(interfaceView.value)}`);
+    overviewFresh.value = true;
+  } catch (error) {
+    overviewFresh.value = false;
+    console.warn("load overview failed", error);
   } finally {
     overviewLoading = false;
   }
@@ -1245,13 +1403,16 @@ async function testChannel(channelId) {
   showToast(result.ok ? "测试通知已发送" : `测试失败：${result.detail || result.body || "未知错误"}`);
 }
 function addRule() {
-  monitorRules.value.push({ id: `rule-${Date.now()}`, name: "新监控规则", metric: "wan_tx_bps", operator: "gte", threshold: 0, durationSeconds: 0, scope: "wan", direction: "tx", window: "realtime", enabled: false, channelIds: [] });
+  const rule = { id: `rule-${Date.now()}`, name: "新监控规则", metric: "wan_tx_bps", operator: "gte", threshold: 0, durationSeconds: 0, scope: "wan", direction: "tx", window: "realtime", enabled: false, channelIds: [] };
+  monitorRules.value.push(rule);
+  expandMonitorCard("traffic", rule.id);
 }
 function removeRule(id) {
   monitorRules.value = monitorRules.value.filter((item) => item.id !== id);
+  expandedMonitorCards.delete(monitorCardKey("traffic", id));
 }
 function addContainerRule() {
-  containerRules.value.push({
+  const rule = {
     id: `protection-${Date.now()}`,
     name: "新容器保护",
     containerId: "",
@@ -1268,10 +1429,13 @@ function addContainerRule() {
     conditions: [
       { metric: "cpuPercent", operator: "gte", threshold: 90, durationSeconds: 30 },
     ],
-  });
+  };
+  containerRules.value.push(rule);
+  expandMonitorCard("container", rule.id);
 }
 function removeContainerRule(id) {
   containerRules.value = containerRules.value.filter((item) => item.id !== id);
+  expandedMonitorCards.delete(monitorCardKey("container", id));
 }
 function addContainerCondition(rule) {
   rule.conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
@@ -1293,10 +1457,13 @@ function toggleContainerRuleChannel(rule, channelId) {
   rule.channelIds = Array.from(values);
 }
 function addChannel() {
-  channels.value.push({ id: `channel-${Date.now()}`, name: "新通知渠道", type: "webhook", enabled: false, url: "", token: "", timeout: 5, titleTemplate: "{app} {rule_name}", bodyTemplate: "告警：{message}\n当前值：{value}\n阈值：{threshold}\n时间：{timestamp}", urlTemplate: "", msgType: "text", htmlHeight: 200 });
+  const channel = { id: `channel-${Date.now()}`, name: "新通知渠道", type: "webhook", enabled: false, url: "", token: "", timeout: 5, titleTemplate: "{app} {rule_name}", bodyTemplate: "告警：{message}\n当前值：{value}\n阈值：{threshold}\n时间：{timestamp}", urlTemplate: "", msgType: "text", htmlHeight: 200 };
+  channels.value.push(channel);
+  expandMonitorCard("channel", channel.id);
 }
 function removeChannel(id) {
   channels.value = channels.value.filter((item) => item.id !== id);
+  expandedMonitorCards.delete(monitorCardKey("channel", id));
 }
 async function editLabel(key, current) {
   const label = window.prompt("给这个容器端口设置备注，留空则清除", current || "");
