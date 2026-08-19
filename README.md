@@ -20,10 +20,11 @@ NAS Traffic Lens 是一个面向极空间、家庭 NAS 和 x86/ARM Linux 主机�
 - 连接与端口弹窗，支持筛选、分页、公网/内网、方向、协议、网卡、进程和关键词过滤。
 - Docker 容器列表、端口识别、手动端口、端口备注、服务类型、快捷访问、图标上传。
 - Docker stats 按需加载，页面离开后不继续刷新，减少 Docker socket 压力。
-- 监控中心，可配置上传速率、连接数、每日流量等规则。
+- 监控中心展示上传速率、连接数、每日流量等规则的运行状态。
 - 通知渠道模块，支持 Webhook、IYUU、MeoW，并支持消息模板变量。
 - 历史统计折线图，支持今日、本周、本月等时间范围。
 - 系统状态页面，展示 CPU、内存、磁盘、温度、GPU/NPU 可见性。
+- AI 中心支持 OpenAI 兼容接口的按需分析和对话；首页、历史、监控中心都有快捷分析入口。
 - 支持访问密码、登录失败限制、SQLite 持久化、日志目录映射。
 
 ## 适用环境
@@ -142,6 +143,9 @@ VERSION=$(cat VERSION)
 docker buildx build \
   --platform linux/amd64 \
   -t isle204/nas-traffic-lens:${VERSION} \
+  -t isle204/nas-traffic-lens:${VERSION}-amd64 \
+  -t isle204/nas-traffic-lens:amd64 \
+  -t isle204/nas-traffic-lens:latest-amd64 \
   -t isle204/nas-traffic-lens:latest \
   --load .
 ```
@@ -151,6 +155,9 @@ docker buildx build \
 ```bash
 docker save \
   isle204/nas-traffic-lens:${VERSION} \
+  isle204/nas-traffic-lens:${VERSION}-amd64 \
+  isle204/nas-traffic-lens:amd64 \
+  isle204/nas-traffic-lens:latest-amd64 \
   isle204/nas-traffic-lens:latest \
   -o nas-traffic-lens-amd64.tar
 ```
@@ -179,6 +186,7 @@ docker buildx build \
   --platform linux/arm64 \
   -t isle204/nas-traffic-lens:${VERSION}-arm64 \
   -t isle204/nas-traffic-lens:arm64 \
+  -t isle204/nas-traffic-lens:latest-arm64 \
   --load .
 ```
 
@@ -188,6 +196,7 @@ docker buildx build \
 docker save \
   isle204/nas-traffic-lens:${VERSION}-arm64 \
   isle204/nas-traffic-lens:arm64 \
+  isle204/nas-traffic-lens:latest-arm64 \
   -o nas-traffic-lens-arm64.tar
 ```
 
@@ -228,6 +237,9 @@ docker login
 VERSION=$(cat VERSION)
 
 docker push isle204/nas-traffic-lens:${VERSION}
+docker push isle204/nas-traffic-lens:${VERSION}-amd64
+docker push isle204/nas-traffic-lens:amd64
+docker push isle204/nas-traffic-lens:latest-amd64
 docker push isle204/nas-traffic-lens:latest
 ```
 
@@ -238,13 +250,23 @@ VERSION=$(cat VERSION)
 
 docker push isle204/nas-traffic-lens:${VERSION}-arm64
 docker push isle204/nas-traffic-lens:arm64
+docker push isle204/nas-traffic-lens:latest-arm64
 ```
 
 日常部署推荐使用 `latest`，这样文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag，例如当前 `VERSION` 文件中的版本。
 
 ## 配置方式
 
-普通部署只需要 compose 中的 `APP_PORT` 和 `DASHBOARD_PASSWORD`。监控规则、通知渠道、消息模板、采样间隔、历史保留、连接窗口、Conntrack 刷新、阶段统计和 Docker 自动发现都可以在“监控中心”修改，并写入 `/data/traffic.db`。
+普通部署只需要 compose 中的 `APP_PORT` 和 `DASHBOARD_PASSWORD`。监控规则、通知渠道、消息模板、采样间隔、历史保留、连接窗口、Conntrack 刷新、阶段统计和 Docker 自动发现都可以在“设置”页面修改，并写入 `/data/traffic.db`。
+
+### AI 配置与隐私
+
+在“设置”页面的“AI 分析配置”中填写 OpenAI 兼容服务的 Base URL、模型和 API Key，然后启用按需请求。支持 OpenAI、自建兼容网关以及常见本地模型服务；Base URL 只接受 `http://` 或 `https://`。
+
+- AI 请求只在点击“AI 分析”或发送 AI 中心对话时发起，不会进入后台采集循环，也不会定时调用外部服务。
+- 发送内容是有限的聚合摘要：当前概览、日/周/月/年历史、进程排行、最多 50 个 Docker 容器摘要、系统状态、监控规则和最近告警；不会发送完整连接原始表。
+- API Key 保存于 SQLite 的 `ai_settings` 配置中，接口只返回掩码，不回显完整 Key，也不会写入应用日志。请把 `/data` 目录当作敏感配置保存。
+- 未启用 AI 或没有 API Key 时，AI 接口会返回可读的配置提示，不会影响流量采集和首页显示。
 
 首次启动没有 SQLite 配置时，程序使用代码默认值；保存后 SQLite 配置优先于对应环境变量。因此更新镜像时不需要把几十个默认参数复制到 compose。
 
@@ -287,7 +309,7 @@ docker push isle204/nas-traffic-lens:arm64
 | `SYSTEM_TRAFFIC_CALIBRATION_MAX_FACTOR` | `20` | 单次校准最大补齐倍率 |
 | `SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN` | `false` | 抓包没有公网/内网比例时是否默认补到公网 |
 | `MAX_RATE_HISTORY_POINTS` | `180` | 内存中的实时速率诊断点数，历史图表使用 SQLite |
-| `ENABLE_DOCKER_DISCOVERY` | `true` | 首次启动的 Docker 发现默认值；之后可在监控中心修改 |
+| `ENABLE_DOCKER_DISCOVERY` | `true` | 首次启动的 Docker 发现默认值；之后可在设置页面修改 |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket 路径 |
 | `DOCKER_LIST_CACHE_SECONDS` | `20` | Docker 容器列表缓存秒数 |
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数 |
@@ -329,7 +351,7 @@ docker push isle204/nas-traffic-lens:arm64
 | `MAX_PROC_NET_LINES` | `60000` | 单个 `/proc/net/*` 文件最多读取行数 |
 | `INTERFACE_REFRESH_SECONDS` | `30` | 网卡元信息刷新间隔 |
 
-端口、密码、数据库路径、日志路径、Docker socket 和抓包接口属于部署边界；其余常用配置优先在监控中心修改。
+端口、密码、数据库路径、日志路径、Docker socket 和抓包接口属于部署边界；其余常用配置优先在设置页面修改。
 
 ## 数据和日志
 
@@ -372,7 +394,7 @@ volumes:
   - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-Docker socket 应视为主机级控制权限：`:ro` 只限制挂载点的文件系统写入，不会把 Docker API 变成只读；本项目的容器保护也会通过它执行 `restart`/`stop`。请使用强登录密码并只在可信内网部署。不需要 Docker 功能时，在监控中心关闭“Docker 自动发现”并删除 socket 挂载；首次启动也可用 `ENABLE_DOCKER_DISCOVERY=false` 覆盖默认值。
+Docker socket 应视为主机级控制权限：`:ro` 只限制挂载点的文件系统写入，不会把 Docker API 变成只读；本项目的容器保护也会通过它执行 `restart`/`stop`。请使用强登录密码并只在可信内网部署。不需要 Docker 功能时，在设置页面关闭“Docker 自动发现”并删除 socket 挂载；首次启动也可用 `ENABLE_DOCKER_DISCOVERY=false` 覆盖默认值。
 
 性能策略：
 
@@ -432,7 +454,7 @@ tail -f ./logs/uvicorn-error.log
 - 只抓必要网卡，设置 `CAPTURE_INTERFACES: "eth0"` 或实际物理网卡名。
 - 保持默认只展示物理网卡，需要排查时再切换“全部接口”。
 - 保持 Docker stats 按需查看，不要让页面长期打开大量容器详情。
-- Docker 发现异常时先在监控中心关闭“Docker 自动发现”，再确认 Docker socket 是否可映射。
+- Docker 发现异常时先在设置页面关闭“Docker 自动发现”，再确认 Docker socket 是否可映射。
 - 查看 `/api/diagnostics` 可以看到当前 RSS 内存、线程数、连接缓存、进程缓存、Docker 缓存规模。
 
 ### 运行几天后 CPU 或内存变高
@@ -474,7 +496,7 @@ CONNTRACK_CONNECTION_MAX_LINES: "15000"
 CAPTURE_INTERFACES: "eth0"
 ```
 
-如果 Docker 引擎或宿主负载异常，先在监控中心关闭 Docker 自动发现，并用以下高级覆盖验证：
+如果 Docker 引擎或宿主负载异常，先在设置页面关闭 Docker 自动发现，并用以下高级覆盖验证：
 
 ```yaml
 CONNECTION_COUNT_SOURCE: "socket"

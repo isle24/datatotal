@@ -1,5 +1,5 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-scapy==2.6.1
+fastapi==0.141.1
+uvicorn[standard]==0.52.3
+scapy==2.7.0
 psutil==6.1.1
 PyYAML==6.0.3

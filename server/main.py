@@ -19,7 +19,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import psutil
 from fastapi import FastAPI, Request
@@ -34,6 +34,13 @@ from server.services.notifications import (
     DEFAULT_NOTIFY_TITLE_TEMPLATE,
     sanitize_http_url,
     send_notification_alert as dispatch_notification_alert,
+)
+from server.services.ai import (
+    AIServiceError,
+    chat_completion,
+    default_ai_settings,
+    normalize_ai_settings,
+    public_ai_settings,
 )
 from server.services.system_status import system_status
 from server.services.go_collector_client import (
@@ -608,6 +615,30 @@ class RuntimeSettingsPayload(BaseModel):
     conntrackRefreshSeconds: int = Field(default=DEFAULT_CONNTRACK_REFRESH_SECONDS, ge=2, le=300)
     autoStartStage: bool = DEFAULT_AUTO_START_STAGE
     dockerDiscovery: bool = DEFAULT_ENABLE_DOCKER_DISCOVERY
+
+
+class AISettingsPayload(BaseModel):
+    enabled: bool = False
+    baseUrl: str = Field(default="https://api.openai.com/v1", max_length=300)
+    apiKey: str = Field(default="", max_length=512)
+    model: str = Field(default="gpt-4o-mini", max_length=160)
+    timeoutSeconds: int = Field(default=30, ge=5, le=30)
+    maxTokens: int = Field(default=1200, ge=128, le=4096)
+    systemPrompt: str = Field(default="", max_length=4000)
+
+
+class AIAnalyzePayload(BaseModel):
+    scope: str = "overview"
+    question: str = Field(default="", max_length=2000)
+
+
+class AIChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=6000)
+
+
+class AIChatPayload(BaseModel):
+    messages: List[AIChatMessage] = Field(default_factory=list, max_length=20)
 
 
 def apply_runtime_settings(settings: RuntimeSettingsPayload) -> RuntimeSettingsPayload:
@@ -2127,6 +2158,7 @@ class TrafficCollector:
         self.monitor_rules = default_monitor_rules()
         self.notification_channels = default_notification_channels()
         self.container_protection_rules = default_container_protection_rules()
+        self.ai_settings = default_ai_settings()
         self.alert_settings = AlertSettings(**alert_settings_from_rules(self.monitor_rules))
         self.notify_settings = NotifySettings(
             channel=self.notification_channels[0]["type"],
@@ -2291,6 +2323,8 @@ class TrafficCollector:
         channels = self.db.get_setting("notification_channels")
         runtime = self.db.get_setting("runtime_settings")
         docker_overrides = self.db.get_setting("docker_overrides")
+        saved_ai = self.db.get_setting("ai_settings")
+        self.ai_settings = normalize_ai_settings(saved_ai, getattr(self, "ai_settings", default_ai_settings()))
         if rules and isinstance(rules.get("rules"), list):
             try:
                 self.monitor_rules = [sanitize_monitor_rule(MonitorRule(**item)) for item in rules["rules"]]
@@ -2353,6 +2387,8 @@ class TrafficCollector:
             self.db.set_setting("notification_channels", {"channels": self.notification_channels})
         if protection is None:
             self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
+        if saved_ai is None:
+            self.db.set_setting("ai_settings", self.ai_settings)
         self.sync_legacy_settings()
 
     def sync_legacy_settings(self) -> None:
@@ -3641,8 +3677,78 @@ class TrafficCollector:
     def history_summary(self, period: str) -> dict:
         return self.db.query_history(period)
 
+    def ai_context(self, scope: str = "overview") -> dict:
+        """Build a bounded, aggregated context only when AI analysis is requested."""
+        selected_scope = str(scope or "overview").strip().lower()
+        if selected_scope not in {"overview", "history", "monitor", "all"}:
+            selected_scope = "overview"
+        history = {period: self.db.query_history(period) for period in ("day", "week", "month", "year")}
+        overview = self.api_overview("physical")
+        processes = self.process_rank("30s", 10).get("processes", [])
+        docker = self.docker_containers()
+        containers = [
+            {
+                "name": item.get("name"),
+                "image": item.get("image"),
+                "state": item.get("state"),
+                "networkMode": item.get("networkMode"),
+                "ports": int(item.get("portCount", len(item.get("ports") or [])) or 0),
+                "protected": bool(item.get("protection", {}).get("enabled")),
+            }
+            for item in (docker.get("containers") or [])[:50]
+        ]
+        with self.lock:
+            alerts = list(self.alerts)[-20:]
+            rules = [
+                {"id": rule.get("id"), "name": rule.get("name"), "metric": rule.get("metric"), "enabled": rule.get("enabled")}
+                for rule in self.monitor_rules
+            ]
+        return {
+            "scope": selected_scope,
+            "generatedAt": now(),
+            "overview": overview,
+            "history": {
+                period: {"period": value.get("period"), "totals": value.get("totals"), "buckets": (value.get("buckets") or [])[-120:]}
+                for period, value in history.items()
+            },
+            "processTop30s": processes,
+            "docker": {"enabled": docker.get("enabled"), "containers": containers},
+            "system": system_status(),
+            "monitorRules": rules,
+            "recentAlerts": alerts,
+        }
+
+    def ai_analyze(self, payload: AIAnalyzePayload) -> dict:
+        question = (payload.question or "请分析当前数据，指出异常、公网上传风险和最值得关注的进程。")[:2000]
+        context = self.ai_context(payload.scope)
+        messages = [
+            {"role": "system", "content": self.ai_settings.get("systemPrompt") or default_ai_settings()["systemPrompt"]},
+            {"role": "user", "content": f"请分析以下 NAS 流量统计摘要。{question}\n\n{json.dumps(context, ensure_ascii=False)}"[:300000]},
+        ]
+        try:
+            result = chat_completion(self.ai_settings, messages)
+        except AIServiceError as exc:
+            return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": str(exc)}
+        return {"ok": True, "scope": context["scope"], **result}
+
+    def ai_chat(self, payload: AIChatPayload) -> dict:
+        context = self.ai_context("all")
+        messages = [{"role": "system", "content": self.ai_settings.get("systemPrompt") or default_ai_settings()["systemPrompt"]}]
+        for item in payload.messages[-19:]:
+            role = item.role if item.role in {"user", "assistant"} else "user"
+            messages.append({"role": role, "content": item.content[:6000]})
+        if len(messages) == 1:
+            return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": "请输入问题"}
+        messages.insert(1, {"role": "system", "content": f"以下是当前统计摘要，请结合它回答，不要虚构数据：\n{json.dumps(context, ensure_ascii=False)}"[:300000]})
+        try:
+            result = chat_completion(self.ai_settings, messages)
+        except AIServiceError as exc:
+            return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": str(exc)}
+        return {"ok": True, **result}
+
     def get_settings(self) -> dict:
         self.sync_legacy_settings()
+        ai_settings = normalize_ai_settings(getattr(self, "ai_settings", None))
         return {
             "appPort": APP_PORT,
             "version": APP_VERSION,
@@ -3654,6 +3760,7 @@ class TrafficCollector:
                 **self.notify_settings.model_dump(),
                 "webhookEnabled": bool(self.notify_settings.webhookUrl),
             },
+            "ai": public_ai_settings(ai_settings),
             "monitor": {
                 "rules": self.monitor_rules,
                 "channels": self.notification_channels,
@@ -3894,6 +4001,11 @@ class TrafficCollector:
                 self.last_container_refresh = 0.0
                 self.container_status["enabled"] = ENABLE_DOCKER_DISCOVERY
             self.refresh_container_ports(force=True)
+        return self.get_settings()
+
+    def update_ai_settings(self, payload: AISettingsPayload) -> dict:
+        self.ai_settings = normalize_ai_settings(payload.model_dump(), existing=self.ai_settings)
+        self.db.set_setting("ai_settings", self.ai_settings)
         return self.get_settings()
 
     def test_notification_channel(self, channel_id: str) -> dict:
@@ -4679,6 +4791,26 @@ async def update_container_protection(payload: ContainerProtectionRulesPayload) 
 @app.post("/api/settings/runtime")
 async def update_runtime(payload: RuntimeSettingsPayload) -> dict:
     return collector.update_runtime_settings(payload)
+
+
+@app.get("/api/settings/ai")
+async def ai_settings() -> dict:
+    return public_ai_settings(collector.ai_settings)
+
+
+@app.post("/api/settings/ai")
+async def update_ai_settings(payload: AISettingsPayload) -> dict:
+    return collector.update_ai_settings(payload)
+
+
+@app.post("/api/ai/analyze")
+async def ai_analyze(payload: AIAnalyzePayload) -> dict:
+    return await asyncio.to_thread(collector.ai_analyze, payload)
+
+
+@app.post("/api/ai/chat")
+async def ai_chat(payload: AIChatPayload) -> dict:
+    return await asyncio.to_thread(collector.ai_chat, payload)
 
 
 @app.post("/api/notifications/test")

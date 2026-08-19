@@ -20,6 +20,7 @@
 - 公网累计默认使用抓包分类后的公网流量，不读取系统网卡累计，因此不会混入内网、组播和 Docker bridge 的系统总流量。
 - 支持访问密码、监控规则、SQLite 历史统计、日志目录映射。
 - 支持监控中心和通知渠道模块，可按规则触发 Webhook、IYUU、MeoW 等渠道。
+- 支持 AI 中心和按需 AI 分析；配置保存在设置页和 SQLite，不参与后台采集。
 - 支持在页面可视化保存监控规则、通知渠道、消息模板和可热更新运行参数，配置写入 SQLite，重启后保留。
 - 支持网卡/进程/连接筛选，连接表可按公网/内网、网卡、协议、方向、关键词、流量和时长过滤。
 - 历史统计按今日、本周、本月、今年自然时间段聚合，用平滑曲线区分公网/内网、上行/下行。
@@ -87,20 +88,42 @@ VERSION=$(cat VERSION)
 
 docker buildx build --platform linux/amd64 \
   -t isle204/nas-traffic-lens:${VERSION} \
+  -t isle204/nas-traffic-lens:${VERSION}-amd64 \
+  -t isle204/nas-traffic-lens:amd64 \
+  -t isle204/nas-traffic-lens:latest-amd64 \
   -t isle204/nas-traffic-lens:latest \
   --load .
-docker save isle204/nas-traffic-lens:${VERSION} isle204/nas-traffic-lens:latest -o nas-traffic-lens-amd64.tar
+docker save isle204/nas-traffic-lens:${VERSION} isle204/nas-traffic-lens:${VERSION}-amd64 isle204/nas-traffic-lens:amd64 isle204/nas-traffic-lens:latest-amd64 isle204/nas-traffic-lens:latest -o nas-traffic-lens-amd64.tar
 ```
 
 把 `nas-traffic-lens-amd64.tar` 导入极空间 Docker 后，镜像架构就是 `linux/amd64`。
 
-日常 NAS 部署推荐使用 `latest`，文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag。你手动推送时可以两个 tag 都推：
+日常 amd64 NAS 部署推荐使用 `latest`，文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag。你手动推送时应同时推送固定版本、架构 tag、`latest-amd64` 和 `latest`。arm64 使用对应的 `latest-arm64`，不能与 amd64 共用同一个单架构 `latest`。
+
+ARM64 本地打包：
+
+```bash
+docker buildx build --platform linux/arm64 \
+  -t isle204/nas-traffic-lens:${VERSION}-arm64 \
+  -t isle204/nas-traffic-lens:arm64 \
+  -t isle204/nas-traffic-lens:latest-arm64 \
+  --load .
+docker save isle204/nas-traffic-lens:${VERSION}-arm64 isle204/nas-traffic-lens:arm64 isle204/nas-traffic-lens:latest-arm64 -o nas-traffic-lens-arm64.tar
+```
+
+你手动推送时可以按架构分别推送：
 
 ```bash
 VERSION=$(cat VERSION)
 
 docker push isle204/nas-traffic-lens:${VERSION}
+docker push isle204/nas-traffic-lens:${VERSION}-amd64
+docker push isle204/nas-traffic-lens:amd64
+docker push isle204/nas-traffic-lens:latest-amd64
 docker push isle204/nas-traffic-lens:latest
+docker push isle204/nas-traffic-lens:${VERSION}-arm64
+docker push isle204/nas-traffic-lens:arm64
+docker push isle204/nas-traffic-lens:latest-arm64
 ```
 
 页面和 API 显示的版本号来自镜像内 `/app/VERSION`，源码对应根目录 `VERSION` 文件。发新版时先更新 `VERSION`，再按同一个版本号打 Docker tag。
@@ -113,7 +136,13 @@ docker compose -f docker-compose.nas.yml up -d
 
 ## 配置方式
 
-普通用户不需要把所有默认值写进 compose。监控规则、通知渠道、消息模板、采样与历史保留、连接窗口、阶段统计和 Docker 自动发现都可以在监控中心修改，并保存到 SQLite。首次启动使用代码默认值，之后 SQLite 值优先。
+普通用户不需要把所有默认值写进 compose。监控规则、通知渠道、消息模板、采样与历史保留、连接窗口、阶段统计和 Docker 自动发现都可以在设置页面修改，并保存到 SQLite。首次启动使用代码默认值，之后 SQLite 值优先。
+
+### AI 中心
+
+“设置”页可以启用 OpenAI 兼容的 AI 服务，填写 Base URL、模型、超时、最大 Token 和系统提示词；“AI 中心”用于对话，首页、历史和监控中心提供快捷分析。
+
+AI 是显式按需功能：只有点击分析或发送对话时才请求配置的服务，不在采集线程中运行。后端发送的是有限聚合摘要，不发送完整连接明细原始表；摘要包括当前概览、日/周/月/年历史、进程排行、最多 50 个 Docker 容器、系统状态、规则和最近告警。API Key 只保存在 SQLite 并以掩码形式返回，请保护 `./data` 目录，不要把真实 Key 写进 compose 或文档。
 
 下面的环境变量仅用于启动边界、首次启动默认值和高级诊断覆盖：
 
@@ -142,7 +171,7 @@ docker compose -f docker-compose.nas.yml up -d
 | `SYSTEM_TRAFFIC_CALIBRATION_ASSUME_WAN` | `false` | 抓包没有公网/内网比例时是否默认补到公网 |
 | `MAX_RATE_HISTORY_POINTS` | `180` | 内存实时速率诊断点数，历史图表使用 SQLite |
 | `HISTORY_RETENTION_DAYS` | `400` | SQLite 历史数据保留天数 |
-| `ENABLE_DOCKER_DISCOVERY` | `true` | 首次启动的 Docker 发现默认值；之后可在监控中心修改 |
+| `ENABLE_DOCKER_DISCOVERY` | `true` | 首次启动的 Docker 发现默认值；之后可在设置页面修改 |
 | `DOCKER_LIST_CACHE_SECONDS` | `20` | Docker 容器列表缓存秒数，避免频繁扫 socket |
 | `DOCKER_STATS_CACHE_SECONDS` | `5` | 单容器 stats 缓存秒数，只对已点开“显示占用”的容器生效 |
 | `DOCKER_WEB_PROBE_TTL_SECONDS` | `86400` | 端口是否 Web 的探测缓存秒数 |
@@ -182,7 +211,7 @@ docker compose -f docker-compose.nas.yml up -d
 | `MAX_PROC_FD_LINKS` | `60000` | 单次最多读取的进程 fd 链接数 |
 | `MAX_PROC_NET_LINES` | `60000` | 单个 `/proc/net/*` 文件最多读取行数 |
 
-端口、密码、数据库路径、日志路径、Docker socket 和抓包接口属于部署边界；其余常用配置优先在监控中心修改。
+端口、密码、数据库路径、日志路径、Docker socket 和抓包接口属于部署边界；其余常用配置优先在设置页面修改。
 
 ## 通知渠道和模板
 
@@ -276,7 +305,7 @@ volumes:
   - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-Docker 自动发现默认开启，也可以在监控中心关闭。Docker socket 应视为主机级控制权限：`:ro` 只限制挂载点的文件系统写入，不会把 Docker API 变成只读；容器保护会通过它执行 `restart`/`stop`。请使用强登录密码并只在可信内网部署。不需要 Docker 功能时，关闭自动发现并删除该挂载。
+Docker 自动发现默认开启，也可以在设置页面关闭。Docker socket 应视为主机级控制权限：`:ro` 只限制挂载点的文件系统写入，不会把 Docker API 变成只读；容器保护会通过它执行 `restart`/`stop`。请使用强登录密码并只在可信内网部署。不需要 Docker 功能时，关闭自动发现并删除该挂载。
 
 如果极空间 UI 不允许映射 Docker socket，服务仍然可用，只是容器名自动识别会缺失。新版会把 Docker 发现失败降级为空，不应该导致容器重启。可以通过 `/api/health` 或 `/api/snapshot` 里的 `containerStatus` 查看是否启用、socket 路径和识别到的端口数量。
 
@@ -345,7 +374,7 @@ devices:
 
 如果 NAS CPU 余量足，可以把 `CAPTURE_MAX_EVENTS_PER_SECOND` 提到 `5000`，或把 `CAPTURE_MAX_SAMPLE_RATE` 提到 `100`。
 
-如果宿主或 Docker 引擎负载异常，可以先在监控中心关闭 Docker 自动发现，再用高级覆盖定位压力来源：
+如果宿主或 Docker 引擎负载异常，可以先在设置页面关闭 Docker 自动发现，再用高级覆盖定位压力来源：
 
 ```yaml
 CONNECTION_COUNT_SOURCE: "socket"

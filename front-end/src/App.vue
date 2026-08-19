@@ -31,31 +31,61 @@
           <button class="icon-button" type="button" title="刷新" @click="refreshActive">
             <RefreshCw :size="18" />
           </button>
+          <button class="icon-button" type="button" title="设置" @click="setView('settings')">
+            <Settings :size="18" />
+          </button>
           <button v-if="overview?.authEnabled" type="button" @click="logout">退出</button>
         </div>
       </header>
 
       <section v-if="activeView === 'overview'" class="view">
-        <section class="dashboard-hero card">
-          <div class="dashboard-hero-copy">
-            <span class="dashboard-kicker"><Activity :size="14" /> 实时监控</span>
-            <h3>公网流量总览</h3>
-            <p>{{ lastUpdated }} · {{ connectionSourceLabel }}</p>
+        <section class="dashboard-board">
+          <div class="dashboard-board-header">
+            <div class="dashboard-board-title">
+              <span class="dashboard-kicker"><Activity :size="14" /> 实时监控台</span>
+              <h3>公网流量总览</h3>
+              <p>{{ lastUpdated }} · {{ connectionSourceLabel }}</p>
+            </div>
+            <div class="dashboard-board-status">
+              <span :class="['live-dot', { pending: !overviewIsFresh }]" aria-hidden="true"></span>
+              <div>
+                <strong>{{ overviewStatusLabel }}</strong>
+                <span>{{ overviewIsFresh ? (overview?.containerStatus?.enabled ? "Docker 已接入" : "Docker 未接入") : "数据等待更新" }}</span>
+              </div>
+            </div>
+            <button class="board-ai-button" type="button" :disabled="aiLoading" @click="analyzeWithAi('overview')">
+              <Sparkles :size="16" />{{ aiLoading ? "分析中" : "AI 分析" }}
+            </button>
           </div>
-          <div class="dashboard-hero-total">
-            <span>公网累计</span>
-            <strong>↓ {{ formatBytes(summary.wan?.rxBytes) }}</strong>
-            <strong class="tx-value">↑ {{ formatBytes(summary.wan?.txBytes) }}</strong>
-          </div>
-          <div class="dashboard-live-state">
-            <span :class="['live-dot', { pending: !overviewIsFresh }]"></span>
-            <div>
-              <strong>{{ overviewStatusLabel }}</strong>
-              <p>{{ overviewIsFresh ? (overview?.containerStatus?.enabled ? "Docker 已接入" : "Docker 未接入") : "数据等待更新" }}</p>
+          <div class="dashboard-board-main">
+            <div class="dashboard-total-block dashboard-total-primary">
+              <span>当前公网总速率</span>
+              <strong>{{ formatRate((summary.wan?.rxBps || 0) + (summary.wan?.txBps || 0)) }}</strong>
+              <div class="dashboard-rate-bars">
+                <div class="dashboard-rate-row"><span><ArrowDown :size="14" />下行</span><i><b class="rx" :style="{ width: rateBarWidth(summary.wan?.rxBps) }"></b></i><em>{{ formatRate(summary.wan?.rxBps) }}</em></div>
+                <div class="dashboard-rate-row"><span><ArrowUp :size="14" />上行</span><i><b class="tx" :style="{ width: rateBarWidth(summary.wan?.txBps) }"></b></i><em>{{ formatRate(summary.wan?.txBps) }}</em></div>
+              </div>
+            </div>
+            <div class="dashboard-total-block">
+              <span>公网累计</span>
+              <strong class="rx-text">↓ {{ formatBytes(summary.wan?.rxBytes) }}</strong>
+              <strong class="tx-text">↑ {{ formatBytes(summary.wan?.txBytes) }}</strong>
+              <small>采集累计流量</small>
+            </div>
+            <div class="dashboard-total-block dashboard-total-connections">
+              <span>公网连接</span>
+              <strong>{{ connectionSummary.wan || 0 }}</strong>
+              <small>总连接 {{ connectionSummary.total || 0 }} · {{ connectionSourceLabel }}</small>
+              <button type="button" @click="openWanConnections"><Network :size="15" />查看公网连接</button>
             </div>
           </div>
+          <div class="dashboard-board-footer">
+            <span><Network :size="14" /> 活跃网卡 {{ summary.interfaces?.up || 0 }} / {{ summary.interfaces?.total || 0 }}</span>
+            <span><Server :size="14" /> 抓包接口 {{ (overview?.captureInterfaces || []).join("、") || "-" }}</span>
+            <span><ShieldCheck :size="14" /> 数据刷新 {{ overviewIsFresh ? "正常" : "等待" }}</span>
+          </div>
         </section>
-        <div class="metric-grid">
+        <div class="metric-grid dashboard-metric-grid">
           <MetricCard title="公网实时下行" accent="blue" :value="formatRate(summary.wan?.rxBps)" @click="openConnections({ scope: 'wan', direction: 'rx' })">
             <ArrowDown :size="18" />
           </MetricCard>
@@ -157,6 +187,7 @@
             <div class="segmented">
               <button v-for="item in historyPeriods" :key="item.key" type="button" :class="{ active: historyPeriod === item.key }" @click="refreshHistory(item.key)">{{ item.label }}</button>
             </div>
+            <button type="button" :disabled="aiLoading" @click="analyzeWithAi('history')"><Sparkles :size="16" />AI 分析</button>
           </CardHead>
           <div class="history-cards">
             <InfoItem label="公网下行" :value="formatBytes(historyTotals.wan?.rxBytes)" />
@@ -245,9 +276,9 @@
             <input v-model="dockerSearch" class="search-input" type="search" placeholder="搜索容器、镜像、端口、备注" />
             <button type="button" @click="refreshDocker"><RefreshCw :size="16" />刷新</button>
           </CardHead>
-          <div class="docker-grid">
-            <div v-for="container in dockerContainers" :key="container.id || container.name" class="docker-card">
-              <div class="docker-title">
+          <div class="docker-stack">
+            <article v-for="container in dockerContainers" :key="container.id || container.name" :class="['docker-card', 'accordion-card', { expanded: isDockerCardExpanded(container) }]">
+              <button class="docker-card-trigger" type="button" :aria-expanded="isDockerCardExpanded(container)" @click="toggleDockerCard(container)">
                 <div class="docker-icon">
                   <img v-if="container.containerIcon" :src="container.containerIcon" alt="" />
                   <Server v-else :size="22" />
@@ -256,52 +287,162 @@
                   <strong>{{ container.name }}</strong>
                   <p>{{ container.image }}</p>
                 </div>
-                <div class="docker-badges">
+                <div class="docker-card-summary">
+                  <span class="docker-port-count"><Network :size="14" />{{ container.portsLoaded ? (container.ports?.length || 0) : (container.portCount || 0) }} 端口</span>
                   <span v-if="container.protection?.enabled" class="pill warn">保护</span>
                   <span :class="['state-badge', `state-${dockerStateMeta(container.state).key}`]" :title="container.state || 'unknown'">
                     <component :is="dockerStateIcon(container.state)" :size="14" />
                     <span>{{ dockerStateMeta(container.state).label }}</span>
                   </span>
+                  <component :is="isDockerCardExpanded(container) ? ChevronUp : ChevronDown" class="accordion-chevron" :size="18" />
                 </div>
-              </div>
-              <p class="docker-status">
-                <span class="status-inline"><component :is="dockerStateIcon(container.state)" :size="14" />{{ dockerStatusLabel(container) }}</span>
-                <span>· 网络 {{ dockerNetworkLabel(container.networkMode) }}</span>
-              </p>
-              <p class="docker-status subtle" v-if="container.protection?.enabled">
-                保护规则 {{ container.protection.rules?.length || 0 }} 条 · {{ container.protection.state?.active ? "监控中" : "待命" }}
-              </p>
-              <div v-if="container.showStats" class="docker-stats">
-                <span>CPU {{ formatPercent(container.stats?.cpuPercent) }}</span>
-                <span>内存 {{ formatBytes(container.stats?.memoryUsedBytes) }}</span>
-                <span>↓ {{ formatBytes(container.stats?.netRxBytes) }} / ↑ {{ formatBytes(container.stats?.netTxBytes) }}</span>
-              </div>
-              <button v-else type="button" class="subtle-button" @click="showDockerStats(container)"><Gauge :size="15" />显示占用</button>
-              <p v-if="container.protection?.state?.lastAction" class="docker-protection-state">
-                上次动作：{{ container.protection.state.lastAction }} · {{ container.protection.state.reason || "-" }}
-              </p>
-              <div class="port-list">
+              </button>
+              <div v-if="isDockerCardExpanded(container)" class="docker-card-body">
+                <div class="docker-summary-strip">
+                  <span><component :is="dockerStateIcon(container.state)" :size="15" />{{ dockerStatusLabel(container) }}</span>
+                  <span><Network :size="15" />网络 {{ dockerNetworkLabel(container.networkMode) }}</span>
+                  <span v-if="container.protection?.enabled"><ShieldCheck :size="15" />{{ container.protection.rules?.length || 0 }} 条保护规则</span>
+                </div>
+                <div v-if="container.showStats" class="docker-stats">
+                  <span>CPU {{ formatPercent(container.stats?.cpuPercent) }}</span>
+                  <span>内存 {{ formatBytes(container.stats?.memoryUsedBytes) }}</span>
+                  <span>↓ {{ formatBytes(container.stats?.netRxBytes) }} / ↑ {{ formatBytes(container.stats?.netTxBytes) }}</span>
+                </div>
+                <button v-else type="button" class="subtle-button" @click.stop="showDockerStats(container)"><Gauge :size="15" />显示占用</button>
+                <p v-if="container.protection?.state?.lastAction" class="docker-protection-state">
+                  上次动作：{{ container.protection.state.lastAction }} · {{ container.protection.state.reason || "-" }}
+                </p>
+                <div class="port-list">
                 <div v-for="port in container.ports" :key="`${port.proto}-${port.hostPort}`" class="port-row">
                   <div>
                     <strong>{{ port.hostPort }} → {{ port.containerPort }}/{{ port.proto }}</strong>
                     <p>{{ serviceLabel(port.service) }} · {{ port.label || "未备注" }}</p>
                   </div>
                   <span :class="['pill', port.accessMode === 'web' ? 'ok' : '']">{{ port.accessMode === "web" ? "Web" : "非 Web" }}</span>
-                  <button v-if="port.accessMode === 'web'" type="button" title="打开 Web 端口" @click="openContainerPort(port)"><ExternalLink :size="15" />打开</button>
-                  <button v-else-if="port.accessMode !== 'hidden'" type="button" title="复制连接地址" @click="copyContainerPort(port)"><Copy :size="15" />复制</button>
-                  <button v-if="port.accessMode !== 'web' && port.accessMode !== 'hidden' && port.proto === 'tcp'" type="button" title="探测是否为 Web 服务" @click="probeContainerPort(container, port)"><ExternalLink :size="15" />探测</button>
+                  <button v-if="port.accessMode === 'web'" type="button" title="打开 Web 端口" @click.stop="openContainerPort(port)"><ExternalLink :size="15" />打开</button>
+                  <button v-else-if="port.accessMode !== 'hidden'" type="button" title="复制连接地址" @click.stop="copyContainerPort(port)"><Copy :size="15" />复制</button>
+                  <button v-if="port.accessMode !== 'web' && port.accessMode !== 'hidden' && port.proto === 'tcp'" type="button" title="探测是否为 Web 服务" @click.stop="probeContainerPort(container, port)"><ExternalLink :size="15" />探测</button>
                   <span v-if="port.accessMode === 'hidden'" class="muted">已隐藏</span>
                 </div>
-                <button v-if="!container.portsLoaded" type="button" class="subtle-button" @click="loadDockerDetail(container)"><RefreshCw :size="15" />加载端口</button>
+                <button v-if="!container.portsLoaded" type="button" class="subtle-button" @click.stop="loadDockerDetail(container)"><RefreshCw :size="15" />加载端口</button>
                 <div v-else-if="!container.ports?.length" class="empty compact">未发现映射端口；host 模式容器可手动添加</div>
+                </div>
+                <div class="edit-actions">
+                  <button type="button" @click.stop="openConnections({ owner: container.name })"><Network :size="16" />连接</button>
+                  <button type="button" @click.stop="editDockerContainer(container)"><Pencil :size="16" />端口/图标</button>
+                </div>
               </div>
-              <div class="edit-actions">
-                <button type="button" @click="openConnections({ owner: container.name })"><Network :size="16" />连接</button>
-                <button type="button" @click="editDockerContainer(container)"><Pencil :size="16" />端口/图标</button>
-              </div>
-            </div>
+            </article>
             <div v-if="!dockerContainers.length" class="empty">暂无 Docker 容器数据；确认已映射 Docker socket 并启用 ENABLE_DOCKER_DISCOVERY，或先保存手动端口配置</div>
           </div>
+        </section>
+      </section>
+
+      <section v-if="activeView === 'monitor'" class="view">
+        <section class="monitor-hero">
+          <div>
+            <span class="dashboard-kicker"><Activity :size="14" /> 运行监控</span>
+            <h3>监控中心</h3>
+            <p>查看规则、容器保护与通知渠道的当前状态。详细配置统一放在设置中。</p>
+          </div>
+          <div class="monitor-hero-actions">
+            <span class="monitor-health"><span class="live-dot"></span>{{ overviewIsFresh ? "监控运行中" : "等待数据" }}</span>
+            <button type="button" :disabled="aiLoading" @click="analyzeWithAi('monitor')"><Sparkles :size="16" />AI 分析</button>
+            <button type="button" @click="setView('settings')"><Settings :size="16" />打开设置</button>
+          </div>
+        </section>
+        <div class="monitor-stat-grid">
+          <div class="monitor-stat"><span>流量规则</span><strong>{{ monitorRules.filter((item) => item.enabled).length }}<small>/{{ monitorRules.length }}</small></strong><p>启用规则</p></div>
+          <div class="monitor-stat"><span>容器保护</span><strong>{{ containerRules.filter((item) => item.enabled).length }}<small>/{{ containerRules.length }}</small></strong><p>监控中</p></div>
+          <div class="monitor-stat"><span>通知渠道</span><strong>{{ channels.filter((item) => item.enabled).length }}<small>/{{ channels.length }}</small></strong><p>可用渠道</p></div>
+          <div class="monitor-stat"><span>最近告警</span><strong>{{ overview?.alerts?.length || 0 }}</strong><p>当前缓存</p></div>
+        </div>
+        <section class="card monitor-section">
+          <CardHead title="规则状态" meta="点击展开查看条件；编辑请进入设置">
+            <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
+          </CardHead>
+          <div class="accordion-stack monitor-stack">
+            <article v-for="rule in monitorRules" :key="`status-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-traffic', rule.id) }]">
+              <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-traffic', rule.id)">
+                <span class="monitor-card-icon"><Bell :size="17" /></span>
+                <span class="monitor-card-copy"><strong>{{ rule.name || "未命名规则" }}</strong><small>{{ monitorRuleSummary(rule) }}</small></span>
+                <span :class="['rule-state', rule.enabled ? 'enabled' : 'disabled']"><component :is="rule.enabled ? CheckCircle2 : CircleOff" :size="14" />{{ rule.enabled ? "启用" : "停用" }}</span>
+                <component :is="isMonitorCardExpanded('status-traffic', rule.id) ? ChevronUp : ChevronDown" :size="18" />
+              </button>
+              <div v-if="isMonitorCardExpanded('status-traffic', rule.id)" class="monitor-card-body">
+                <span>指标：{{ metricLabels[rule.metric] || rule.metric }}</span><span>阈值：{{ rule.threshold }}</span><span>持续：{{ rule.durationSeconds || 0 }} 秒</span><span>渠道：{{ (rule.channelIds || []).length || "未选择" }}</span>
+              </div>
+            </article>
+            <div v-if="!monitorRules.length" class="empty card-empty">暂无流量监控规则</div>
+          </div>
+        </section>
+        <section class="card monitor-section">
+          <CardHead title="容器保护状态" meta="只在设定条件持续达到阈值后执行动作">
+            <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
+          </CardHead>
+          <div class="accordion-stack monitor-stack">
+            <article v-for="rule in containerRules" :key="`status-container-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-container', rule.id) }]">
+              <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-container', rule.id)">
+                <span class="monitor-card-icon protection"><ShieldCheck :size="17" /></span>
+                <span class="monitor-card-copy"><strong>{{ rule.name || "未命名容器保护" }}</strong><small>{{ containerProtectionSummary(rule) }}</small></span>
+                <span :class="['rule-state', rule.enabled ? 'enabled' : 'disabled']"><component :is="rule.enabled ? ShieldCheck : CircleOff" :size="14" />{{ rule.enabled ? "监控中" : "停用" }}</span>
+                <component :is="isMonitorCardExpanded('status-container', rule.id) ? ChevronUp : ChevronDown" :size="18" />
+              </button>
+              <div v-if="isMonitorCardExpanded('status-container', rule.id)" class="monitor-card-body"><span>条件：{{ rule.conditions?.length || 0 }} 条 / {{ rule.logic === "or" ? "任一条件" : "全部条件" }}</span><span>动作：{{ containerProtectionActions.find((item) => item.value === rule.action)?.label || rule.action }}</span><span>最大次数：{{ rule.maxActions || 1 }}</span><span>通知：{{ (rule.channelIds || []).length || "未选择" }}</span></div>
+            </article>
+            <div v-if="!containerRules.length" class="empty card-empty">暂无容器保护规则</div>
+          </div>
+        </section>
+        <section class="card monitor-section">
+          <CardHead title="通知渠道状态" meta="渠道配置与模板在设置中维护">
+            <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
+          </CardHead>
+          <div class="accordion-stack monitor-stack">
+            <article v-for="channel in channels" :key="`status-channel-${channel.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-channel', channel.id) }]">
+              <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-channel', channel.id)">
+                <span class="monitor-card-icon channel"><Send :size="17" /></span>
+                <span class="monitor-card-copy"><strong>{{ channel.name || "未命名渠道" }}</strong><small>{{ channelTypeLabel(channel.type) }} · {{ channel.url || "服务商默认地址" }}</small></span>
+                <span :class="['rule-state', channel.enabled ? 'enabled' : 'disabled']"><component :is="channel.enabled ? CheckCircle2 : CircleOff" :size="14" />{{ channel.enabled ? "可用" : "停用" }}</span>
+                <component :is="isMonitorCardExpanded('status-channel', channel.id) ? ChevronUp : ChevronDown" :size="18" />
+              </button>
+              <div v-if="isMonitorCardExpanded('status-channel', channel.id)" class="monitor-card-body"><span>类型：{{ channelTypeLabel(channel.type) }}</span><span>超时：{{ channel.timeout || 5 }} 秒</span><span>模板：{{ channel.bodyTemplate ? "已配置" : "默认" }}</span></div>
+            </article>
+            <div v-if="!channels.length" class="empty card-empty">暂无通知渠道</div>
+          </div>
+        </section>
+      </section>
+
+      <section v-if="activeView === 'ai'" class="view">
+        <section class="ai-center-hero">
+          <div>
+            <span class="dashboard-kicker"><Sparkles :size="14" /> 数据洞察</span>
+            <h3>AI 中心</h3>
+            <p>按需读取当前流量、历史、进程、Docker、系统和告警摘要，帮助定位异常上传与资源瓶颈。</p>
+          </div>
+          <div class="ai-center-status">
+            <span :class="['live-dot', { pending: !(aiForm.enabled && aiForm.keyConfigured) }]" aria-hidden="true"></span>
+            <strong>{{ aiForm.enabled && aiForm.keyConfigured ? `已连接 · ${aiForm.model || "默认模型"}` : "请先配置 AI" }}</strong>
+            <button v-if="!(aiForm.enabled && aiForm.keyConfigured)" type="button" @click="setView('settings')"><Settings :size="15" />去设置</button>
+          </div>
+        </section>
+        <section class="ai-chat card">
+          <div class="ai-chat-toolbar">
+            <div><strong>数据对话</strong><span>上下文为聚合摘要，不发送完整连接原始表</span></div>
+            <button type="button" :disabled="aiLoading" @click="analyzeWithAi('all')"><Sparkles :size="15" />快速分析全部数据</button>
+          </div>
+          <div class="ai-messages" aria-live="polite">
+            <div v-if="!aiMessages.length" class="ai-empty"><Sparkles :size="24" /><strong>从一个问题开始</strong><span>例如：最近公网上传是否异常？哪个进程最值得关注？</span></div>
+            <div v-for="(message, index) in aiMessages" :key="`${message.role}-${index}`" :class="['ai-message', message.role === 'user' ? 'user' : 'assistant']">
+              <span class="ai-message-avatar"><UserRound v-if="message.role === 'user'" :size="15" /><Sparkles v-else :size="15" /></span>
+              <div><small>{{ message.role === 'user' ? "你" : "AI 分析助手" }}</small><p>{{ message.content }}</p></div>
+            </div>
+            <div v-if="aiLoading" class="ai-message assistant"><span class="ai-message-avatar"><Sparkles :size="15" /></span><div><small>AI 分析助手</small><p class="ai-thinking">正在读取统计摘要<span>·</span><span>·</span><span>·</span></p></div></div>
+          </div>
+          <p v-if="aiError" class="ai-error"><CircleAlert :size="15" />{{ aiError }}</p>
+          <form class="ai-composer" @submit.prevent="sendAiChat">
+            <textarea v-model="aiInput" rows="2" maxlength="2000" placeholder="输入你想分析的问题，例如：按公网上传排序，给出前 3 个风险来源"></textarea>
+            <button type="submit" :disabled="aiLoading || !aiInput.trim()"><Send :size="16" />发送</button>
+          </form>
         </section>
       </section>
 
@@ -350,12 +491,29 @@
           </section>
         </div>
 
+        <section class="card settings-ai-card">
+          <CardHead title="AI 分析配置" meta="只在点击分析或发送对话时请求，不参与后台采集">
+            <span :class="['rule-state', aiForm.enabled && aiForm.keyConfigured ? 'enabled' : 'disabled']"><component :is="aiForm.enabled && aiForm.keyConfigured ? CheckCircle2 : CircleOff" :size="14" />{{ aiForm.enabled && aiForm.keyConfigured ? "可用" : "未配置" }}</span>
+            <button type="button" @click="saveAiSettings"><Save :size="16" />保存</button>
+          </CardHead>
+          <div class="form-grid ai-form-grid">
+            <div class="field-block"><span>启用 AI 分析</span><label class="switch"><input v-model="aiForm.enabled" type="checkbox" />允许按需请求</label></div>
+            <label>OpenAI 兼容 Base URL<input v-model="aiForm.baseUrl" type="url" placeholder="https://api.openai.com/v1" /></label>
+            <label>API Key<input v-model="aiForm.apiKey" type="password" autocomplete="off" :placeholder="aiForm.keyConfigured ? aiForm.apiKeyMasked : '填写后保存，前端只显示掩码'" /></label>
+            <label>模型<input v-model="aiForm.model" placeholder="gpt-4o-mini / qwen-plus / deepseek-chat" /></label>
+            <label>请求超时秒<input v-model.number="aiForm.timeoutSeconds" type="number" min="5" max="30" /></label>
+            <label>最大输出 Token<input v-model.number="aiForm.maxTokens" type="number" min="128" max="4096" /></label>
+            <label class="textarea-label wide">系统提示词<textarea v-model="aiForm.systemPrompt" rows="3" placeholder="定义 AI 分析时的角色和关注点"></textarea></label>
+          </div>
+          <p class="settings-security-note"><ShieldCheck :size="15" /> API Key 只保存在 SQLite，不会回显到页面，也不会写入日志；Base URL 仅允许 HTTP/HTTPS。</p>
+        </section>
+
         <section class="card">
           <CardHead title="监控规则" :meta="`${monitorRules.length} 条 · 支持多规则多渠道`">
             <button type="button" @click="addRule"><Plus :size="16" />新增</button>
             <button type="button" @click="saveRules"><Save :size="16" />保存</button>
           </CardHead>
-          <div class="rule-grid">
+          <div class="rule-grid accordion-stack">
             <div v-for="rule in monitorRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('traffic', rule.id) }]">
               <div class="edit-title card-summary-row">
                 <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('traffic', rule.id)" @click="toggleMonitorCard('traffic', rule.id)">
@@ -401,7 +559,7 @@
             <button type="button" @click="addContainerRule"><Plus :size="16" />新增</button>
             <button type="button" @click="saveContainerRules"><Save :size="16" />保存</button>
           </CardHead>
-          <div class="rule-grid">
+          <div class="rule-grid accordion-stack">
             <div v-for="rule in containerRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('container', rule.id) }]">
               <div class="edit-title card-summary-row">
                 <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('container', rule.id)" @click="toggleMonitorCard('container', rule.id)">
@@ -478,7 +636,7 @@
             <button type="button" @click="addChannel"><Plus :size="16" />新增</button>
             <button type="button" @click="saveChannels"><Save :size="16" />保存</button>
           </CardHead>
-          <div class="channel-grid">
+          <div class="channel-grid accordion-stack">
             <div v-for="channel in channels" :key="channel.id" :class="['edit-card', 'channel-card', 'collapsible-card', { expanded: isMonitorCardExpanded('channel', channel.id) }]">
               <div class="edit-title card-summary-row">
                 <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('channel', channel.id)" @click="toggleMonitorCard('channel', channel.id)">
@@ -626,6 +784,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleOff,
+  CircleAlert,
   Copy,
   Cpu,
   Database,
@@ -646,8 +805,10 @@ import {
   Server,
   ShieldCheck,
   Settings,
+  Sparkles,
   Sun,
   Trash2,
+  UserRound,
   X,
 } from "@lucide/vue";
 
@@ -688,7 +849,9 @@ const navItems = [
   { key: "processes", label: "进程", icon: Database },
   { key: "system", label: "系统", icon: Cpu },
   { key: "docker", label: "Docker", icon: Server },
-  { key: "settings", label: "监控中心", icon: Settings },
+  { key: "monitor", label: "监控中心", icon: Activity },
+  { key: "settings", label: "设置", icon: Settings },
+  { key: "ai", label: "AI 中心", icon: Sparkles },
 ];
 const metricLabels = {
   wan_tx_bps: "公网上传速率",
@@ -786,7 +949,23 @@ const monitorRules = ref([]);
 const containerRules = ref([]);
 const channels = ref([]);
 const expandedMonitorCards = reactive(new Set());
+const expandedDockerCards = reactive(new Set());
 const runtimeForm = reactive({});
+const aiForm = reactive({
+  enabled: false,
+  baseUrl: "https://api.openai.com/v1",
+  apiKey: "",
+  apiKeyMasked: "",
+  keyConfigured: false,
+  model: "gpt-4o-mini",
+  timeoutSeconds: 30,
+  maxTokens: 1200,
+  systemPrompt: "",
+});
+const aiMessages = ref([]);
+const aiInput = ref("");
+const aiError = ref("");
+const aiLoading = ref(false);
 const historyChartEl = ref(null);
 const connectionDialog = ref(null);
 const dockerEditDialog = ref(null);
@@ -798,7 +977,6 @@ let systemTimer = null;
 let connectionTimer = null;
 let dockerTimer = null;
 let connectionDebounce = null;
-let dockerHydrateToken = 0;
 let overviewLoading = false;
 let interfaceLoading = false;
 let processLoading = false;
@@ -909,6 +1087,12 @@ function formatPercent(value) {
   const number = Number(value);
   return Number.isFinite(number) ? `${number.toFixed(number >= 10 ? 0 : 1)}%` : "-";
 }
+function rateBarWidth(value) {
+  const rx = Number(summary.value.wan?.rxBps || 0);
+  const tx = Number(summary.value.wan?.txBps || 0);
+  const peak = Math.max(1, rx, tx);
+  return `${Math.max(3, Math.min(100, (Number(value || 0) / peak) * 100))}%`;
+}
 function formatTemperature(value) {
   const number = Number(value);
   return Number.isFinite(number) ? `${number.toFixed(1)}°C` : "-";
@@ -978,6 +1162,27 @@ function dockerNetworkLabel(mode) {
 }
 function monitorCardKey(type, id) {
   return `${type}:${id}`;
+}
+function dockerCardKey(container) {
+  return container?.id || container?.name || "";
+}
+function isDockerCardExpanded(container) {
+  return expandedDockerCards.has(dockerCardKey(container));
+}
+async function toggleDockerCard(container) {
+  const key = dockerCardKey(container);
+  if (!key) return;
+  if (expandedDockerCards.has(key)) expandedDockerCards.delete(key);
+  else {
+    expandedDockerCards.add(key);
+    if (!container.portsLoaded) {
+      try {
+        await loadDockerDetail(container);
+      } catch (error) {
+        console.warn("load expanded docker detail failed", error);
+      }
+    }
+  }
 }
 function isMonitorCardExpanded(type, id) {
   return expandedMonitorCards.has(monitorCardKey(type, id));
@@ -1075,7 +1280,14 @@ async function refreshSettings() {
   containerRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.containerRules || [])).map(normalizeContainerRuleForm);
   channels.value = JSON.parse(JSON.stringify(settings.value.monitor?.channels || []));
   Object.assign(runtimeForm, settings.value.runtime || {});
-  refreshDockerContainerOptions();
+  Object.assign(aiForm, settings.value.ai || {});
+  aiForm.apiKey = "";
+  if (activeView.value === "settings") refreshDockerContainerOptions();
+}
+async function refreshAiSettings() {
+  const data = await api("/api/settings/ai");
+  Object.assign(aiForm, data || {});
+  aiForm.apiKey = "";
 }
 async function refreshSystem() {
   if (systemLoading) return;
@@ -1092,7 +1304,6 @@ async function refreshDocker() {
   try {
   const data = await api("/api/docker/containers");
   dockerData.value = { ...data, containers: mergeDockerContainers(data.containers || []) };
-  if (activeView.value === "docker") hydrateDockerDetails();
   } finally {
     dockerLoading = false;
   }
@@ -1186,18 +1397,6 @@ async function loadDockerDetail(container) {
     return data.container;
   }
   return null;
-}
-async function hydrateDockerDetails() {
-  const token = ++dockerHydrateToken;
-  const targets = (dockerData.value?.containers || []).filter((container) => !container.portsLoaded);
-  for (const container of targets) {
-    if (token !== dockerHydrateToken || activeView.value !== "docker") return;
-    try {
-      await loadDockerDetail(container);
-    } catch (error) {
-      console.warn("load docker detail failed", error);
-    }
-  }
 }
 async function showDockerStats(container) {
   container.showStats = true;
@@ -1304,7 +1503,8 @@ function refreshActive() {
   if (activeView.value === "interfaces") refreshInterfaces();
   if (activeView.value === "history") refreshHistory();
   if (activeView.value === "processes") refreshProcesses();
-  if (activeView.value === "settings") refreshSettings();
+  if (activeView.value === "monitor" || activeView.value === "settings") refreshSettings();
+  if (activeView.value === "ai") refreshAiSettings();
   if (activeView.value === "system") refreshSystem();
   if (activeView.value === "docker") refreshDocker();
 }
@@ -1316,7 +1516,6 @@ function startDockerTimer() {
   }, 5000);
 }
 function stopDockerTimer() {
-  dockerHydrateToken += 1;
   if (dockerTimer) clearInterval(dockerTimer);
   dockerTimer = null;
 }
@@ -1362,6 +1561,76 @@ async function saveRuntime() {
   settings.value = await api("/api/settings/runtime", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(runtimeForm) });
   Object.assign(runtimeForm, settings.value.runtime || {});
   showToast("运行参数已保存");
+}
+async function saveAiSettings() {
+  settings.value = await api("/api/settings/ai", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      enabled: Boolean(aiForm.enabled),
+      baseUrl: aiForm.baseUrl,
+      apiKey: aiForm.apiKey,
+      model: aiForm.model,
+      timeoutSeconds: Number(aiForm.timeoutSeconds || 30),
+      maxTokens: Number(aiForm.maxTokens || 1200),
+      systemPrompt: aiForm.systemPrompt,
+    }),
+  });
+  Object.assign(aiForm, settings.value.ai || {});
+  aiForm.apiKey = "";
+  showToast("AI 配置已保存");
+}
+async function analyzeWithAi(scope = "overview") {
+  if (aiLoading.value) return;
+  aiLoading.value = true;
+  aiError.value = "";
+  const question = scope === "history"
+    ? `请结合当前选择的历史周期（${historyPeriod.value}）分析公网和内网流量趋势，指出异常。`
+    : scope === "monitor"
+      ? "请检查监控规则、容器保护、通知渠道和最近告警，指出当前风险与配置建议。"
+      : "请分析当前所有统计数据，重点指出公网上传风险、异常进程和 Docker/系统资源问题。";
+  try {
+    const result = await api("/api/ai/analyze", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope, question }),
+    });
+    if (!result.ok) {
+      aiError.value = result.detail || "AI 分析失败";
+      if (activeView.value !== "ai") setView("ai");
+      return;
+    }
+    aiMessages.value.push({ role: "user", content: question }, { role: "assistant", content: result.answer });
+    if (activeView.value !== "ai") setView("ai");
+  } catch (error) {
+    aiError.value = error.message || "AI 分析请求失败";
+  } finally {
+    aiLoading.value = false;
+  }
+}
+async function sendAiChat() {
+  const content = aiInput.value.trim();
+  if (!content || aiLoading.value) return;
+  aiInput.value = "";
+  aiError.value = "";
+  aiMessages.value.push({ role: "user", content });
+  aiLoading.value = true;
+  try {
+    const result = await api("/api/ai/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: aiMessages.value.slice(-19) }),
+    });
+    if (!result.ok) {
+      aiError.value = result.detail || "AI 对话失败";
+      return;
+    }
+    aiMessages.value.push({ role: "assistant", content: result.answer });
+  } catch (error) {
+    aiError.value = error.message || "AI 对话请求失败";
+  } finally {
+    aiLoading.value = false;
+  }
 }
 async function saveRules() {
   settings.value = await api("/api/settings/monitor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rules: monitorRules.value }) });

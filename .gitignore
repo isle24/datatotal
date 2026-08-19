@@ -5,5 +5,6 @@ data/
 logs/
 front-end/node_modules/
 front-end/dist/
+.playwright-cli/
 nas-traffic-lens-amd64.tar
 nas-traffic-lens-arm64.tar
