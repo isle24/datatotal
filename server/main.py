@@ -6,6 +6,7 @@ import hmac
 import json
 import ipaddress
 import os
+import re
 import sqlite3
 import socket
 import struct
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 import psutil
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,7 @@ from scapy.all import IP, TCP, UDP, IPv6, AsyncSniffer, conf
 from server.services.notifications import (
     DEFAULT_NOTIFY_BODY_TEMPLATE,
     DEFAULT_NOTIFY_TITLE_TEMPLATE,
+    LEGACY_NOTIFY_BODY_TEMPLATE,
     sanitize_http_url,
     send_notification_alert as dispatch_notification_alert,
 )
@@ -61,6 +63,15 @@ APP_NAME = "NAS Traffic Lens"
 MAX_AI_CONTEXT_CHARS = 120000
 MAX_AI_HISTORY_MESSAGES = 100
 MAX_AI_HISTORY_CONTENT_CHARS = 200000
+MAX_ALERT_EVIDENCE_JSON_CHARS = 65536
+MAX_ALERT_QUERY_LIMIT = 200
+TRANSFER_UNITS = {
+    "B": 1,
+    "MB": 1024 * 1024,
+    "GB": 1024 * 1024 * 1024,
+    "MB/s": 1024 * 1024,
+    "GB/s": 1024 * 1024 * 1024,
+}
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -68,6 +79,40 @@ def env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return bool(default)
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def threshold_to_bytes(value: float, unit: str) -> int:
+    factor = TRANSFER_UNITS.get(str(unit or "B"), 1)
+    return max(0, int(float(value or 0) * factor))
+
+
+def format_threshold(value: int, metric: str) -> dict:
+    amount = max(0, int(value or 0))
+    metric_name = str(metric or "")
+    if not (metric_name.endswith("_bps") or metric_name.endswith("_bytes")):
+        return {"value": amount, "unit": "", "bytes": amount, "label": str(amount)}
+    suffix = "/s" if metric_name.endswith("_bps") else ""
+    unit = f"GB{suffix}" if amount >= 1024**3 else f"MB{suffix}"
+    factor = TRANSFER_UNITS[unit]
+    number = amount / factor if factor else 0
+    display = int(number) if number.is_integer() else round(number, 2)
+    return {"value": display, "unit": unit, "bytes": amount, "label": f"{display:g} {unit}"}
+
+
+def env_transfer_bytes(byte_name: str, readable_name: str, readable_unit: str) -> int:
+    raw_bytes = os.getenv(byte_name)
+    if raw_bytes is not None:
+        try:
+            return max(0, int(raw_bytes))
+        except ValueError:
+            return 0
+    raw_readable = os.getenv(readable_name)
+    if raw_readable is None:
+        return 0
+    try:
+        return threshold_to_bytes(float(raw_readable), readable_unit)
+    except ValueError:
+        return 0
 
 
 def load_app_version() -> str:
@@ -165,10 +210,10 @@ LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "10"))
 LOGIN_LOCK_SECONDS = int(os.getenv("LOGIN_LOCK_SECONDS", "300"))
 LOGIN_FAILURE_CLIENT_LIMIT = int(os.getenv("LOGIN_FAILURE_CLIENT_LIMIT", "256"))
 
-ALERT_WAN_TX_BPS = int(os.getenv("ALERT_WAN_TX_BPS", "0"))
+ALERT_WAN_TX_BPS = env_transfer_bytes("ALERT_WAN_TX_BPS", "ALERT_WAN_TX_MBPS", "MB/s")
 ALERT_WAN_TX_SECONDS = int(os.getenv("ALERT_WAN_TX_SECONDS", "0"))
-ALERT_STAGE_TX_BYTES = int(os.getenv("ALERT_STAGE_TX_BYTES", "0"))
-ALERT_DAILY_TX_BYTES = int(os.getenv("ALERT_DAILY_TX_BYTES", "0"))
+ALERT_STAGE_TX_BYTES = env_transfer_bytes("ALERT_STAGE_TX_BYTES", "ALERT_STAGE_TX_GB", "GB")
+ALERT_DAILY_TX_BYTES = env_transfer_bytes("ALERT_DAILY_TX_BYTES", "ALERT_DAILY_TX_GB", "GB")
 ALERT_NOTIFY_CHANNEL = os.getenv("ALERT_NOTIFY_CHANNEL", "webhook").strip().lower()
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "").strip()
 ALERT_WEBHOOK_TIMEOUT = float(os.getenv("ALERT_WEBHOOK_TIMEOUT", "5"))
@@ -792,6 +837,16 @@ class TrafficDB:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alert_evidence (
+                alert_id TEXT PRIMARY KEY,
+                evidence TEXT NOT NULL DEFAULT '{}',
+                notifications TEXT NOT NULL DEFAULT '[]',
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_minute_stats_bucket_scope ON minute_stats(bucket, scope)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_process_minute_bucket ON process_minute_stats(bucket)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts)")
@@ -826,6 +881,118 @@ class TrafficDB:
                 ],
             )
             self.conn.commit()
+
+    @staticmethod
+    def _bounded_json(value, fallback) -> str:
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            encoded = json.dumps(fallback, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded) <= MAX_ALERT_EVIDENCE_JSON_CHARS:
+            return encoded
+        return json.dumps(
+            {"truncated": True, "detail": "alert evidence exceeded storage limit"}
+            if isinstance(fallback, dict)
+            else [],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _parse_json(value: str, fallback):
+        try:
+            parsed = json.loads(value or "")
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return parsed if isinstance(parsed, type(fallback)) else fallback
+
+    def add_alert_evidence(self, alert_id: str, evidence: dict) -> None:
+        if not self.conn or not alert_id:
+            return
+        encoded = self._bounded_json(evidence if isinstance(evidence, dict) else {}, {})
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO alert_evidence (alert_id, evidence, notifications, updated_at)
+                VALUES (?, ?, '[]', ?)
+                ON CONFLICT(alert_id) DO UPDATE SET
+                    evidence = excluded.evidence,
+                    updated_at = excluded.updated_at
+                """,
+                (str(alert_id)[:160], encoded, int(now())),
+            )
+            self.conn.commit()
+
+    def add_alert_notification_result(self, alert_id: str, result: dict) -> None:
+        if not self.conn or not alert_id:
+            return
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT evidence, notifications FROM alert_evidence WHERE alert_id = ?",
+                (str(alert_id)[:160],),
+            ).fetchone()
+            evidence = row[0] if row else "{}"
+            notifications = self._parse_json(row[1] if row else "[]", [])
+            cleaned = {
+                "channelId": str(result.get("channelId") or "")[:64],
+                "channelName": str(result.get("channelName") or "")[:80],
+                "channelType": str(result.get("channelType") or "")[:32],
+                "ok": bool(result.get("ok")),
+                "status": int(result.get("status") or 0),
+                "detail": str(result.get("detail") or "")[:500],
+                "timestamp": int(result.get("timestamp") or now()),
+            }
+            notifications = [*notifications[-19:], cleaned]
+            self.conn.execute(
+                """
+                INSERT INTO alert_evidence (alert_id, evidence, notifications, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(alert_id) DO UPDATE SET
+                    notifications = excluded.notifications,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(alert_id)[:160],
+                    evidence,
+                    self._bounded_json(notifications, []),
+                    int(now()),
+                ),
+            )
+            self.conn.commit()
+
+    def query_alerts(self, start: int, end: int, limit: int = 100) -> List[dict]:
+        if not self.conn:
+            return []
+        safe_start = max(0, int(start or 0))
+        safe_end = max(safe_start, int(end or now()))
+        safe_limit = max(1, min(MAX_ALERT_QUERY_LIMIT, int(limit or 100)))
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT a.id, a.ts, a.type, a.severity, a.message, a.value, a.threshold,
+                       COALESCE(e.evidence, '{}'), COALESCE(e.notifications, '[]')
+                FROM alerts a
+                LEFT JOIN alert_evidence e ON e.alert_id = a.id
+                WHERE a.ts >= ? AND a.ts < ?
+                ORDER BY a.ts DESC
+                LIMIT ?
+                """,
+                (safe_start, safe_end, safe_limit),
+            ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "timestamp": int(row[1]),
+                "type": row[2],
+                "severity": row[3],
+                "message": row[4],
+                "value": int(row[5] or 0),
+                "threshold": int(row[6] or 0),
+                "evidence": self._parse_json(row[7], {}),
+                "notifications": self._parse_json(row[8], []),
+            }
+            for row in rows
+        ]
 
     def add_process_minute(self, bucket: int, rows: List[dict]) -> None:
         if not self.conn or not rows:
@@ -924,6 +1091,49 @@ class TrafficDB:
             ).fetchone()
         return {"rxBytes": int(row[0] or 0), "txBytes": int(row[1] or 0)}
 
+    def total_between(self, start: int, end: int, scope: str) -> dict:
+        if not self.conn:
+            return empty_pair()
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT SUM(rx_bytes), SUM(tx_bytes)
+                FROM minute_stats
+                WHERE bucket >= ? AND bucket < ? AND scope = ?
+                """,
+                (int(start), int(end), str(scope)),
+            ).fetchone()
+        return {"rxBytes": int(row[0] or 0), "txBytes": int(row[1] or 0)}
+
+    def query_upload_diagnostic(self, date_value: str, limit: int = 20) -> dict:
+        start, end = diagnostic_date_range(date_value)
+        safe_limit = max(1, min(50, int(limit or 20)))
+        with self.lock:
+            interface_rows = self.conn.execute(
+                """
+                SELECT iface, SUM(rx_bytes), SUM(tx_bytes)
+                FROM minute_stats
+                WHERE bucket >= ? AND bucket < ? AND scope = 'wan'
+                GROUP BY iface
+                ORDER BY SUM(tx_bytes) DESC
+                LIMIT ?
+                """,
+                (start, end, safe_limit),
+            ).fetchall() if self.conn else []
+        return {
+            "date": datetime.fromtimestamp(start).strftime("%Y-%m-%d"),
+            "start": start,
+            "end": end,
+            "totals": self.total_between(start, end, "wan"),
+            "topProcesses": self.query_processes(start, end - 1, safe_limit),
+            "processScope": "all-observed",
+            "topInterfaces": [
+                {"iface": row[0], "rxBytes": int(row[1] or 0), "txBytes": int(row[2] or 0)}
+                for row in interface_rows
+            ],
+            "alerts": self.query_alerts(start, end, safe_limit),
+        }
+
     def query_processes(self, start: int, end: int, limit: int) -> List[dict]:
         if not self.conn:
             return []
@@ -968,6 +1178,15 @@ class TrafficDB:
             self.conn.execute("DELETE FROM minute_stats WHERE bucket < ?", (before,))
             self.conn.execute("DELETE FROM process_minute_stats WHERE bucket < ?", (before,))
             self.conn.execute("DELETE FROM alerts WHERE ts < ?", (before,))
+            self.conn.execute("DELETE FROM alert_evidence WHERE alert_id NOT IN (SELECT id FROM alerts)")
+            self.conn.commit()
+
+    def clear_alerts(self) -> None:
+        if not self.conn:
+            return
+        with self.lock:
+            self.conn.execute("DELETE FROM alerts")
+            self.conn.execute("DELETE FROM alert_evidence")
             self.conn.commit()
 
     def get_labels(self) -> Dict[str, str]:
@@ -1136,6 +1355,28 @@ def history_range(period: str) -> Tuple[int, str]:
     return int(start_dt.timestamp()), "hour"
 
 
+def diagnostic_date_range(date_value: str) -> Tuple[int, int]:
+    cleaned = str(date_value or "").strip()
+    try:
+        start_dt = datetime.strptime(cleaned, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("date must use YYYY-MM-DD") from exc
+    start = int(start_dt.timestamp())
+    return start, int((start_dt + timedelta(days=1)).timestamp())
+
+
+def extract_date_from_text(value: str) -> Optional[str]:
+    match = re.search(r"(?<!\d)(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?(?!\d)", str(value or ""))
+    if not match:
+        return None
+    candidate = f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+    try:
+        diagnostic_date_range(candidate)
+    except ValueError:
+        return None
+    return candidate
+
+
 def default_monitor_rules() -> List[dict]:
     return [
         {
@@ -1256,6 +1497,9 @@ def sanitize_monitor_rule(rule: MonitorRule) -> dict:
 
 
 def sanitize_notification_channel(channel: NotificationChannel) -> dict:
+    body_template = (channel.bodyTemplate or DEFAULT_NOTIFY_BODY_TEMPLATE).strip()[:4000]
+    if body_template == LEGACY_NOTIFY_BODY_TEMPLATE:
+        body_template = DEFAULT_NOTIFY_BODY_TEMPLATE
     cleaned = NotificationChannel(
         id=(channel.id or f"channel-{int(now())}").strip()[:64],
         name=(channel.name or "通知渠道").strip()[:80],
@@ -1265,7 +1509,7 @@ def sanitize_notification_channel(channel: NotificationChannel) -> dict:
         token=(channel.token or "").strip(),
         timeout=max(1, min(30, float(channel.timeout or 5))),
         titleTemplate=(channel.titleTemplate or DEFAULT_NOTIFY_TITLE_TEMPLATE).strip()[:500],
-        bodyTemplate=(channel.bodyTemplate or DEFAULT_NOTIFY_BODY_TEMPLATE).strip()[:4000],
+        bodyTemplate=body_template,
         urlTemplate=(channel.urlTemplate or "").strip()[:1000],
         msgType=(channel.msgType or "text").strip().lower(),
         htmlHeight=max(100, min(1200, int(channel.htmlHeight or 200))),
@@ -3629,7 +3873,7 @@ class TrafficCollector:
         if self.daily_alert_date == day_key:
             return
         day_start = int(datetime.fromtimestamp(timestamp).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        totals = self.db.total_since(day_start, "wan")
+        totals = self.db.total_between(day_start, day_start + 86400, "wan")
         if self.evaluate_monitor_rule("daily_wan_tx_bytes", totals["txBytes"], timestamp):
             self.daily_alert_date = day_key
 
@@ -3656,10 +3900,115 @@ class TrafficCollector:
                 state["startedAt"] = None
         return triggered
 
+    def wan_connection_evidence(self, limit: int = 20) -> dict:
+        safe_limit = max(1, min(50, int(limit or 20)))
+        with self.lock:
+            values = list(self.conn_totals.items())
+        rows, _summary, _total = self.connection_rows(
+            values,
+            set(),
+            limit=safe_limit,
+            filters={"scope": "wan", "direction": "tx"},
+        )
+        process_totals: Dict[str, dict] = {}
+        connections = []
+        for row in rows:
+            process = row.get("process") or {}
+            container = process.get("container") or {}
+            process_id = f"{process.get('pid')}|{process.get('name')}|{container.get('id') or container.get('name')}"
+            item = process_totals.setdefault(
+                process_id,
+                {
+                    "pid": process.get("pid"),
+                    "name": str(process.get("name") or "unknown")[:120],
+                    "cmdline": str(process.get("cmdline") or "")[:240],
+                    "container": {
+                        "id": str(container.get("id") or "")[:12],
+                        "name": str(container.get("name") or "")[:120],
+                        "label": str(container.get("label") or "")[:120],
+                    },
+                    "rxBytes": 0,
+                    "txBytes": 0,
+                },
+            )
+            item["rxBytes"] += int(row.get("rxBytes") or 0)
+            item["txBytes"] += int(row.get("txBytes") or 0)
+            connections.append(
+                {
+                    "iface": str(row.get("iface") or "")[:32],
+                    "proto": str(row.get("proto") or "")[:8],
+                    "source": str(row.get("source") or "")[:96],
+                    "dest": str(row.get("dest") or "")[:96],
+                    "rxBytes": int(row.get("rxBytes") or 0),
+                    "txBytes": int(row.get("txBytes") or 0),
+                    "durationSeconds": int(row.get("durationSeconds") or 0),
+                    "process": {
+                        "pid": process.get("pid"),
+                        "name": str(process.get("name") or "unknown")[:120],
+                        "container": item["container"],
+                    },
+                }
+            )
+        processes = sorted(process_totals.values(), key=lambda item: item["txBytes"], reverse=True)[:safe_limit]
+        return {"topProcesses": processes, "connections": connections[:safe_limit]}
+
+    def build_alert_evidence(self, alert: dict, rule: Optional[dict]) -> dict:
+        timestamp = float(alert.get("timestamp") or now())
+        metric = str((rule or {}).get("metric") or alert.get("type") or "")
+        date_value = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+        try:
+            diagnostic = self.db.query_upload_diagnostic(date_value, limit=20) if metric in {
+                "daily_wan_tx_bytes", "stage_wan_tx_bytes", "wan_tx_bps"
+            } else {}
+        except (ValueError, sqlite3.Error):
+            diagnostic = {}
+        current = self.wan_connection_evidence(20) if metric in {
+            "daily_wan_tx_bytes", "stage_wan_tx_bytes", "wan_tx_bps"
+        } else {"topProcesses": [], "connections": []}
+        value_meta = format_threshold(int(alert.get("value") or 0), metric)
+        threshold_meta = format_threshold(int(alert.get("threshold") or 0), metric)
+        reason = (
+            f"{alert.get('message') or 'monitor rule'}: actual {value_meta['label']}, "
+            f"threshold {threshold_meta['label']}"
+        )
+        evidence = {
+            "reason": reason,
+            "metric": metric,
+            "triggeredAt": int(timestamp),
+            "date": date_value,
+            "actual": value_meta,
+            "threshold": threshold_meta,
+            "window": {
+                "type": str((rule or {}).get("window") or "realtime")[:32],
+                "durationSeconds": max(0, int((rule or {}).get("durationSeconds") or 0)),
+                "start": (diagnostic or {}).get("start"),
+                "end": (diagnostic or {}).get("end"),
+            },
+            "dailyWan": (diagnostic or {}).get("totals") or {},
+            "topInterfaces": ((diagnostic or {}).get("topInterfaces") or [])[:20],
+            "topProcesses": current["topProcesses"] or ((diagnostic or {}).get("topProcesses") or [])[:20],
+            "topConnections": current["connections"],
+            "historicalProcessScope": (diagnostic or {}).get("processScope") or "all-observed",
+            "dataNotes": [
+                "Current WAN connections are captured at trigger time.",
+                "Historical process aggregates may include LAN traffic; interface WAN totals are authoritative.",
+            ],
+        }
+        if rule and alert.get("type") == "container_protection":
+            evidence["container"] = {
+                "id": str(rule.get("containerId") or "")[:12],
+                "name": str(rule.get("containerName") or "")[:120],
+                "action": str(rule.get("action") or "")[:32],
+                "metrics": (rule.get("metrics") or [])[:20],
+                "state": rule.get("state") or {},
+            }
+        return evidence
+
     def record_alert(self, alert_type: str, severity: str, message: str, value: int, threshold: int, rule: Optional[dict] = None) -> None:
+        timestamp = now()
         alert = {
-            "id": f"{alert_type}-{int(now())}",
-            "timestamp": now(),
+            "id": f"{alert_type}-{time.time_ns()}",
+            "timestamp": timestamp,
             "type": alert_type,
             "severity": severity,
             "message": message,
@@ -3668,9 +4017,13 @@ class TrafficCollector:
             "ruleId": rule.get("id") if rule else alert_type,
             "channelIds": rule.get("channelIds", []) if rule else [],
         }
+        evidence = self.build_alert_evidence(alert, rule)
+        alert["evidence"] = evidence
+        alert["notifications"] = []
         with self.lock:
             self.alerts.append(alert)
         self.db.add_alert(alert)
+        self.db.add_alert_evidence(alert["id"], evidence)
         self.notify_alert(alert)
 
     def notify_alert(self, alert: dict) -> None:
@@ -3680,12 +4033,45 @@ class TrafficCollector:
             for channel in self.notification_channels
             if channel.get("enabled") and (not channel_ids or channel.get("id") in channel_ids)
         ]
-        for channel in channels:
-            threading.Thread(
-                target=dispatch_notification_alert,
-                args=(alert, channel, APP_NAME, APP_VERSION),
-                daemon=True,
-            ).start()
+        if not channels:
+            self.save_notification_result(
+                alert,
+                {
+                    "channelId": "",
+                    "channelName": "",
+                    "channelType": "",
+                    "ok": False,
+                    "detail": "no enabled notification channel matched this rule",
+                    "timestamp": int(now()),
+                },
+            )
+            return
+        threading.Thread(target=self.deliver_alert_notifications, args=(alert, channels), daemon=True).start()
+
+    def deliver_alert_notifications(self, alert: dict, channels: List[dict]) -> None:
+        for channel in channels[:20]:
+            result = dispatch_notification_alert(alert, channel, APP_NAME, APP_VERSION)
+            detail = str(result.get("detail") or result.get("body") or "")[:500]
+            self.save_notification_result(
+                alert,
+                {
+                    "channelId": channel.get("id"),
+                    "channelName": channel.get("name"),
+                    "channelType": channel.get("type"),
+                    "ok": bool(result.get("ok")),
+                    "status": int(result.get("status") or 0),
+                    "detail": detail,
+                    "timestamp": int(now()),
+                },
+            )
+
+    def save_notification_result(self, alert: dict, result: dict) -> None:
+        self.db.add_alert_notification_result(str(alert.get("id") or ""), result)
+        with self.lock:
+            for item in reversed(self.alerts):
+                if item.get("id") == alert.get("id"):
+                    item.setdefault("notifications", []).append(result)
+                    break
 
     def prune_stale(self) -> None:
         traffic_cutoff = now() - max(600, RETENTION_SECONDS)
@@ -3763,7 +4149,16 @@ class TrafficCollector:
     def history_summary(self, period: str) -> dict:
         return self.db.query_history(period)
 
-    def ai_context(self, scope: str = "overview") -> dict:
+    def alert_history(self, start: Optional[int] = None, end: Optional[int] = None, limit: int = 100) -> dict:
+        safe_end = int(end or (now() + 1))
+        safe_start = int(start or max(0, safe_end - HISTORY_RETENTION_DAYS * 86400))
+        rows = self.db.query_alerts(safe_start, safe_end, limit)
+        return {"alerts": rows, "count": len(rows), "start": safe_start, "end": safe_end}
+
+    def upload_diagnostic(self, date_value: str) -> dict:
+        return self.db.query_upload_diagnostic(date_value, limit=20)
+
+    def ai_context(self, scope: str = "overview", diagnostic_date: Optional[str] = None) -> dict:
         """Build a bounded, aggregated context only when AI analysis is requested."""
         selected_scope = str(scope or "overview").strip().lower()
         if selected_scope not in {"overview", "history", "monitor", "all"}:
@@ -3789,7 +4184,12 @@ class TrafficCollector:
                 {"id": rule.get("id"), "name": rule.get("name"), "metric": rule.get("metric"), "enabled": rule.get("enabled")}
                 for rule in self.monitor_rules
             ]
-        return {
+        recent_evidence = self.db.query_alerts(
+            max(0, int(now() - HISTORY_RETENTION_DAYS * 86400)),
+            int(now() + 1),
+            20,
+        )
+        context = {
             "scope": selected_scope,
             "generatedAt": now(),
             "overview": overview,
@@ -3802,7 +4202,11 @@ class TrafficCollector:
             "system": system_status(),
             "monitorRules": rules,
             "recentAlerts": alerts,
+            "recentAlertEvidence": recent_evidence,
         }
+        if diagnostic_date:
+            context["uploadDiagnostic"] = self.db.query_upload_diagnostic(diagnostic_date, limit=20)
+        return context
 
     def ai_analyze(self, payload: AIAnalyzePayload) -> dict:
         context, messages = self._ai_analyze_messages(payload)
@@ -3820,7 +4224,7 @@ class TrafficCollector:
 
     def _ai_analyze_messages(self, payload: AIAnalyzePayload) -> tuple:
         question = (payload.question or "请分析当前数据，指出异常、公网上传风险和最值得关注的进程。")[:2000]
-        context = self.ai_context(payload.scope)
+        context = self.ai_context(payload.scope, extract_date_from_text(question))
         messages = [
             {"role": "system", "content": self.ai_settings.get("systemPrompt") or default_ai_settings()["systemPrompt"]},
             {
@@ -3877,7 +4281,7 @@ class TrafficCollector:
         )
 
     def _ai_chat_messages(self, payload: AIChatPayload) -> list:
-        context = self.ai_context("all")
+        context = self.ai_context("all", extract_date_from_text(self._chat_question(payload)))
         messages = [{"role": "system", "content": self.ai_settings.get("systemPrompt") or default_ai_settings()["systemPrompt"]}]
         for item in payload.messages[-19:]:
             role = item.role if item.role in {"user", "assistant"} else "user"
@@ -4192,6 +4596,7 @@ class TrafficCollector:
     def clear_alerts(self) -> dict:
         with self.lock:
             self.alerts.clear()
+        self.db.clear_alerts()
         return {"ok": True}
 
     def set_label(self, key: str, label: str) -> dict:
@@ -5063,6 +5468,11 @@ async def set_label(payload: LabelPayload) -> dict:
     return collector.set_label(payload.key, payload.label)
 
 
+@app.get("/api/alerts")
+async def alerts(start: Optional[int] = None, end: Optional[int] = None, limit: int = 100) -> dict:
+    return await asyncio.to_thread(collector.alert_history, start, end, limit)
+
+
 @app.post("/api/alerts/clear")
 async def clear_alerts() -> dict:
     return collector.clear_alerts()
@@ -5121,6 +5531,14 @@ async def health() -> dict:
 @app.get("/api/diagnostics")
 async def diagnostics() -> dict:
     return collector.diagnostics()
+
+
+@app.get("/api/diagnostics/upload")
+async def upload_diagnostics(date: str) -> dict:
+    try:
+        return await asyncio.to_thread(collector.upload_diagnostic, date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/stage/start")

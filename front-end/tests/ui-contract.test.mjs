@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { renderMarkdown, safeMarkdownUrl } from "../src/utils/markdown.js";
 
 const source = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const markdownSource = await readFile(new URL("../src/utils/markdown.js", import.meta.url), "utf8");
 
 test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(source, /class="dashboard-board"/);
@@ -41,4 +43,41 @@ test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(styles, /\.dashboard-board/);
   assert.match(styles, /\.accordion-stack/);
   assert.match(styles, /\.docker-card-trigger/);
+});
+
+test("monitor thresholds use readable transfer units and expose upload evidence", () => {
+  assert.match(source, /thresholdUnitOptions/);
+  assert.match(source, /thresholdValue/);
+  assert.match(source, /thresholdUnit/);
+  assert.match(source, /thresholdToBytes/);
+  assert.match(source, /formatMonitorThreshold/);
+  assert.match(source, /\/api\/alerts/);
+  assert.match(source, /\/api\/diagnostics\/upload/);
+  assert.match(source, /上传异常记录/);
+  assert.match(source, /通知投递/);
+});
+
+test("AI assistant renders sanitized Markdown and supports Enter to send", () => {
+  assert.match(markdownSource, /function renderMarkdown/);
+  assert.match(markdownSource, /function escapeHtml/);
+  assert.match(markdownSource, /safeMarkdownUrl/);
+  assert.match(source, /v-html="renderMarkdown\(message\.content\)"/);
+  assert.match(source, /message\.streaming/);
+  assert.match(source, /@keydown="handleAiComposerKeydown"/);
+  assert.match(source, /if \(event\.key !== "Enter" \|\| event\.shiftKey/);
+  assert.match(styles, /\.ai-markdown/);
+  assert.match(styles, /\.ai-markdown pre/);
+});
+
+test("Markdown renderer escapes HTML and blocks unsafe link protocols", () => {
+  const html = renderMarkdown("# Result\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n- **safe**\n\n```sh\necho ok\n```");
+  assert.match(html, /<h1>Result<\/h1>/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /href="javascript:/);
+  assert.match(html, /href="#"/);
+  assert.match(html, /<ul><li><strong>safe<\/strong><\/li><\/ul>/);
+  assert.match(html, /<pre><code class="language-sh">echo ok<\/code><\/pre>/);
+  assert.equal(safeMarkdownUrl("data:text/html,bad"), "#");
+  assert.equal(safeMarkdownUrl("https://example.com"), "https://example.com");
 });

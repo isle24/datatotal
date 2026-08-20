@@ -370,7 +370,7 @@
                 <component :is="isMonitorCardExpanded('status-traffic', rule.id) ? ChevronUp : ChevronDown" :size="18" />
               </button>
               <div v-if="isMonitorCardExpanded('status-traffic', rule.id)" class="monitor-card-body">
-                <span>指标：{{ metricLabels[rule.metric] || rule.metric }}</span><span>阈值：{{ rule.threshold }}</span><span>持续：{{ rule.durationSeconds || 0 }} 秒</span><span>渠道：{{ (rule.channelIds || []).length || "未选择" }}</span>
+                <span>指标：{{ metricLabels[rule.metric] || rule.metric }}</span><span>阈值：{{ formatMonitorThreshold(rule) }}</span><span>持续：{{ rule.durationSeconds || 0 }} 秒</span><span>渠道：{{ (rule.channelIds || []).length || "未选择" }}</span>
               </div>
             </article>
             <div v-if="!monitorRules.length" class="empty card-empty">暂无流量监控规则</div>
@@ -410,6 +410,45 @@
             <div v-if="!channels.length" class="empty card-empty">暂无通知渠道</div>
           </div>
         </section>
+
+        <section class="card monitor-section upload-diagnostic-card">
+          <CardHead title="上传异常记录" :meta="`${alertHistory.length} 条已留存告警证据`">
+            <label class="diagnostic-date-control">日期<input v-model="diagnosticDate" type="date" /></label>
+            <button type="button" :disabled="diagnosticLoading" @click="refreshUploadDiagnostic"><RefreshCw :size="15" />查询</button>
+            <button type="button" :disabled="diagnosticLoading" @click="askAiAboutDiagnostic"><Sparkles :size="15" />AI 排查</button>
+          </CardHead>
+          <div class="upload-diagnostic-summary">
+            <div><span>当日公网下行</span><strong class="rx-text">{{ formatBytes(uploadDiagnostic?.totals?.rxBytes) }}</strong></div>
+            <div><span>当日公网上行</span><strong class="tx-text">{{ formatBytes(uploadDiagnostic?.totals?.txBytes) }}</strong></div>
+            <div><span>关联告警</span><strong>{{ uploadDiagnostic?.alerts?.length || 0 }}</strong></div>
+          </div>
+          <div class="diagnostic-grid">
+            <div class="diagnostic-panel">
+              <h4>上传进程</h4>
+              <div v-for="item in uploadDiagnostic?.topProcesses || []" :key="`${item.pid}-${item.name}`" class="diagnostic-row">
+                <span><strong>{{ item.container?.label || item.container?.name || item.name || "unknown" }}</strong><small>PID {{ item.pid ?? "-" }}</small></span>
+                <b class="tx-text">↑ {{ formatBytes(item.txBytes) }}</b>
+              </div>
+              <div v-if="!uploadDiagnostic?.topProcesses?.length" class="empty compact">该日没有进程聚合数据</div>
+              <p class="diagnostic-note">历史进程为抓包可见的总流量参考；公网网卡总量为判定依据。</p>
+            </div>
+            <div class="diagnostic-panel">
+              <h4>公网网卡</h4>
+              <div v-for="item in uploadDiagnostic?.topInterfaces || []" :key="item.iface" class="diagnostic-row">
+                <strong>{{ item.iface }}</strong><span>↓ {{ formatBytes(item.rxBytes) }} / <b class="tx-text">↑ {{ formatBytes(item.txBytes) }}</b></span>
+              </div>
+              <div v-if="!uploadDiagnostic?.topInterfaces?.length" class="empty compact">该日没有公网网卡数据</div>
+            </div>
+          </div>
+          <div class="alert-evidence-list">
+            <article v-for="alert in uploadDiagnostic?.alerts || []" :key="alert.id" class="alert-evidence-item">
+              <div class="alert-evidence-head"><span><Bell :size="15" /><strong>{{ alert.message }}</strong></span><time>{{ formatDate(alert.timestamp) }}</time></div>
+              <p>{{ alert.evidence?.reason || `${formatMonitorMetricValue(alert.value, alert.type)} / 阈值 ${formatMonitorMetricValue(alert.threshold, alert.type)}` }}</p>
+              <div class="notification-results"><span>通知投递</span><b v-for="delivery in alert.notifications || []" :key="`${delivery.channelId}-${delivery.timestamp}`" :class="delivery.ok ? 'delivery-ok' : 'delivery-failed'">{{ delivery.channelName || delivery.channelId || "未匹配渠道" }}：{{ delivery.ok ? "成功" : (delivery.detail || "失败") }}</b><em v-if="!alert.notifications?.length">旧记录无投递回执</em></div>
+            </article>
+            <div v-if="uploadDiagnostic && !uploadDiagnostic.alerts?.length" class="empty diagnostic-empty">该日期没有已保存的告警。旧版本不会保存通知回执，因此无法反查当时是否投递失败。</div>
+          </div>
+        </section>
       </section>
 
       <section v-if="activeView === 'ai'" class="view">
@@ -437,14 +476,14 @@
             <div v-if="!aiMessages.length" class="ai-empty"><Sparkles :size="24" /><strong>从一个问题开始</strong><span>例如：最近公网上传是否异常？哪个进程最值得关注？</span></div>
             <div v-for="(message, index) in aiMessages" :key="`${message.role}-${index}`" :class="['ai-message', message.role === 'user' ? 'user' : 'assistant']">
               <span class="ai-message-avatar"><UserRound v-if="message.role === 'user'" :size="15" /><Sparkles v-else :size="15" /></span>
-              <div><small>{{ message.role === 'user' ? "你" : "AI 分析助手" }}</small><p>{{ message.content }}</p><em v-if="message.truncated" class="ai-message-warning">本次回答未完整结束</em></div>
+              <div><small>{{ message.role === 'user' ? "你" : "AI 分析助手" }}</small><p v-if="message.role === 'user'">{{ message.content }}</p><p v-else-if="message.streaming" class="ai-streaming-text">{{ message.content }}</p><div v-else class="ai-markdown" v-html="renderMarkdown(message.content)"></div><em v-if="message.truncated" class="ai-message-warning">本次回答未完整结束</em></div>
             </div>
             <div v-if="aiLoading" class="ai-message assistant"><span class="ai-message-avatar"><Sparkles :size="15" /></span><div><small>AI 分析助手</small><p class="ai-thinking">正在读取统计摘要<span>·</span><span>·</span><span>·</span></p></div></div>
           </div>
           <p v-if="aiError" class="ai-error"><CircleAlert :size="15" />{{ aiError }}</p>
           <p v-if="aiWarning" class="ai-warning"><CircleAlert :size="15" />{{ aiWarning }}</p>
           <form class="ai-composer" @submit.prevent="sendAiChat">
-            <textarea v-model="aiInput" rows="2" maxlength="2000" placeholder="输入你想分析的问题，例如：按公网上传排序，给出前 3 个风险来源"></textarea>
+            <textarea v-model="aiInput" rows="2" maxlength="2000" placeholder="输入你想分析的问题，例如：按公网上传排序，给出前 3 个风险来源" @keydown="handleAiComposerKeydown"></textarea>
             <button type="submit" :disabled="aiLoading || !aiInput.trim()"><Send :size="16" />发送</button>
           </form>
         </section>
@@ -548,8 +587,8 @@
                 <div class="form-grid mini">
                   <label>规则名称<input v-model="rule.name" /></label>
                   <div class="field-block"><span>状态</span><label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label></div>
-                  <label>指标<select v-model="rule.metric"><option v-for="(label, key) in metricLabels" :key="key" :value="key">{{ label }}</option></select></label>
-                  <label>阈值<input v-model.number="rule.threshold" type="number" min="0" /></label>
+                  <label>指标<select v-model="rule.metric" @change="resetThresholdUnit(rule)"><option v-for="(label, key) in metricLabels" :key="key" :value="key">{{ label }}</option></select></label>
+                  <label>阈值<span class="threshold-control"><input v-model.number="rule.thresholdValue" type="number" min="0" step="0.01" /><select v-if="thresholdUnitOptions(rule.metric).length > 1" v-model="rule.thresholdUnit"><option v-for="unit in thresholdUnitOptions(rule.metric)" :key="unit" :value="unit">{{ unit }}</option></select><em v-else>{{ rule.thresholdUnit || "次" }}</em></span></label>
                   <label>持续秒<input v-model.number="rule.durationSeconds" type="number" min="0" /></label>
                   <div class="field-block wide">
                     <span>通知渠道</span>
@@ -790,6 +829,7 @@ import { LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
+import { renderMarkdown } from "./utils/markdown.js";
 import {
   Activity,
   ArrowDown,
@@ -875,8 +915,10 @@ const metricLabels = {
   lan_rx_bps: "内网下载速率",
   wan_connections: "公网连接数",
   total_connections: "总连接数",
+  stage_wan_tx_bytes: "阶段公网上传总量",
   daily_wan_tx_bytes: "每日公网上传总量",
 };
+const transferUnitBytes = { "MB": 1024 ** 2, "GB": 1024 ** 3, "MB/s": 1024 ** 2, "GB/s": 1024 ** 3 };
 const providerPresets = [
   { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", maxTokens: 1200 },
   { value: "claude", label: "Claude", baseUrl: "https://api.anthropic.com/v1", model: "claude-3-5-haiku-latest", maxTokens: 4096 },
@@ -899,6 +941,8 @@ const templateVariables = [
   ["severity", "级别"],
   ["value", "当前值"],
   ["threshold", "阈值"],
+  ["value_human", "可读当前值（如 96.3 GB）"],
+  ["threshold_human", "可读阈值（如 50 GB）"],
   ["timestamp", "时间"],
   ["iso_time", "ISO 时间"],
   ["container_id", "容器ID"],
@@ -972,6 +1016,10 @@ const dockerSearch = ref("");
 const monitorRules = ref([]);
 const containerRules = ref([]);
 const channels = ref([]);
+const alertHistory = ref([]);
+const uploadDiagnostic = ref(null);
+const diagnosticDate = ref(new Date().toLocaleDateString("en-CA"));
+const diagnosticLoading = ref(false);
 const expandedMonitorCards = reactive(new Set());
 const expandedDockerCards = reactive(new Set());
 const runtimeForm = reactive({});
@@ -1100,6 +1148,46 @@ function formatBytes(value) {
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
 }
 const formatRate = (value) => `${formatBytes(value)}/s`;
+function isTransferMetric(metric) {
+  return String(metric || "").endsWith("_bps") || String(metric || "").endsWith("_bytes");
+}
+function thresholdUnitOptions(metric) {
+  if (String(metric || "").endsWith("_bps")) return ["MB/s", "GB/s"];
+  if (String(metric || "").endsWith("_bytes")) return ["MB", "GB"];
+  return [""];
+}
+function thresholdToBytes(value, unit) {
+  const numeric = Math.max(0, Number(value || 0));
+  return Math.round(numeric * (transferUnitBytes[unit] || 1));
+}
+function thresholdFromBytes(value, metric) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (!isTransferMetric(metric)) return { thresholdValue: bytes, thresholdUnit: "" };
+  const suffix = String(metric).endsWith("_bps") ? "/s" : "";
+  const baseUnit = bytes >= 1024 ** 3 ? "GB" : "MB";
+  const unit = `${baseUnit}${suffix}`;
+  const numeric = bytes / transferUnitBytes[unit];
+  return { thresholdValue: Number(numeric.toFixed(2)), thresholdUnit: unit };
+}
+function normalizeMonitorRuleForm(rule = {}) {
+  return { ...rule, ...thresholdFromBytes(rule.threshold, rule.metric) };
+}
+function resetThresholdUnit(rule) {
+  const units = thresholdUnitOptions(rule.metric);
+  const rawBytes = Math.max(0, Number(rule.threshold || 0));
+  const display = thresholdFromBytes(rawBytes, rule.metric);
+  rule.thresholdUnit = units[0];
+  rule.thresholdValue = display.thresholdValue;
+}
+function formatMonitorMetricValue(value, metric) {
+  if (String(metric || "").endsWith("_bps")) return formatRate(value);
+  if (String(metric || "").endsWith("_bytes") || String(metric || "").includes("wan_upload")) return formatBytes(value);
+  return String(Math.max(0, Number(value || 0)));
+}
+function formatMonitorThreshold(rule = {}) {
+  if (rule.thresholdValue != null) return `${rule.thresholdValue}${rule.thresholdUnit ? ` ${rule.thresholdUnit}` : ""}`;
+  return formatMonitorMetricValue(rule.threshold, rule.metric);
+}
 function formatDuration(seconds) {
   const total = Math.max(0, Math.floor(seconds || 0));
   const days = Math.floor(total / 86400);
@@ -1229,7 +1317,7 @@ function expandMonitorCard(type, id) {
 function monitorRuleSummary(rule = {}) {
   const metric = metricLabels[rule.metric] || "未选择指标";
   const duration = Number(rule.durationSeconds || 0);
-  return `${metric} · 阈值 ${Number(rule.threshold || 0)}${duration ? ` · 持续 ${duration} 秒` : ""}`;
+  return `${metric} · 阈值 ${formatMonitorThreshold(rule)}${duration ? ` · 持续 ${duration} 秒` : " · 条件满足立即触发"}`;
 }
 function containerProtectionSummary(rule = {}) {
   const target = rule.containerName || rule.composeService || "未选择容器";
@@ -1383,13 +1471,36 @@ async function refreshProcesses() {
 }
 async function refreshSettings() {
   settings.value = await api("/api/settings");
-  monitorRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.rules || []));
+  monitorRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.rules || [])).map(normalizeMonitorRuleForm);
   containerRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.containerRules || [])).map(normalizeContainerRuleForm);
   channels.value = JSON.parse(JSON.stringify(settings.value.monitor?.channels || []));
   Object.assign(runtimeForm, settings.value.runtime || {});
   Object.assign(aiForm, settings.value.ai || {});
   aiForm.apiKey = "";
   if (activeView.value === "settings") refreshDockerContainerOptions();
+}
+async function refreshAlertHistory() {
+  const data = await api("/api/alerts?limit=100");
+  alertHistory.value = Array.isArray(data?.alerts) ? data.alerts : [];
+}
+async function refreshUploadDiagnostic() {
+  if (!diagnosticDate.value || diagnosticLoading.value) return;
+  diagnosticLoading.value = true;
+  try {
+    const [diagnostic] = await Promise.all([
+      api(`/api/diagnostics/upload?date=${encodeURIComponent(diagnosticDate.value)}`),
+      refreshAlertHistory(),
+    ]);
+    uploadDiagnostic.value = diagnostic;
+  } catch (error) {
+    showToast(`诊断读取失败：${formatValidationError(error)}`);
+  } finally {
+    diagnosticLoading.value = false;
+  }
+}
+async function askAiAboutDiagnostic() {
+  const date = diagnosticDate.value;
+  await analyzeWithAi("history", `请重点排查 ${date} 的异常公网上传，结合当天总量、进程、网卡、告警证据和通知投递结果，说明最可能来源及证据局限。`);
 }
 async function refreshAiSettings() {
   const data = await api("/api/settings/ai");
@@ -1689,7 +1800,11 @@ function refreshActive() {
   if (activeView.value === "interfaces") refreshInterfaces();
   if (activeView.value === "history") refreshHistory();
   if (activeView.value === "processes") refreshProcesses();
-  if (activeView.value === "monitor" || activeView.value === "settings") refreshSettings();
+  if (activeView.value === "monitor") {
+    refreshSettings();
+    refreshUploadDiagnostic();
+  }
+  if (activeView.value === "settings") refreshSettings();
   if (activeView.value === "ai") refreshAiSettings();
   if (activeView.value === "system") refreshSystem();
   if (activeView.value === "docker") refreshDocker();
@@ -1742,6 +1857,7 @@ function pageConnections(direction) {
 async function clearAlerts() {
   await api("/api/alerts/clear", { method: "POST" });
   refreshOverview();
+  if (activeView.value === "monitor") refreshUploadDiagnostic();
 }
 async function saveRuntime() {
   settings.value = await api("/api/settings/runtime", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(runtimeForm) });
@@ -1778,6 +1894,7 @@ function applyAiStreamEvent(event, assistantIndex) {
     aiMessages.value[assistantIndex].content += event.content || "";
   }
   if (event.type !== "done" || !aiMessages.value[assistantIndex]) return;
+  aiMessages.value[assistantIndex].streaming = false;
   if (!aiMessages.value[assistantIndex].content) aiMessages.value[assistantIndex].content = event.answer || "";
   if (event.truncated) {
     aiMessages.value[assistantIndex].truncated = true;
@@ -1786,21 +1903,21 @@ function applyAiStreamEvent(event, assistantIndex) {
       : "AI 流式连接未完整结束，回答可能不完整。";
   }
 }
-async function analyzeWithAi(scope = "overview") {
+async function analyzeWithAi(scope = "overview", customQuestion = "") {
   if (aiLoading.value) return;
   aiLoading.value = true;
   aiError.value = "";
   aiWarning.value = "";
-  const question = scope === "history"
+  const question = customQuestion || (scope === "history"
     ? `请结合当前选择的历史周期（${historyPeriod.value}）分析公网和内网流量趋势，指出异常。`
     : scope === "monitor"
       ? "请检查监控规则、容器保护、通知渠道和最近告警，指出当前风险与配置建议。"
-      : "请分析当前所有统计数据，重点指出公网上传风险、异常进程和 Docker/系统资源问题。";
+      : "请分析当前所有统计数据，重点指出公网上传风险、异常进程和 Docker/系统资源问题。");
   if (activeView.value !== "ai") setView("ai");
   await refreshAiHistory();
   aiMessages.value.push({ role: "user", content: question });
   const assistantIndex = aiMessages.value.length;
-  aiMessages.value.push({ role: "assistant", content: "" });
+  aiMessages.value.push({ role: "assistant", content: "", streaming: true });
   try {
     await streamApi("/api/ai/analyze?stream=true", {
       method: "POST",
@@ -1813,6 +1930,7 @@ async function analyzeWithAi(scope = "overview") {
     if (!aiMessages.value[assistantIndex]?.content) aiMessages.value.splice(assistantIndex, 1);
     aiError.value = error.message || "AI 分析请求失败";
   } finally {
+    if (aiMessages.value[assistantIndex]) aiMessages.value[assistantIndex].streaming = false;
     aiLoading.value = false;
   }
 }
@@ -1829,7 +1947,7 @@ async function sendAiChat() {
     content: String(message.content || "").slice(-6000),
   }));
   const assistantIndex = aiMessages.value.length;
-  aiMessages.value.push({ role: "assistant", content: "" });
+  aiMessages.value.push({ role: "assistant", content: "", streaming: true });
   aiLoading.value = true;
   try {
     await streamApi("/api/ai/chat?stream=true", {
@@ -1843,11 +1961,23 @@ async function sendAiChat() {
     if (!aiMessages.value[assistantIndex]?.content) aiMessages.value.splice(assistantIndex, 1);
     aiError.value = error.message || "AI 对话请求失败";
   } finally {
+    if (aiMessages.value[assistantIndex]) aiMessages.value[assistantIndex].streaming = false;
     aiLoading.value = false;
   }
 }
+function handleAiComposerKeydown(event) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  sendAiChat();
+}
 async function saveRules() {
-  settings.value = await api("/api/settings/monitor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rules: monitorRules.value }) });
+  const rules = monitorRules.value.map((rule) => ({
+    ...rule,
+    threshold: thresholdToBytes(rule.thresholdValue, rule.thresholdUnit),
+    thresholdValue: undefined,
+    thresholdUnit: undefined,
+  }));
+  settings.value = await api("/api/settings/monitor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rules }) });
   await refreshSettings();
   showToast("监控规则已保存");
 }
@@ -1886,7 +2016,7 @@ async function testChannel(channelId) {
   showToast(result.ok ? "测试通知已发送" : `测试失败：${result.detail || result.body || "未知错误"}`);
 }
 function addRule() {
-  const rule = { id: `rule-${Date.now()}`, name: "新监控规则", metric: "wan_tx_bps", operator: "gte", threshold: 0, durationSeconds: 0, scope: "wan", direction: "tx", window: "realtime", enabled: false, channelIds: [] };
+  const rule = normalizeMonitorRuleForm({ id: `rule-${Date.now()}`, name: "新监控规则", metric: "wan_tx_bps", operator: "gte", threshold: 0, durationSeconds: 0, scope: "wan", direction: "tx", window: "realtime", enabled: false, channelIds: [] });
   monitorRules.value.push(rule);
   expandMonitorCard("traffic", rule.id);
 }

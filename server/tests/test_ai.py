@@ -403,6 +403,17 @@ class HistoryStub:
     def query_history(self, period):
         return {"period": period, "totals": {}, "buckets": []}
 
+    def query_alerts(self, start, end, limit):
+        return [{
+            "id": "daily-1",
+            "message": "daily upload",
+            "evidence": {"reason": "Public upload exceeded 50 GB"},
+            "notifications": [{"channelId": "meow", "ok": False, "detail": "timeout"}],
+        }]
+
+    def query_upload_diagnostic(self, date_value, limit=20):
+        return {"date": date_value, "totals": {"txBytes": 60 * 1024**3}, "topProcesses": [{"name": "xunlei"}]}
+
 
 def test_ai_context_uses_docker_summary_port_count():
     collector = main.TrafficCollector.__new__(main.TrafficCollector)
@@ -421,6 +432,27 @@ def test_ai_context_uses_docker_summary_port_count():
         context = collector.ai_context("overview")
 
     assert context["docker"]["containers"][0]["ports"] == 3
+    assert context["recentAlertEvidence"][0]["notifications"][0]["detail"] == "timeout"
+
+
+def test_ai_analysis_includes_requested_date_upload_diagnostic():
+    collector = main.TrafficCollector.__new__(main.TrafficCollector)
+    collector.db = HistoryStub()
+    collector.lock = threading.RLock()
+    collector.alerts = deque(maxlen=20)
+    collector.monitor_rules = []
+    collector.ai_settings = default_ai_settings()
+    collector.api_overview = lambda _view: {}
+    collector.process_rank = lambda _period, _limit: {"processes": []}
+    collector.docker_containers = lambda: {"enabled": False, "containers": []}
+
+    with patch.object(main, "system_status", return_value={}):
+        _context, messages = collector._ai_analyze_messages(
+            main.AIAnalyzePayload(scope="history", question="请排查 2026-08-06 的异常上传")
+        )
+
+    assert "2026-08-06" in messages[-1]["content"]
+    assert "xunlei" in messages[-1]["content"]
 
 
 def test_ai_request_models_reject_oversized_or_privileged_input():

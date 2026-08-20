@@ -21,6 +21,8 @@
 - 支持访问密码、监控规则、SQLite 历史统计、日志目录映射。
 - 支持监控中心和通知渠道模块，可按规则触发 Webhook、IYUU、MeoW 等渠道。
 - 支持多厂商 AI 中心和按需 AI 分析；配置保存在设置页和 SQLite，不参与后台采集。
+- AI 回复按安全 Markdown 展示，支持 `Enter` 发送和 `Shift+Enter` 换行。
+- 上传规则支持 `MB` / `GB` / `MB/s` / `GB/s` 可读单位，并保存告警证据和通知投递回执。
 - 支持在页面可视化保存监控规则、通知渠道、消息模板和可热更新运行参数，配置写入 SQLite，重启后保留。
 - 支持网卡/进程/连接筛选，连接表可按公网/内网、网卡、协议、方向、关键词、流量和时长过滤。
 - 历史统计按今日、本周、本月、今年自然时间段聚合，用平滑曲线区分公网/内网、上行/下行。
@@ -203,10 +205,13 @@ AI 是显式按需功能：只有点击分析或发送对话时才请求配置�
 | `MAX_DOCKER_ICON_DATA_CHARS` | `2097152` | 单个 Docker 图标 data URL 最大字符数 |
 | `LOGIN_MAX_ATTEMPTS` | `10` | 单个客户端登录失败次数上限 |
 | `LOGIN_LOCK_SECONDS` | `300` | 登录失败达到上限后的限制时间 |
-| `ALERT_WAN_TX_BPS` | `0` | 默认监控规则：公网上传速率阈值，单位 B/s |
+| `ALERT_WAN_TX_BPS` | `0` | 兼容旧监控规则：公网上传速率阈值，单位 B/s |
+| `ALERT_WAN_TX_MBPS` | 空 | 可读的持续上传默认阈值，单位 MB/s；旧字节变量优先 |
 | `ALERT_WAN_TX_SECONDS` | `0` | 默认监控规则：高上传持续秒数 |
-| `ALERT_STAGE_TX_BYTES` | `0` | 兼容旧阶段上传规则，首页不再展示阶段公网 |
-| `ALERT_DAILY_TX_BYTES` | `0` | 默认监控规则：每日公网上传上限，单位 B |
+| `ALERT_STAGE_TX_BYTES` | `0` | 兼容旧阶段上传规则，单位 B；首页不再展示阶段公网 |
+| `ALERT_STAGE_TX_GB` | 空 | 可读的阶段上传默认阈值，单位 GB |
+| `ALERT_DAILY_TX_BYTES` | `0` | 兼容旧每日公网上传上限，单位 B |
+| `ALERT_DAILY_TX_GB` | 空 | 可读的每日公网上传默认阈值，单位 GB |
 | `ALERT_NOTIFY_CHANNEL` | `webhook` | 默认通知渠道类型，支持 `webhook`、`iyuu`、`meow` |
 | `ALERT_WEBHOOK_URL` | 空 | 默认 Webhook 地址，设置后启用默认通知渠道 |
 | `ALERT_WEBHOOK_TIMEOUT` | `5` | 默认通知渠道超时，单位秒 |
@@ -245,6 +250,7 @@ AI 是显式按需功能：只有点击分析或发送对话时才请求配置�
 {app} {version} {channel_id} {channel_name} {channel_type}
 {alert_id} {rule_id} {rule_name} {message} {severity}
 {value} {threshold} {timestamp} {iso_time}
+{value_human} {threshold_human}
 ```
 
 例如：
@@ -252,10 +258,18 @@ AI 是显式按需功能：只有点击分析或发送对话时才请求配置�
 ```text
 标题：{app} {rule_name}
 正文：告警：{message}
-当前值：{value}
-阈值：{threshold}
+当前值：{value_human}
+阈值：{threshold_human}
 时间：{timestamp}
 ```
+
+`{value}`、`{threshold}` 保留原始字节/速率数值以兼容旧模板；`{value_human}`、`{threshold_human}` 是可读格式，例如 `96.3 GB`、`50 GB`。每日规则持续时间为 `0` 表示达到阈值后立即触发，不是关闭规则。
+
+### 上传告警证据和日期回溯
+
+每日公网规则每个 SQLite 持久化周期检查一次当天 `wan.txBytes`。触发时会在 `alert_evidence` 保存有限大小的日期、窗口、阈值、Top 网卡、Top 进程、活跃公网连接和 Docker 归属；异步通知结束后再写入每个渠道的成功或失败回执。
+
+页面“监控中心 -> 上传异常记录”调用 `GET /api/diagnostics/upload?date=YYYY-MM-DD`。AI 在问题包含日期时会自动带入同一份有上限的聚合数据，但不能执行任意 SQL 或宿主命令。旧版本没有进程聚合或通知回执时，页面会明确标记无法回溯，不会把整日网卡总量冒充进程归因。
 
 ## 公网累计统计
 
@@ -564,6 +578,8 @@ server/                 FastAPI 后端和采集器
 - `GET /api/processes?period=30s|today|1d|3d|7d|30d|custom&limit=30`：进程上下行排行；自定义时间可带 `start` 和 `end` Unix 秒。
 - `GET /api/connections?interfaces=physical&scope=wan&direction=tx`：按需连接明细，支持网卡、范围、协议、方向、进程、源/目标、最小流量、最小时长、分页。
 - `GET /api/history?period=day|week|month|year`：历史聚合统计。
+- `GET /api/alerts?start=UNIX&end=UNIX&limit=100`：告警、证据和通知回执，结果有上限。
+- `GET /api/diagnostics/upload?date=YYYY-MM-DD`：指定日期公网总量、Top 网卡、Top 进程和关联告警。
 - `GET /api/settings`：当前配置。
 - `POST /api/settings/monitor`：保存监控规则。
 - `POST /api/settings/channels`：保存通知渠道。

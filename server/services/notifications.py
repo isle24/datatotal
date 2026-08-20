@@ -7,13 +7,28 @@ from typing import Optional
 
 
 DEFAULT_NOTIFY_TITLE_TEMPLATE = "{app} {rule_name}"
-DEFAULT_NOTIFY_BODY_TEMPLATE = (
+LEGACY_NOTIFY_BODY_TEMPLATE = (
     "告警：{message}\n"
     "当前值：{value}\n"
     "阈值：{threshold}\n"
     "时间：{timestamp}\n"
     "规则：{rule_id}"
 )
+DEFAULT_NOTIFY_BODY_TEMPLATE = LEGACY_NOTIFY_BODY_TEMPLATE.replace("{value}", "{value_human}").replace(
+    "{threshold}", "{threshold_human}"
+)
+
+
+def safe_notification_detail(value: str, channel: dict) -> str:
+    cleaned = str(value or "")
+    secrets = {
+        str(channel.get("token") or "").strip(),
+        str(channel.get("url") or "").strip(),
+        channel_target_url(channel),
+    }
+    for secret in sorted((item for item in secrets if item), key=len, reverse=True):
+        cleaned = cleaned.replace(secret, "[redacted]")
+    return cleaned[:500]
 
 
 def sanitize_http_url(value: str) -> str:
@@ -46,6 +61,9 @@ def notification_context(alert: dict, channel: dict, app_name: str, app_version:
     ts = float(alert.get("timestamp") or datetime.now().timestamp())
     metrics = alert.get("metrics") or []
     matched_metrics = alert.get("matchedMetrics") or []
+    evidence = alert.get("evidence") or {}
+    actual = evidence.get("actual") or {}
+    threshold_meta = evidence.get("threshold") or {}
     return {
         "app": app_name,
         "version": app_version,
@@ -59,6 +77,8 @@ def notification_context(alert: dict, channel: dict, app_name: str, app_version:
         "severity": alert.get("severity") or "",
         "value": alert.get("value", ""),
         "threshold": alert.get("threshold", ""),
+        "value_human": actual.get("label") or alert.get("value", ""),
+        "threshold_human": threshold_meta.get("label") or alert.get("threshold", ""),
         "timestamp": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
         "iso_time": datetime.fromtimestamp(ts).isoformat(timespec="seconds"),
         "container_id": alert.get("containerId") or "",
@@ -149,8 +169,8 @@ def send_notification_alert(alert: dict, channel: dict, app_name: str, app_versi
     try:
         with urllib.request.urlopen(request, timeout=max(1, min(30, float(channel.get("timeout") or 5)))) as response:
             body = response.read(2048).decode(errors="ignore")
-            return {"ok": 200 <= response.status < 300, "status": response.status, "body": body[:500]}
+            return {"ok": 200 <= response.status < 300, "status": response.status, "body": safe_notification_detail(body, channel)}
     except Exception as exc:
         if raise_error:
             raise
-        return {"ok": False, "detail": str(exc)}
+        return {"ok": False, "detail": safe_notification_detail(str(exc), channel)}

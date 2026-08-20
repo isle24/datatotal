@@ -26,6 +26,9 @@ NAS Traffic Lens 是一个面向极空间、家庭 NAS 和 x86/ARM Linux 主机�
 - 系统状态页面，展示 CPU、内存、磁盘、温度、GPU/NPU 可见性。
 - AI 中心支持 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义接口的按需分析与对话；首页、历史、监控中心都有快捷分析入口。
 - 支持访问密码、登录失败限制、SQLite 持久化、日志目录映射。
+- 上传阈值可在设置页使用 `MB` / `GB` / `MB/s` / `GB/s` 编辑；后端仍以字节保存，旧值 `53687091200` 会自动显示为 `50 GB`。
+- 上传告警会保存触发值、阈值、Top 网卡、可见进程、活跃公网连接、Docker 归属和每个通知渠道的投递结果。
+- 监控中心支持按日期回溯上传异常；AI 回复支持安全 Markdown，`Enter` 发送、`Shift+Enter` 换行。
 
 ## 适用环境
 
@@ -290,6 +293,20 @@ DOCKER_CONTEXT=default ./scripts/push-docker.sh
 - 未启用 AI 或没有 API Key 时，AI 接口会返回可读的配置提示，不会影响流量采集和首页显示。
 - 保存 AI 配置时，请求超时默认 60 秒并规范化到 `5..180` 秒，最大输出 Token 会规范化到 `128..393216`。DeepSeek 预设默认使用官方最大输出 `393216` Token；官方 1M 是上下文窗口，不等于单次输出长度。超大输出会增加等待时间、内存和 API 费用，请按实际需要调低。
 - AI 对话和快捷分析会写入 SQLite 的 `ai_messages` 表，页面刷新或容器重启后会恢复最近 100 条消息；AI 页面可手动清空记录。回答因达到 Token 上限、连接异常或本地硬上限而不完整时，页面会明确提示。
+- AI 问题包含 `YYYY-MM-DD` 日期时，会额外读取该日有上限的公网总量、Top 网卡、Top 进程和告警证据。AI 不能执行任意 SQL、宿主命令，也不会收到通知 Token 或 API Key。
+- AI 助手回复按 Markdown 展示。原始 HTML 会先转义，链接只允许 `http`、`https`、`mailto`、站内路径和锚点，避免通过 `v-html` 注入脚本。
+
+### 通知模板
+
+通知渠道支持 Webhook、IYUU 和 MeoW。模板保留原始 `{value}` / `{threshold}` 数值变量，同时提供 `{value_human}` / `{threshold_human}` 可读变量，例如 `96.29 GB`、`50 GB`。常用变量还包括 `{app}`、`{version}`、`{rule_id}`、`{rule_name}`、`{message}`、`{severity}`、`{timestamp}`、`{container_name}`、`{container_reason}`。通知失败不会阻塞采集，会在告警详情保存截断后的渠道结果；Token 和目标 URL 会脱敏。
+
+### 上传阈值、告警和回溯
+
+设置页会把每日/阶段总量显示为 `MB` 或 `GB`，把实时速率显示为 `MB/s` 或 `GB/s`。SQLite、规则 API 和旧环境变量继续使用字节，已有配置不需要迁移。
+
+每日公网规则每个 SQLite 持久化周期检查一次当前自然日的 `wan.txBytes`，默认周期为 60 秒。`持续秒 = 0` 表示条件达到阈值后立即触发，不是停用规则。触发后会写入 `alerts` 和 `alert_evidence`，再异步发送通知；通知完成后保存每个渠道的 HTTP 状态、成功或失败原因。
+
+监控中心的“上传异常记录”可以按日期查询。证据包含触发日期、时间、实际值、阈值、Top 公网网卡、触发瞬间可见的公网进程/连接和 Docker 归属。历史进程聚合可能包含内网流量，因此只作为来源参考，公网网卡总量才是告警判定依据。旧版本没有保存进程或通知回执时，页面会明确显示证据缺失，不会猜测来源。
 
 首次启动没有 SQLite 配置时，程序使用代码默认值；保存后 SQLite 配置优先于对应环境变量。因此更新镜像时不需要把几十个默认参数复制到 compose。
 
@@ -347,10 +364,13 @@ DOCKER_CONTEXT=default ./scripts/push-docker.sh
 | `MAX_DOCKER_ICON_DATA_CHARS` | `2097152` | 单个 Docker 图标 data URL 最大字符数 |
 | `LOGIN_MAX_ATTEMPTS` | `10` | 单客户端登录失败次数上限 |
 | `LOGIN_LOCK_SECONDS` | `300` | 登录锁定秒数 |
-| `ALERT_WAN_TX_BPS` | `0` | 默认持续公网上传速率阈值，单位 B/s |
+| `ALERT_WAN_TX_BPS` | `0` | 兼容旧持续公网上传速率阈值，单位 B/s |
+| `ALERT_WAN_TX_MBPS` | 空 | 可读的持续上传默认阈值，单位 MB/s；旧字节变量优先 |
 | `ALERT_WAN_TX_SECONDS` | `0` | 默认持续公网上传触发秒数 |
-| `ALERT_STAGE_TX_BYTES` | `0` | 兼容旧阶段上传规则，首页不再展示阶段公网 |
-| `ALERT_DAILY_TX_BYTES` | `0` | 默认每日公网上传阈值，单位 B |
+| `ALERT_STAGE_TX_BYTES` | `0` | 兼容旧阶段上传规则，单位 B；首页不再展示阶段公网 |
+| `ALERT_STAGE_TX_GB` | 空 | 可读的阶段上传默认阈值，单位 GB |
+| `ALERT_DAILY_TX_BYTES` | `0` | 兼容旧每日公网上传阈值，单位 B |
+| `ALERT_DAILY_TX_GB` | 空 | 可读的每日上传默认阈值，单位 GB |
 | `ALERT_NOTIFY_CHANNEL` | `webhook` | 默认通知渠道类型：`webhook`、`iyuu`、`meow` |
 | `ALERT_WEBHOOK_URL` | 空 | 默认 Webhook 地址 |
 | `ALERT_WEBHOOK_TIMEOUT` | `5` | 通知请求超时秒数 |
