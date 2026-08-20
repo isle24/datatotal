@@ -19,12 +19,15 @@ NAS Traffic Lens 是一个面向极空间、家庭 NAS 和 x86/ARM Linux 主机�
 - 进程级上行/下行排行，按需加载，降低后台压力。
 - 连接与端口弹窗，支持筛选、分页、公网/内网、方向、协议、网卡、进程和关键词过滤。
 - Docker 容器列表、端口识别、手动端口、端口备注、服务类型、快捷访问、图标上传。
+- 内置 qBittorrent、Redis、MySQL、MariaDB、PostgreSQL、MoviePilot、Nginx、MongoDB、Prometheus、Grafana、LinuxServer、Docker 等图标；按容器名、镜像名和 Compose service 自动匹配，支持 `qbittorrent-nox`、`moviepolite` 等别名，手动上传/选择优先。
 - Docker stats 按需加载，页面离开后不继续刷新，减少 Docker socket 压力。
 - 监控中心展示上传速率、连接数、每日流量等规则的运行状态。
 - 通知渠道模块，支持 Webhook、IYUU、MeoW，并支持消息模板变量。
 - 历史统计折线图，支持今日、本周、本月等时间范围。
 - 系统状态页面，展示 CPU、内存、磁盘、温度、GPU/NPU 可见性。
 - AI 中心支持 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义接口的按需分析与对话；首页、历史、监控中心都有快捷分析入口。
+- AI 中心包含“设置助手”：可以用自然语言同时调整运行参数、监控规则、通知模板非敏感字段、容器保护、Docker 备注/内置图标和 AI 偏好；AI 先生成差异预览，点击一次确认后才写入 SQLite。
+- AI 设置助手不会读取或修改密码、API Key、Webhook/IYUU/MeoW Token、Docker socket、数据库/日志路径，也不会执行 SQL、宿主命令或 Docker 命令。
 - 支持访问密码、登录失败限制、SQLite 持久化、日志目录映射。
 - 上传阈值可在设置页使用 `MB` / `GB` / `MB/s` / `GB/s` 编辑；后端仍以字节保存，旧值 `53687091200` 会自动显示为 `50 GB`。
 - 上传告警会保存触发值、阈值、Top 网卡、可见进程、活跃公网连接、Docker 归属和每个通知渠道的投递结果。
@@ -295,6 +298,10 @@ DOCKER_CONTEXT=default ./scripts/push-docker.sh
 - AI 对话和快捷分析会写入 SQLite 的 `ai_messages` 表，页面刷新或容器重启后会恢复最近 100 条消息；AI 页面可手动清空记录。回答因达到 Token 上限、连接异常或本地硬上限而不完整时，页面会明确提示。
 - AI 问题包含 `YYYY-MM-DD` 日期时，会额外读取该日有上限的公网总量、Top 网卡、Top 进程和告警证据。AI 不能执行任意 SQL、宿主命令，也不会收到通知 Token 或 API Key。
 - AI 助手回复按 Markdown 展示。原始 HTML 会先转义，链接只允许 `http`、`https`、`mailto`、站内路径和锚点，避免通过 `v-html` 注入脚本。
+
+设置页的“AI 中心 -> 设置助手”支持自然语言生成配置预览，例如“把采样间隔改为 2 秒，并开启 Docker 自动发现”。预览会显示路径、原值、新值、风险和过期时间，只有点击“确认应用”才会写入 SQLite；proposal 默认 10 分钟有效、只能应用一次，服务重启后失效，设置在预览期间发生变化时会拒绝应用。密码、API Key、通知 Token、socket、数据库/日志路径、SQL 和宿主命令必须人工配置，AI 不会读取这些内容。
+
+Docker 图标随镜像内置，不访问外部 CDN。容器列表会按用户自定义图标、用户选择的 `iconKey`、容器名/Compose service/镜像名依次匹配；未匹配时使用通用图标。Docker 编辑器可选择内置图标、上传 PNG/JPG/WebP 或清除覆盖。内置图标清单可通过认证接口 `GET /api/docker/icons` 获取。
 
 ### 通知模板
 

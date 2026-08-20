@@ -34,6 +34,7 @@
 - 默认只返回并展示物理/主接口数据，切换到“全部接口”时才加载 Docker/veth/bridge 等虚拟接口。
 - 默认页接口已拆分：概览轻量刷新，进程排行和连接明细按需独立加载，降低 500 和高负载风险。
 - 可读取 Docker 容器端口映射并显示容器名，也可给容器端口添加自定义备注、手动端口、图标和访问方式。
+- 内置常见 Docker 服务图标：qBittorrent、Redis、MySQL、MariaDB、PostgreSQL、MoviePilot、Nginx、MongoDB、Prometheus、Grafana、LinuxServer、Docker；自动按容器名、镜像名、Compose service 和别名匹配，用户上传或选择的图标优先。
 - Docker 页支持容器搜索、端口搜索、图标上传和按需 CPU/内存/网络占用查看。
 - Docker 页列表接口只返回容器摘要，端口/图标按容器单独加载，CPU/内存/网络统计只在点击“显示占用”后请求单个容器，页面离开后不继续刷新，减少 Docker socket 压力。
 - Docker 端口会自动识别 Redis、MySQL、PostgreSQL、MongoDB、SSH、Web 等常见服务；非 Web 端口默认只复制地址，不直接 HTTP 打开。
@@ -163,6 +164,12 @@ docker compose -f docker-compose.nas.yml up -d
 “设置”页可以启用 AI 服务并选择内置厂商：OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 或自定义兼容接口。除 Claude 使用 Anthropic 原生 API 外，其余厂商使用 OpenAI-compatible API。DeepSeek 默认使用官方 `https://api.deepseek.com` 和 `deepseek-v4-flash` 预设。DeepSeek 官方的 1M 指上下文窗口，单次最大输出为 384K Token，即 `393216`；本项目预设会直接使用该最大输出值。超大输出会增加等待时间、内存和费用，建议按实际场景调低。Base URL 和模型均可覆盖默认值；“读取模型”会由后端请求当前厂商的 `/models`，短缓存 60 秒后显示可选模型，不支持 `/models` 时可以手动输入。
 
 AI 是显式按需功能：只有点击分析或发送对话时才请求配置的服务，不在采集线程中运行。网页默认以 SSE 流式显示回答，后端同时保留普通 JSON 响应。请求超时默认 60 秒、可配置范围为 5 到 180 秒。流式 `done` 事件会返回 `finishReason` 和 `truncated`，达到输出上限或连接提前关闭时页面会提示，不再静默显示半截回答。后端发送的是有限聚合摘要，不发送完整连接明细原始表；摘要包括当前概览、日/周/月/年历史、进程排行、最多 50 个 Docker 容器、系统状态、规则和最近告警。API Key 只保存在 SQLite 并以掩码形式返回，请保护 `./data` 目录，不要把真实 Key 写进 compose 或文档。模型读取同样由后端代理，API Key 不会暴露给浏览器；读取失败不会阻止手动保存模型。
+
+AI 中心的“设置助手”支持自然语言生成设置预览。例如输入“采样间隔改为 2 秒，并开启 Docker 自动发现”，页面会列出路径、原值、新值、风险和过期时间；点击“确认应用”后才会一次性保存，取消则不产生变更。proposal 默认 10 分钟有效、只能应用一次，服务重启后失效，且会检查预览期间设置是否被其他方式修改。可配置范围包括运行参数、监控规则、通知渠道非敏感字段、容器保护、Docker 端口标签/内置图标和 AI 偏好。
+
+设置助手不能读取或修改 Dashboard 密码、AI API Key、Webhook/IYUU/MeoW Token、Docker socket、数据库路径、日志路径、环境变量，也不能执行 SQL、宿主命令或 Docker 命令。API Key 和通知凭据仍需通过设置表单人工填写；模型只能收到去除凭据的聚合配置和统计摘要。
+
+Docker 图标由镜像内置并通过 `GET /api/docker/icons` 返回，不依赖外部 CDN。当前支持 qBittorrent、Redis、MySQL、MariaDB、PostgreSQL、MoviePilot、Nginx、MongoDB、Prometheus、Grafana、LinuxServer、Docker；`qbittorrent-nox`、`qb`、`moviepolite`、`postgres` 等常见写法会自动归一化。用户自定义上传图标或显式选择 `iconKey` 会覆盖自动匹配。
 
 下面的环境变量仅用于启动边界、首次启动默认值和高级诊断覆盖：
 
@@ -357,6 +364,7 @@ Docker 相关接口拆分为：
 - `GET /api/docker/containers/{id}`：单容器端口、图标和详情。
 - `GET /api/docker/containers/{id}/stats`：单容器 CPU/内存/网络统计，按需调用。
 - `POST /api/docker/ports/probe`：单端口 Web 探测，带缓存。
+- `GET /api/docker/icons`：返回镜像内置的常见 Docker 服务图标清单，不访问外部 CDN。
 
 AI 相关接口：
 
@@ -368,6 +376,9 @@ AI 相关接口：
 - `POST /api/ai/analyze?stream=true`、`POST /api/ai/chat?stream=true`：返回 `text/event-stream`，事件类型为 `delta`、`done` 或 `error`。
 - `GET /api/ai/history`：读取 SQLite 中最近 100 条 AI 对话/分析消息。
 - `DELETE /api/ai/history`：清空已保存的 AI 消息。
+- `GET /api/ai/configure/schema`：返回设置助手允许修改的非敏感字段和约束。
+- `POST /api/ai/configure`：根据自然语言生成短时有效的配置变更预览，不写入设置。
+- `POST /api/ai/configure/apply`：确认应用服务端生成的 proposal，单次使用并检查设置是否已变化。
 
 ## GPU / NPU 和温度
 
