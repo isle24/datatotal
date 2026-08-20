@@ -126,6 +126,24 @@ docker push isle204/nas-traffic-lens:arm64
 docker push isle204/nas-traffic-lens:latest-arm64
 ```
 
+仓库也提供了统一推送脚本 `scripts/push-docker.sh`，会读取根目录 `VERSION`，推送两个架构 tag，并创建多架构版本 tag 和 `latest`：
+
+```bash
+./scripts/push-docker.sh
+```
+
+先查看将执行的命令：
+
+```bash
+DRY_RUN=1 ./scripts/push-docker.sh
+```
+
+脚本默认使用 `orbstack` context；如果本机使用其他 context，设置 `DOCKER_CONTEXT` 覆盖即可。执行前请先完成 Docker Hub 登录：
+
+```bash
+docker --context orbstack login
+```
+
 页面和 API 显示的版本号来自镜像内 `/app/VERSION`，源码对应根目录 `VERSION` 文件。发新版时先更新 `VERSION`，再按同一个版本号打 Docker tag。
 
 推送到 Docker Hub 后，NAS 端可以直接使用项目里的 `docker-compose.nas.yml`：

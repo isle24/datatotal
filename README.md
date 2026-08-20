@@ -253,6 +253,24 @@ docker push isle204/nas-traffic-lens:arm64
 docker push isle204/nas-traffic-lens:latest-arm64
 ```
 
+也可以直接执行仓库内的推送脚本。它会读取 `VERSION`，推送 amd64/arm64 架构 tag，再创建多架构版本 tag 和 `latest`：
+
+```bash
+./scripts/push-docker.sh
+```
+
+脚本默认使用 OrbStack 的 `orbstack` Docker context。只预览命令不执行推送：
+
+```bash
+DRY_RUN=1 ./scripts/push-docker.sh
+```
+
+如果你的 Docker context 名称不同，可以覆盖：
+
+```bash
+DOCKER_CONTEXT=default ./scripts/push-docker.sh
+```
+
 日常部署推荐使用 `latest`，这样文档和 compose 不需要每次跟着版本号修改。遇到缓存、回滚或需要确认版本时，再改用固定版本 tag，例如当前 `VERSION` 文件中的版本。
 
 ## 配置方式
