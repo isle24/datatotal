@@ -24,7 +24,7 @@ NAS Traffic Lens 是一个面向极空间、家庭 NAS 和 x86/ARM Linux 主机�
 - 通知渠道模块，支持 Webhook、IYUU、MeoW，并支持消息模板变量。
 - 历史统计折线图，支持今日、本周、本月等时间范围。
 - 系统状态页面，展示 CPU、内存、磁盘、温度、GPU/NPU 可见性。
-- AI 中心支持 OpenAI 兼容接口的按需分析和对话；首页、历史、监控中心都有快捷分析入口。
+- AI 中心支持 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义接口的按需分析与对话；首页、历史、监控中心都有快捷分析入口。
 - 支持访问密码、登录失败限制、SQLite 持久化、日志目录映射。
 
 ## 适用环境
@@ -261,12 +261,15 @@ docker push isle204/nas-traffic-lens:latest-arm64
 
 ### AI 配置与隐私
 
-在“设置”页面的“AI 分析配置”中填写 OpenAI 兼容服务的 Base URL、模型和 API Key，然后启用按需请求。支持 OpenAI、自建兼容网关以及常见本地模型服务；Base URL 只接受 `http://` 或 `https://`。
+在“设置”页面的“AI 分析配置”中选择厂商、填写 API Key，然后启用按需请求。内置预设包括 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义兼容接口。OpenAI、DeepSeek、Kimi、Qwen、MiniMax 使用 OpenAI-compatible API；Claude 使用 Anthropic 原生 API（`/v1/messages` 和 `/v1/models`）。Base URL 和模型都可以手动覆盖，方便使用代理、自建网关或区域 endpoint；Base URL 只接受 `http://` 或 `https://`。
+
+点击“读取模型”时，前端把当前未保存的配置发送到后端，由后端请求厂商的 `/models` 接口并缓存 60 秒。浏览器不会直接接触厂商 API Key；如果厂商不支持模型列表，仍可手动填写模型名称。
 
 - AI 请求只在点击“AI 分析”或发送 AI 中心对话时发起，不会进入后台采集循环，也不会定时调用外部服务。
 - 发送内容是有限的聚合摘要：当前概览、日/周/月/年历史、进程排行、最多 50 个 Docker 容器摘要、系统状态、监控规则和最近告警；不会发送完整连接原始表。
 - API Key 保存于 SQLite 的 `ai_settings` 配置中，接口只返回掩码，不回显完整 Key，也不会写入应用日志。请把 `/data` 目录当作敏感配置保存。
 - 未启用 AI 或没有 API Key 时，AI 接口会返回可读的配置提示，不会影响流量采集和首页显示。
+- 保存 AI 配置时，超时会规范化到 `5..30` 秒，最大输出 Token 会规范化到 `128..4096`；参数错误会显示具体字段和原因，而不是只显示 422。
 
 首次启动没有 SQLite 配置时，程序使用代码默认值；保存后 SQLite 配置优先于对应环境变量。因此更新镜像时不需要把几十个默认参数复制到 compose。
 

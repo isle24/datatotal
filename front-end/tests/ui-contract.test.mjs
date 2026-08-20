@@ -20,6 +20,11 @@ test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(source, /key: "ai", label: "AI 中心"/);
   assert.match(source, /\/api\/ai\/analyze/);
   assert.match(source, /\/api\/ai\/chat/);
+  assert.match(source, /\/api\/ai\/models/);
+  assert.match(source, /providerPresets/);
+  assert.match(source, /读取模型/);
+  assert.match(source, /formatValidationError/);
+  assert.match(source, /timeoutSeconds: clampNumber/);
   assert.match(source, /async function refreshAiSettings\(\)/);
   assert.match(source, /if \(activeView\.value === "settings"\) refreshDockerContainerOptions\(\)/);
   assert.match(source, /if \(activeView\.value === "ai"\) refreshAiSettings\(\)/);

@@ -864,6 +864,8 @@ label.check input, label.switch input { width: auto; min-height: auto; }
 }
 .settings-ai-card { border-color: color-mix(in srgb, var(--cyan) 30%, var(--line)); }
 .ai-form-grid { gap: 14px; padding: 18px; }
+.inline-field { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto; gap: 8px; align-items: stretch; }
+.inline-field .subtle-button { white-space: nowrap; }
 .settings-security-note { display: flex; align-items: center; gap: 7px; margin: 0 18px 18px; color: var(--muted); font-size: 12px; }
 .monitor-hero, .ai-center-hero {
   display: flex;
@@ -1060,6 +1062,7 @@ label.check input, label.switch input { width: auto; min-height: auto; }
   .ai-messages { padding: 14px; }
   .ai-message { max-width: 96%; }
   .ai-composer { grid-template-columns: 1fr; padding: 12px; }
+  .inline-field { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 430px) {

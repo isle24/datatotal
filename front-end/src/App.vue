@@ -498,13 +498,24 @@
           </CardHead>
           <div class="form-grid ai-form-grid">
             <div class="field-block"><span>启用 AI 分析</span><label class="switch"><input v-model="aiForm.enabled" type="checkbox" />允许按需请求</label></div>
-            <label>OpenAI 兼容 Base URL<input v-model="aiForm.baseUrl" type="url" placeholder="https://api.openai.com/v1" /></label>
+            <label>AI 厂商<select v-model="aiForm.provider" @change="applyAiProviderPreset"><option v-for="provider in providerPresets" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></label>
+            <label>Base URL<input v-model="aiForm.baseUrl" type="url" placeholder="https://api.openai.com/v1" /></label>
             <label>API Key<input v-model="aiForm.apiKey" type="password" autocomplete="off" :placeholder="aiForm.keyConfigured ? aiForm.apiKeyMasked : '填写后保存，前端只显示掩码'" /></label>
-            <label>模型<input v-model="aiForm.model" placeholder="gpt-4o-mini / qwen-plus / deepseek-chat" /></label>
+            <label>模型
+              <div class="inline-field">
+                <select v-if="aiModels.length" v-model="aiForm.model" aria-label="从模型列表选择">
+                  <option v-for="model in aiModels" :key="model.id" :value="model.id">{{ model.name || model.id }}</option>
+                </select>
+                <input v-model="aiForm.model" list="ai-model-options" placeholder="gpt-4o-mini / qwen-plus / deepseek-chat" />
+                <button type="button" class="subtle-button" :disabled="aiModelsLoading" @click="readAiModels"><RefreshCw :size="15" />{{ aiModelsLoading ? "读取中" : "读取模型" }}</button>
+              </div>
+              <datalist id="ai-model-options"><option v-for="model in aiModels" :key="`list-${model.id}`" :value="model.id">{{ model.name }}</option></datalist>
+            </label>
             <label>请求超时秒<input v-model.number="aiForm.timeoutSeconds" type="number" min="5" max="30" /></label>
             <label>最大输出 Token<input v-model.number="aiForm.maxTokens" type="number" min="128" max="4096" /></label>
             <label class="textarea-label wide">系统提示词<textarea v-model="aiForm.systemPrompt" rows="3" placeholder="定义 AI 分析时的角色和关注点"></textarea></label>
           </div>
+          <p v-if="aiModelsError" class="settings-security-note"><CircleAlert :size="15" />{{ aiModelsError }}，仍可手动填写模型。</p>
           <p class="settings-security-note"><ShieldCheck :size="15" /> API Key 只保存在 SQLite，不会回显到页面，也不会写入日志；Base URL 仅允许 HTTP/HTTPS。</p>
         </section>
 
@@ -862,6 +873,15 @@ const metricLabels = {
   total_connections: "总连接数",
   daily_wan_tx_bytes: "每日公网上传总量",
 };
+const providerPresets = [
+  { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+  { value: "claude", label: "Claude", baseUrl: "https://api.anthropic.com/v1", model: "claude-3-5-haiku-latest" },
+  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { value: "kimi", label: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
+  { value: "qwen", label: "Qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
+  { value: "minimax", label: "MiniMax", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-Text-01" },
+  { value: "custom", label: "自定义兼容接口", baseUrl: "", model: "" },
+];
 const templateVariables = [
   ["app", "应用名"],
   ["version", "版本"],
@@ -953,6 +973,7 @@ const expandedDockerCards = reactive(new Set());
 const runtimeForm = reactive({});
 const aiForm = reactive({
   enabled: false,
+  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   apiKeyMasked: "",
@@ -962,6 +983,9 @@ const aiForm = reactive({
   maxTokens: 1200,
   systemPrompt: "",
 });
+const aiModels = ref([]);
+const aiModelsLoading = ref(false);
+const aiModelsError = ref("");
 const aiMessages = ref([]);
 const aiInput = ref("");
 const aiError = ref("");
@@ -1226,7 +1250,12 @@ async function readJson(response) {
     if (!response.ok) throw new Error(text || response.statusText || "请求失败");
     throw error;
   }
-  if (!response.ok) throw new Error(data?.detail || text || response.statusText || "请求失败");
+  if (!response.ok) {
+    const error = new Error(Array.isArray(data?.detail) ? "请求参数无效" : (data?.detail || text || response.statusText || "请求失败"));
+    error.detail = data?.detail;
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 async function api(url, options) {
@@ -1288,6 +1317,63 @@ async function refreshAiSettings() {
   const data = await api("/api/settings/ai");
   Object.assign(aiForm, data || {});
   aiForm.apiKey = "";
+  aiModels.value = [];
+  aiModelsError.value = "";
+}
+function applyAiProviderPreset() {
+  const preset = providerPresets.find((item) => item.value === aiForm.provider);
+  if (!preset) return;
+  aiForm.baseUrl = preset.baseUrl;
+  aiForm.model = preset.model;
+  aiModels.value = [];
+  aiModelsError.value = "";
+}
+function clampNumber(value, min, max, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(numeric)));
+}
+function formatValidationError(error) {
+  const detail = error?.detail;
+  if (!Array.isArray(detail)) return String(detail || error?.message || "请求失败");
+  return detail.map((item) => {
+    const field = Array.isArray(item?.loc) ? item.loc.filter((part) => part !== "body").join(".") : "请求";
+    return `${field || "请求"}：${item?.msg || "参数无效"}`;
+  }).join("；");
+}
+async function readAiModels() {
+  if (aiModelsLoading.value) return;
+  aiModelsLoading.value = true;
+  aiModelsError.value = "";
+  try {
+    const result = await api("/api/ai/models?refresh=true", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        enabled: Boolean(aiForm.enabled),
+        provider: aiForm.provider || "openai",
+        baseUrl: String(aiForm.baseUrl || "").trim(),
+        apiKey: aiForm.apiKey,
+        model: String(aiForm.model || "").trim(),
+        timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 30, 30),
+        maxTokens: clampNumber(aiForm.maxTokens, 128, 4096, 1200),
+        systemPrompt: aiForm.systemPrompt,
+      }),
+    });
+    if (!result.ok) {
+      aiModels.value = [];
+      aiModelsError.value = result.detail || "模型读取失败";
+      return;
+    }
+    aiModels.value = Array.isArray(result.models) ? result.models.slice(0, 200) : [];
+    if (aiModels.value.length && !aiModels.value.some((item) => item.id === aiForm.model)) aiForm.model = aiModels.value[0].id;
+    showToast(`已读取 ${aiModels.value.length} 个模型`);
+  } catch (error) {
+    aiModels.value = [];
+    aiModelsError.value = formatValidationError(error);
+  } finally {
+    aiModelsLoading.value = false;
+  }
 }
 async function refreshSystem() {
   if (systemLoading) return;
@@ -1563,22 +1649,29 @@ async function saveRuntime() {
   showToast("运行参数已保存");
 }
 async function saveAiSettings() {
-  settings.value = await api("/api/settings/ai", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      enabled: Boolean(aiForm.enabled),
-      baseUrl: aiForm.baseUrl,
-      apiKey: aiForm.apiKey,
-      model: aiForm.model,
-      timeoutSeconds: Number(aiForm.timeoutSeconds || 30),
-      maxTokens: Number(aiForm.maxTokens || 1200),
-      systemPrompt: aiForm.systemPrompt,
-    }),
-  });
-  Object.assign(aiForm, settings.value.ai || {});
-  aiForm.apiKey = "";
-  showToast("AI 配置已保存");
+  try {
+    settings.value = await api("/api/settings/ai", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        enabled: Boolean(aiForm.enabled),
+        provider: aiForm.provider || "openai",
+        baseUrl: String(aiForm.baseUrl || "").trim(),
+        apiKey: aiForm.apiKey,
+        model: String(aiForm.model || "").trim(),
+        timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 30, 30),
+        maxTokens: clampNumber(aiForm.maxTokens, 128, 4096, 1200),
+        systemPrompt: aiForm.systemPrompt,
+      }),
+    });
+    Object.assign(aiForm, settings.value.ai || {});
+    aiForm.apiKey = "";
+    aiModels.value = [];
+    aiModelsError.value = "";
+    showToast("AI 配置已保存");
+  } catch (error) {
+    showToast(`保存失败：${formatValidationError(error)}`);
+  }
 }
 async function analyzeWithAi(scope = "overview") {
   if (aiLoading.value) return;

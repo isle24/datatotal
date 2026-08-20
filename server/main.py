@@ -39,6 +39,7 @@ from server.services.ai import (
     AIServiceError,
     chat_completion,
     default_ai_settings,
+    list_models,
     normalize_ai_settings,
     public_ai_settings,
 )
@@ -619,11 +620,13 @@ class RuntimeSettingsPayload(BaseModel):
 
 class AISettingsPayload(BaseModel):
     enabled: bool = False
+    provider: Literal["openai", "claude", "deepseek", "kimi", "qwen", "minimax", "custom"] = "openai"
     baseUrl: str = Field(default="https://api.openai.com/v1", max_length=300)
     apiKey: str = Field(default="", max_length=512)
     model: str = Field(default="gpt-4o-mini", max_length=160)
-    timeoutSeconds: int = Field(default=30, ge=5, le=30)
-    maxTokens: int = Field(default=1200, ge=128, le=4096)
+    # Normalize numeric ranges in normalize_ai_settings so older clients do not get a bare 422.
+    timeoutSeconds: Optional[float] = Field(default=30)
+    maxTokens: Optional[float] = Field(default=1200)
     systemPrompt: str = Field(default="", max_length=4000)
 
 
@@ -4806,6 +4809,39 @@ async def update_ai_settings(payload: AISettingsPayload) -> dict:
 @app.post("/api/ai/analyze")
 async def ai_analyze(payload: AIAnalyzePayload) -> dict:
     return await asyncio.to_thread(collector.ai_analyze, payload)
+
+
+@app.get("/api/ai/models")
+async def ai_models(refresh: bool = False) -> dict:
+    try:
+        result = await asyncio.to_thread(list_models, collector.ai_settings, refresh)
+    except AIServiceError as exc:
+        return {
+            "ok": False,
+            "configured": bool(collector.ai_settings.get("apiKey")),
+            "provider": collector.ai_settings.get("provider", "openai"),
+            "models": [],
+            "cached": False,
+            "detail": str(exc),
+        }
+    return {"ok": True, "configured": True, **result}
+
+
+@app.post("/api/ai/models")
+async def ai_models_from_settings(payload: AISettingsPayload, refresh: bool = False) -> dict:
+    candidate = normalize_ai_settings(payload.model_dump(), existing=collector.ai_settings)
+    try:
+        result = await asyncio.to_thread(list_models, candidate, refresh)
+    except AIServiceError as exc:
+        return {
+            "ok": False,
+            "configured": bool(candidate.get("apiKey")),
+            "provider": candidate.get("provider", "openai"),
+            "models": [],
+            "cached": False,
+            "detail": str(exc),
+        }
+    return {"ok": True, "configured": True, **result}
 
 
 @app.post("/api/ai/chat")

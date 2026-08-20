@@ -20,7 +20,7 @@
 - 公网累计默认使用抓包分类后的公网流量，不读取系统网卡累计，因此不会混入内网、组播和 Docker bridge 的系统总流量。
 - 支持访问密码、监控规则、SQLite 历史统计、日志目录映射。
 - 支持监控中心和通知渠道模块，可按规则触发 Webhook、IYUU、MeoW 等渠道。
-- 支持 AI 中心和按需 AI 分析；配置保存在设置页和 SQLite，不参与后台采集。
+- 支持多厂商 AI 中心和按需 AI 分析；配置保存在设置页和 SQLite，不参与后台采集。
 - 支持在页面可视化保存监控规则、通知渠道、消息模板和可热更新运行参数，配置写入 SQLite，重启后保留。
 - 支持网卡/进程/连接筛选，连接表可按公网/内网、网卡、协议、方向、关键词、流量和时长过滤。
 - 历史统计按今日、本周、本月、今年自然时间段聚合，用平滑曲线区分公网/内网、上行/下行。
@@ -140,9 +140,9 @@ docker compose -f docker-compose.nas.yml up -d
 
 ### AI 中心
 
-“设置”页可以启用 OpenAI 兼容的 AI 服务，填写 Base URL、模型、超时、最大 Token 和系统提示词；“AI 中心”用于对话，首页、历史和监控中心提供快捷分析。
+“设置”页可以启用 AI 服务并选择内置厂商：OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 或自定义兼容接口。除 Claude 使用 Anthropic 原生 API 外，其余厂商使用 OpenAI-compatible API。Base URL 和模型均可覆盖默认值；“读取模型”会由后端请求当前厂商的 `/models`，短缓存 60 秒后显示可选模型，不支持 `/models` 时可以手动输入。
 
-AI 是显式按需功能：只有点击分析或发送对话时才请求配置的服务，不在采集线程中运行。后端发送的是有限聚合摘要，不发送完整连接明细原始表；摘要包括当前概览、日/周/月/年历史、进程排行、最多 50 个 Docker 容器、系统状态、规则和最近告警。API Key 只保存在 SQLite 并以掩码形式返回，请保护 `./data` 目录，不要把真实 Key 写进 compose 或文档。
+AI 是显式按需功能：只有点击分析或发送对话时才请求配置的服务，不在采集线程中运行。后端发送的是有限聚合摘要，不发送完整连接明细原始表；摘要包括当前概览、日/周/月/年历史、进程排行、最多 50 个 Docker 容器、系统状态、规则和最近告警。API Key 只保存在 SQLite 并以掩码形式返回，请保护 `./data` 目录，不要把真实 Key 写进 compose 或文档。模型读取同样由后端代理，API Key 不会暴露给浏览器；读取失败不会阻止手动保存模型。
 
 下面的环境变量仅用于启动边界、首次启动默认值和高级诊断覆盖：
 
@@ -325,6 +325,14 @@ Docker 相关接口拆分为：
 - `GET /api/docker/containers/{id}`：单容器端口、图标和详情。
 - `GET /api/docker/containers/{id}/stats`：单容器 CPU/内存/网络统计，按需调用。
 - `POST /api/docker/ports/probe`：单端口 Web 探测，带缓存。
+
+AI 相关接口：
+
+- `GET /api/settings/ai`：读取不含完整 API Key 的 AI 配置。
+- `POST /api/settings/ai`：保存 AI 配置；空 API Key 或掩码值会保留已保存 Key。
+- `GET /api/ai/models`：使用已保存配置读取模型列表。
+- `POST /api/ai/models`：使用当前表单配置读取模型列表，不写入 SQLite，适合首次填写 Key 或切换厂商后直接读取。
+- `POST /api/ai/analyze`、`POST /api/ai/chat`：显式触发 AI 分析或对话。
 
 ## GPU / NPU 和温度
 
