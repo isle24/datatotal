@@ -74,6 +74,7 @@ MAX_AI_HISTORY_MESSAGES = 100
 MAX_AI_HISTORY_CONTENT_CHARS = 200000
 MAX_ALERT_EVIDENCE_JSON_CHARS = 65536
 MAX_ALERT_QUERY_LIMIT = 200
+MAX_CONFIGURATION_AUDIT_JSON_CHARS = 16000
 TRANSFER_UNITS = {
     "B": 1,
     "MB": 1024 * 1024,
@@ -81,6 +82,36 @@ TRANSFER_UNITS = {
     "MB/s": 1024 * 1024,
     "GB/s": 1024 * 1024 * 1024,
 }
+
+
+def configuration_audit_value(value):
+    """Return a bounded audit summary without persisting arbitrary values."""
+    if isinstance(value, str):
+        return {"type": "string", "length": len(value)}
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return {"type": "array", "items": len(value)}
+    if isinstance(value, dict):
+        return {"type": "object", "keys": sorted(str(key)[:40] for key in value.keys())[:40]}
+    return {"type": type(value).__name__}
+
+
+def sanitize_configuration_audit(changes) -> list:
+    if not isinstance(changes, list):
+        return []
+    sanitized = []
+    for change in changes[:50]:
+        if not isinstance(change, dict):
+            continue
+        sanitized.append(
+            {
+                "path": str(change.get("path") or "")[:160],
+                "old": configuration_audit_value(change.get("old", change.get("oldValue"))),
+                "new": configuration_audit_value(change.get("new", change.get("newValue"))),
+            }
+        )
+    return sanitized
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -866,10 +897,21 @@ class TrafficDB:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS configuration_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                changes TEXT NOT NULL DEFAULT '[]',
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_minute_stats_bucket_scope ON minute_stats(bucket, scope)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_process_minute_bucket ON process_minute_stats(bucket)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_messages_created ON ai_messages(created_at, id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_configuration_audit_created ON configuration_audit(created_at, id)")
         self.conn.commit()
 
     def add_minute(self, bucket: int, rows: List[dict]) -> None:
@@ -1261,7 +1303,7 @@ class TrafficDB:
             self.conn.commit()
         return {"ok": True}
 
-    def set_settings_atomic(self, values: Dict[str, dict]) -> dict:
+    def set_settings_atomic(self, values: Dict[str, dict], audit_changes: Optional[list] = None, source: str = "ai") -> dict:
         if not self.conn:
             return {"ok": False}
         rows = []
@@ -1273,17 +1315,59 @@ class TrafficDB:
                     int(now()),
                 )
             )
+        audit = sanitize_configuration_audit(audit_changes)
+        try:
+            encoded_audit = json.dumps(audit, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            encoded_audit = "[]"
+        if len(encoded_audit) > MAX_CONFIGURATION_AUDIT_JSON_CHARS:
+            bounded = []
+            for change in audit:
+                candidate = bounded + [change]
+                encoded = json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+                if len(encoded) > MAX_CONFIGURATION_AUDIT_JSON_CHARS:
+                    break
+                bounded = candidate
+            encoded_audit = json.dumps(bounded, ensure_ascii=False, separators=(",", ":"))
         with self.lock:
-            self.conn.executemany(
-                """
-                INSERT INTO settings (key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-                """,
-                rows,
-            )
-            self.conn.commit()
+            try:
+                self.conn.execute("BEGIN")
+                self.conn.executemany(
+                    """
+                    INSERT INTO settings (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                    """,
+                    rows,
+                )
+                if audit:
+                    self.conn.execute(
+                        "INSERT INTO configuration_audit (source, changes, created_at) VALUES (?, ?, ?)",
+                        (str(source or "ai")[:32], encoded_audit, int(now())),
+                    )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
         return {"ok": True}
+
+    def query_configuration_audit(self, limit: int = 50) -> list:
+        if not self.conn:
+            return []
+        safe_limit = max(1, min(200, int(limit or 50)))
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id, source, changes, created_at FROM configuration_audit ORDER BY id DESC LIMIT ?",
+                (safe_limit,),
+            ).fetchall()
+        results = []
+        for row in rows:
+            try:
+                changes = json.loads(row[2] or "[]")
+            except json.JSONDecodeError:
+                changes = []
+            results.append({"id": int(row[0]), "source": str(row[1]), "changes": changes, "createdAt": int(row[3])})
+        return results
 
     def get_ai_messages(self, limit: int = MAX_AI_HISTORY_MESSAGES) -> list:
         if not self.conn:
@@ -2365,7 +2449,7 @@ def docker_container_summary(row: dict) -> dict:
     return {
         key: value
         for key, value in row.items()
-        if key not in {"ports", "containerIcon", *DOCKER_STATS_FIELDS}
+        if key not in {"ports", *DOCKER_STATS_FIELDS}
     } | {
         "portCount": len(ports),
         "hasIcon": bool(row.get("containerIcon")),
@@ -4374,6 +4458,9 @@ class TrafficCollector:
             value = value[part]
         return copy.deepcopy(value)
 
+    def _configuration_audit_changes(self, changes: list[dict]) -> list[dict]:
+        return sanitize_configuration_audit(changes)
+
     def _ai_configuration_snapshot(self) -> dict:
         settings = self.get_settings()
         runtime_source = settings.get("runtime") if isinstance(settings, dict) else {}
@@ -4597,7 +4684,7 @@ class TrafficCollector:
             settings_to_save["ai_settings"] = ai_settings
         if docker_overrides is not None:
             settings_to_save["docker_overrides"] = docker_overrides
-        result = self.db.set_settings_atomic(settings_to_save)
+        result = self.db.set_settings_atomic(settings_to_save, self._configuration_audit_changes(changes), source="ai")
         if not result.get("ok"):
             raise ValueError("设置保存失败")
 

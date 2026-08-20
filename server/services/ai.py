@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -125,7 +126,14 @@ def _clean_base_url(value: str) -> str:
         return ""
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
-    if parsed.username or parsed.password:
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return ""
+    try:
+        if not parsed.hostname or parsed.port is not None and not (1 <= parsed.port <= 65535):
+            return ""
+    except ValueError:
+        return ""
+    if re.search(r"(?:api[_-]?key|token|secret|password)", cleaned.lower()):
         return ""
     return cleaned
 

@@ -88,6 +88,20 @@ def test_docker_discovery_adds_builtin_icon_and_manual_icon_wins():
         main.ENABLE_DOCKER_DISCOVERY = original
 
 
+def test_docker_container_summary_includes_bounded_icon_data():
+    summary = main.docker_container_summary({
+        "id": "abcdef123456",
+        "name": "redis",
+        "containerIcon": "data:image/svg+xml,icon",
+        "iconKey": "redis",
+        "iconSource": "builtin",
+        "ports": [],
+    })
+    assert summary["containerIcon"] == "data:image/svg+xml,icon"
+    assert summary["iconKey"] == "redis"
+    assert summary["iconSource"] == "builtin"
+
+
 class MemorySettingsDB:
     def __init__(self):
         self.settings = {}

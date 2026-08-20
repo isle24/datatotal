@@ -4,6 +4,7 @@ import threading
 from collections import deque
 import json
 import asyncio
+import sqlite3
 import tempfile
 from unittest.mock import patch
 
@@ -26,6 +27,7 @@ import server.main as main  # noqa: E402
 class ConfigurationSettingsDB:
     def __init__(self):
         self.settings = {}
+        self.audit = []
 
     def get_setting(self, key):
         return self.settings.get(key)
@@ -34,8 +36,13 @@ class ConfigurationSettingsDB:
         self.settings[key] = value
         return {"ok": True}
 
-    def set_settings_atomic(self, values):
+    def set_settings_atomic(self, values, audit_changes=None, source="ai"):
         self.settings.update(values or {})
+        self.audit.append(audit_changes or [])
+        return {"ok": True}
+
+    def add_configuration_audit(self, changes, source="ai"):
+        self.audit.append({"source": source, "changes": changes})
         return {"ok": True}
 
 
@@ -184,6 +191,7 @@ def test_ai_configuration_applies_multiple_non_secret_setting_roots_and_preserve
     assert collector.ai_settings["model"] == "new-model"
     assert collector.ai_settings["apiKey"] == "configured-key"
     assert collector.docker_overrides["containers"]["abcdef123456"]["iconKey"] == "qbittorrent"
+    assert any(item for item in collector.db.audit if isinstance(item, list) and item)
 
 
 def test_ai_settings_reject_invalid_endpoint_and_preserve_existing_key():
@@ -195,6 +203,52 @@ def test_ai_settings_reject_invalid_endpoint_and_preserve_existing_key():
 
     assert settings["baseUrl"] == default_ai_settings()["baseUrl"]
     assert settings["apiKey"] == "old-secret"
+
+
+def test_ai_base_url_rejects_credentials_queries_fragments_and_sensitive_urls():
+    existing = normalize_ai_settings({"apiKey": "old-secret", "baseUrl": "https://example.test/v1"})
+    for value in (
+        "https://user:pass@example.test/v1",
+        "https://example.test/v1?token=secret",
+        "https://example.test/v1#token",
+        "https://token.example.test/v1",
+    ):
+        settings = normalize_ai_settings({"baseUrl": value}, existing=existing)
+        assert settings["baseUrl"] == "https://example.test/v1"
+
+
+def test_configuration_audit_is_atomic_and_does_not_store_string_values():
+    with tempfile.TemporaryDirectory() as directory:
+        db = main.TrafficDB(Path(directory) / "traffic.db")
+        db.start()
+        db.set_settings_atomic(
+            {"runtime_settings": {"sampleSeconds": 2}},
+            [{"path": "ai.model", "old": "old-model", "new": "new-model"}],
+            source="test",
+        )
+        assert db.get_setting("runtime_settings")["sampleSeconds"] == 2
+        audits = db.query_configuration_audit()
+        assert audits[0]["source"] == "test"
+        assert audits[0]["changes"][0]["new"] == {"type": "string", "length": len("new-model")}
+        assert "new-model" not in json.dumps(audits, ensure_ascii=False)
+
+        db.conn.execute(
+            "CREATE TRIGGER fail_configuration_audit BEFORE INSERT ON configuration_audit "
+            "BEGIN SELECT RAISE(ABORT, 'test rollback'); END;"
+        )
+        try:
+            db.set_settings_atomic(
+                {"runtime_settings": {"sampleSeconds": 3}},
+                [{"path": "runtime.sampleSeconds", "old": 2, "new": 3}],
+                source="test",
+            )
+        except sqlite3.DatabaseError:
+            pass
+        else:
+            raise AssertionError("audit failure should roll back settings")
+        assert db.get_setting("runtime_settings")["sampleSeconds"] == 2
+        assert len(db.query_configuration_audit()) == 1
+        db.conn.close()
 
 
 def test_provider_defaults_and_legacy_settings_are_compatible():
