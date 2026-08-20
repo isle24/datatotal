@@ -59,6 +59,8 @@ from server.services.go_collector_client import (
 
 APP_NAME = "NAS Traffic Lens"
 MAX_AI_CONTEXT_CHARS = 120000
+MAX_AI_HISTORY_MESSAGES = 100
+MAX_AI_HISTORY_CONTENT_CHARS = 200000
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -628,7 +630,7 @@ class AISettingsPayload(BaseModel):
     model: str = Field(default="gpt-4o-mini", max_length=160)
     # Normalize numeric ranges in normalize_ai_settings so older clients do not get a bare 422.
     timeoutSeconds: Optional[float] = Field(default=60)
-    maxTokens: Optional[float] = Field(default=1200)
+    maxTokens: Optional[float] = Field(default=None)
     systemPrompt: str = Field(default="", max_length=4000)
 
 
@@ -778,9 +780,22 @@ class TrafficDB:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'chat',
+                truncated INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_minute_stats_bucket_scope ON minute_stats(bucket, scope)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_process_minute_bucket ON process_minute_stats(bucket)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_messages_created ON ai_messages(created_at, id)")
         self.conn.commit()
 
     def add_minute(self, bucket: int, rows: List[dict]) -> None:
@@ -1007,6 +1022,72 @@ class TrafficDB:
             )
             self.conn.commit()
         return {"ok": True}
+
+    def get_ai_messages(self, limit: int = MAX_AI_HISTORY_MESSAGES) -> list:
+        if not self.conn:
+            return []
+        safe_limit = max(1, min(MAX_AI_HISTORY_MESSAGES, int(limit)))
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT id, role, content, source, truncated
+                FROM ai_messages
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "role": str(row[1]),
+                "content": str(row[2]),
+                "source": str(row[3]),
+                "truncated": bool(row[4]),
+            }
+            for row in reversed(rows)
+        ]
+
+    def append_ai_messages(self, messages: list) -> None:
+        if not self.conn or not messages:
+            return
+        rows = []
+        timestamp = int(now())
+        for item in messages:
+            if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+                continue
+            content = str(item.get("content") or "")
+            if not content:
+                continue
+            stored_content = content[:MAX_AI_HISTORY_CONTENT_CHARS]
+            rows.append(
+                (
+                    item["role"],
+                    stored_content,
+                    str(item.get("source") or "chat")[:32],
+                    int(bool(item.get("truncated"))) or int(len(content) > len(stored_content)),
+                    timestamp,
+                )
+            )
+        if not rows:
+            return
+        with self.lock:
+            self.conn.executemany(
+                "INSERT INTO ai_messages (role, content, source, truncated, created_at) VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
+            self.conn.execute(
+                "DELETE FROM ai_messages WHERE id NOT IN (SELECT id FROM ai_messages ORDER BY id DESC LIMIT ?)",
+                (MAX_AI_HISTORY_MESSAGES,),
+            )
+            self.conn.commit()
+
+    def clear_ai_messages(self) -> None:
+        if not self.conn:
+            return
+        with self.lock:
+            self.conn.execute("DELETE FROM ai_messages")
+            self.conn.commit()
 
 
 def empty_pair() -> dict:
@@ -3729,6 +3810,12 @@ class TrafficCollector:
             result = chat_completion(self.ai_settings, messages)
         except AIServiceError as exc:
             return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": str(exc)}
+        self._persist_ai_exchange(
+            payload.question or "请分析当前数据，指出异常、公网上传风险和最值得关注的进程。",
+            result.get("answer", ""),
+            "analysis",
+            result,
+        )
         return {"ok": True, "scope": context["scope"], **result}
 
     def _ai_analyze_messages(self, payload: AIAnalyzePayload) -> tuple:
@@ -3749,6 +3836,12 @@ class TrafficCollector:
         context, messages = self._ai_analyze_messages(payload)
         for event in chat_completion_stream(self.ai_settings, messages):
             if event.get("type") == "done":
+                self._persist_ai_exchange(
+                    payload.question or "请分析当前数据，指出异常、公网上传风险和最值得关注的进程。",
+                    event.get("answer", ""),
+                    "analysis",
+                    event,
+                )
                 event = {**event, "scope": context["scope"]}
             yield event
 
@@ -3758,7 +3851,30 @@ class TrafficCollector:
             result = chat_completion(self.ai_settings, messages)
         except AIServiceError as exc:
             return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": str(exc)}
+        self._persist_ai_exchange(self._chat_question(payload), result.get("answer", ""), "chat", result)
         return {"ok": True, **result}
+
+    @staticmethod
+    def _chat_question(payload: AIChatPayload) -> str:
+        for item in reversed(payload.messages):
+            if item.role == "user":
+                return item.content[:6000]
+        return ""
+
+    def _persist_ai_exchange(self, question: str, answer: str, source: str, result: dict) -> None:
+        if not question or not answer:
+            return
+        self.db.append_ai_messages(
+            [
+                {"role": "user", "content": question, "source": source},
+                {
+                    "role": "assistant",
+                    "content": answer,
+                    "source": source,
+                    "truncated": bool(result.get("truncated")),
+                },
+            ]
+        )
 
     def _ai_chat_messages(self, payload: AIChatPayload) -> list:
         context = self.ai_context("all")
@@ -3780,7 +3896,18 @@ class TrafficCollector:
         return messages
 
     def ai_chat_stream(self, payload: AIChatPayload):
-        yield from chat_completion_stream(self.ai_settings, self._ai_chat_messages(payload))
+        question = self._chat_question(payload)
+        for event in chat_completion_stream(self.ai_settings, self._ai_chat_messages(payload)):
+            if event.get("type") == "done":
+                self._persist_ai_exchange(question, event.get("answer", ""), "chat", event)
+            yield event
+
+    def ai_history(self) -> dict:
+        return {"ok": True, "messages": self.db.get_ai_messages()}
+
+    def clear_ai_history(self) -> dict:
+        self.db.clear_ai_messages()
+        return {"ok": True}
 
     def get_settings(self) -> dict:
         self.sync_legacy_settings()
@@ -4837,6 +4964,16 @@ async def ai_settings() -> dict:
 @app.post("/api/settings/ai")
 async def update_ai_settings(payload: AISettingsPayload) -> dict:
     return collector.update_ai_settings(payload)
+
+
+@app.get("/api/ai/history")
+async def ai_history() -> dict:
+    return await asyncio.to_thread(collector.ai_history)
+
+
+@app.delete("/api/ai/history")
+async def clear_ai_history() -> dict:
+    return await asyncio.to_thread(collector.clear_ai_history)
 
 
 def _ai_sse_events(events):

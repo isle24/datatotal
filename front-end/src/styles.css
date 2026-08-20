@@ -924,11 +924,13 @@ label.check input, label.switch input { width: auto; min-height: auto; }
 .ai-message small { color: var(--muted); font-size: 10px; }
 .ai-message p { margin-top: 5px; border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; background: var(--panel-soft); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ai-message.user p { color: #fff; border-color: var(--blue); background: #2563eb; }
+.ai-message-warning { display: block; margin-top: 5px; color: var(--orange); font-size: 11px; font-style: normal; }
 .ai-thinking span { display: inline-block; animation: ai-pulse 1.2s infinite; }
 .ai-thinking span:nth-child(2) { animation-delay: .16s; }
 .ai-thinking span:nth-child(3) { animation-delay: .32s; }
 @keyframes ai-pulse { 50% { opacity: .2; } }
 .ai-error { display: flex; align-items: center; gap: 7px; margin: 0 18px 10px; color: var(--red); font-size: 12px; }
+.ai-warning { display: flex; align-items: center; gap: 7px; margin: 0 18px 10px; color: var(--orange); font-size: 12px; }
 .ai-composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; padding: 14px 18px 18px; border-top: 1px solid var(--line); }
 .ai-composer textarea { min-height: 62px; }
 .ai-composer button { min-height: 44px; }

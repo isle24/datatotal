@@ -4,6 +4,7 @@ import threading
 from collections import deque
 import json
 import asyncio
+import tempfile
 from unittest.mock import patch
 
 from pydantic import ValidationError
@@ -38,7 +39,7 @@ def test_ai_settings_are_normalized_and_api_key_is_masked():
     assert settings["baseUrl"] == "https://example.test/v1"
     assert settings["apiKey"] == "secret-token"
     assert settings["timeoutSeconds"] == 45
-    assert settings["maxTokens"] == 4096
+    assert settings["maxTokens"] == 5000
     assert settings["provider"] == "openai"
     assert public_ai_settings(settings) == {
         "enabled": True,
@@ -46,7 +47,7 @@ def test_ai_settings_are_normalized_and_api_key_is_masked():
         "baseUrl": "https://example.test/v1",
         "model": "local-model",
         "timeoutSeconds": 45,
-        "maxTokens": 4096,
+        "maxTokens": 5000,
         "systemPrompt": "分析 NAS 流量",
         "keyConfigured": True,
         "apiKeyMasked": "sec...ken",
@@ -70,12 +71,18 @@ def test_provider_defaults_and_legacy_settings_are_compatible():
     deepseek = normalize_ai_settings({"provider": "deepseek"})
     assert deepseek["baseUrl"] == "https://api.deepseek.com"
     assert deepseek["model"] == "deepseek-v4-flash"
+    assert deepseek["maxTokens"] == 393216
     deepseek_from_api_payload = normalize_ai_settings(
         {"provider": "deepseek", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini"}
     )
     assert deepseek_from_api_payload["baseUrl"] == "https://api.deepseek.com"
     assert deepseek_from_api_payload["model"] == "deepseek-v4-flash"
     assert normalize_ai_settings({"provider": "anthropic"})["provider"] == "claude"
+
+
+def test_ai_output_token_limit_preserves_valid_values_and_bounds_large_values():
+    assert normalize_ai_settings({"maxTokens": 32768})["maxTokens"] == 32768
+    assert normalize_ai_settings({"maxTokens": 999999})["maxTokens"] == 393216
 
 
 def test_model_payload_is_bounded_and_supports_openai_and_anthropic_shapes():
@@ -102,7 +109,7 @@ def test_claude_request_uses_native_headers_and_message_shape():
     body = json.loads(request.data)
     assert body["system"] == "rules"
     assert body["messages"] == [{"role": "user", "content": "hello"}]
-    assert body["max_tokens"] == 1200
+    assert body["max_tokens"] == 4096
 
 
 def test_stream_request_enables_streaming_for_openai_compatible_provider():
@@ -142,7 +149,14 @@ def test_stream_completion_parses_openai_sse_and_emits_done_event():
     assert events == [
         {"type": "delta", "content": "hello"},
         {"type": "delta", "content": " world"},
-        {"type": "done", "answer": "hello world", "model": "deepseek-v4-flash", "usage": {}},
+        {
+            "type": "done",
+            "answer": "hello world",
+            "model": "deepseek-v4-flash",
+            "usage": {},
+            "finishReason": "stop",
+            "truncated": False,
+        },
     ]
 
 
@@ -175,8 +189,123 @@ def test_stream_completion_parses_anthropic_sse_and_usage():
         events = list(chat_completion_stream(settings, [{"role": "user", "content": "hello"}]))
     assert events == [
         {"type": "delta", "content": "hello"},
-        {"type": "done", "answer": "hello", "model": "claude-test", "usage": {"output_tokens": 7}},
+        {
+            "type": "done",
+            "answer": "hello",
+            "model": "claude-test",
+            "usage": {"output_tokens": 7},
+            "finishReason": "stop",
+            "truncated": False,
+        },
     ]
+
+
+def test_stream_completion_uses_configured_limit_instead_of_fixed_20000_chars():
+    content = "x" * 21000
+
+    class StreamResponse:
+        lines = [
+            (f'data: {{"choices":[{{"delta":{{"content":{json.dumps(content)}}}}}]}}\n').encode(),
+            b"data: [DONE]\n",
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def readline(self, _limit):
+            return self.lines.pop(0) if self.lines else b""
+
+    settings = normalize_ai_settings({"provider": "deepseek", "apiKey": "secret", "enabled": True})
+    with patch("server.services.ai.urllib.request.urlopen", return_value=StreamResponse()):
+        events = list(chat_completion_stream(settings, [{"role": "user", "content": "hello"}]))
+    assert events[-1]["answer"] == content
+    assert events[-1]["truncated"] is False
+
+
+def test_stream_completion_marks_provider_length_as_truncated():
+    class StreamResponse:
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n',
+            b"data: [DONE]\n",
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def readline(self, _limit):
+            return self.lines.pop(0) if self.lines else b""
+
+    settings = normalize_ai_settings({"provider": "deepseek", "apiKey": "secret", "enabled": True})
+    with patch("server.services.ai.urllib.request.urlopen", return_value=StreamResponse()):
+        events = list(chat_completion_stream(settings, [{"role": "user", "content": "hello"}]))
+    assert events[-1]["finishReason"] == "length"
+    assert events[-1]["truncated"] is True
+
+
+def test_stream_completion_marks_eof_without_provider_marker():
+    class StreamResponse:
+        lines = [b'data: {"choices":[{"delta":{"content":"partial"}}]}\n']
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def readline(self, _limit):
+            return self.lines.pop(0) if self.lines else b""
+
+    settings = normalize_ai_settings({"provider": "deepseek", "apiKey": "secret", "enabled": True})
+    with patch("server.services.ai.urllib.request.urlopen", return_value=StreamResponse()):
+        events = list(chat_completion_stream(settings, [{"role": "user", "content": "hello"}]))
+    assert events[-1]["finishReason"] == "connection_closed"
+    assert events[-1]["truncated"] is True
+
+
+def test_stream_completion_preserves_length_reason_without_done_marker():
+    class StreamResponse:
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n',
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def readline(self, _limit):
+            return self.lines.pop(0) if self.lines else b""
+
+    settings = normalize_ai_settings({"provider": "deepseek", "apiKey": "secret", "enabled": True})
+    with patch("server.services.ai.urllib.request.urlopen", return_value=StreamResponse()):
+        events = list(chat_completion_stream(settings, [{"role": "user", "content": "hello"}]))
+    assert events[-1]["finishReason"] == "length"
+    assert events[-1]["truncated"] is True
+
+
+def test_ai_history_is_persisted_and_can_be_cleared():
+    with tempfile.TemporaryDirectory() as directory:
+        db = main.TrafficDB(Path(directory) / "traffic.db")
+        db.start()
+        db.append_ai_messages(
+            [
+                {"role": "user", "content": "问题", "source": "chat"},
+                {"role": "assistant", "content": "回答", "source": "chat", "truncated": True},
+            ]
+        )
+        assert db.get_ai_messages() == [
+            {"id": 1, "role": "user", "content": "问题", "source": "chat", "truncated": False},
+            {"id": 2, "role": "assistant", "content": "回答", "source": "chat", "truncated": True},
+        ]
+        db.clear_ai_messages()
+        assert db.get_ai_messages() == []
 
 
 def test_model_discovery_uses_short_bounded_cache():

@@ -16,8 +16,10 @@ DEFAULT_AI_SYSTEM_PROMPT = (
     "你是 NAS Traffic Lens 的流量分析助手。请基于提供的统计摘要回答问题，"
     "区分公网和内网，不要把未知数据猜成事实。优先给出结论、证据和可执行建议。"
 )
-MAX_AI_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_AI_RESPONSE_CHARS = 20000
+MAX_AI_OUTPUT_TOKENS = 393216
+MAX_AI_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_AI_RESPONSE_CHARS = 2_000_000
+MIN_AI_RESPONSE_CHARS = 20_000
 MAX_AI_STREAM_LINE_BYTES = 256 * 1024
 MAX_AI_MODELS = 200
 MAX_AI_MODEL_ID_LENGTH = 160
@@ -32,42 +34,56 @@ AI_PROVIDERS = {
         "baseUrl": "https://api.openai.com/v1",
         "model": "gpt-4o-mini",
         "protocol": "openai",
+        "maxTokens": 1200,
+        "contextWindow": 128000,
     },
     "claude": {
         "label": "Claude",
         "baseUrl": "https://api.anthropic.com/v1",
         "model": "claude-3-5-haiku-latest",
         "protocol": "anthropic",
+        "maxTokens": 4096,
+        "contextWindow": 200000,
     },
     "deepseek": {
         "label": "DeepSeek",
         "baseUrl": "https://api.deepseek.com",
         "model": "deepseek-v4-flash",
         "protocol": "openai",
+        "maxTokens": MAX_AI_OUTPUT_TOKENS,
+        "contextWindow": 1_000_000,
     },
     "kimi": {
         "label": "Kimi",
         "baseUrl": "https://api.moonshot.cn/v1",
         "model": "moonshot-v1-8k",
         "protocol": "openai",
+        "maxTokens": 4096,
+        "contextWindow": 8192,
     },
     "qwen": {
         "label": "Qwen",
         "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen-plus",
         "protocol": "openai",
+        "maxTokens": 4096,
+        "contextWindow": 131072,
     },
     "minimax": {
         "label": "MiniMax",
         "baseUrl": "https://api.minimaxi.com/v1",
         "model": "MiniMax-Text-01",
         "protocol": "openai",
+        "maxTokens": 4096,
+        "contextWindow": 1000000,
     },
     "custom": {
         "label": "自定义兼容接口",
         "baseUrl": "",
         "model": "",
         "protocol": "openai",
+        "maxTokens": 1200,
+        "contextWindow": 128000,
     },
 }
 _PROVIDER_ALIASES = {"anthropic": "claude", "claude": "claude"}
@@ -88,7 +104,7 @@ def default_ai_settings() -> dict:
         "apiKey": "",
         "model": preset["model"],
         "timeoutSeconds": 60,
-        "maxTokens": 1200,
+        "maxTokens": preset["maxTokens"],
         "systemPrompt": DEFAULT_AI_SYSTEM_PROMPT,
     }
 
@@ -144,9 +160,12 @@ def normalize_ai_settings(payload: Optional[dict], existing: Optional[dict] = No
     except (TypeError, ValueError, OverflowError):
         timeout = 60
     try:
-        max_tokens = max(128, min(4096, int(data.get("maxTokens", current.get("maxTokens", 1200)))))
+        requested_max_tokens = data.get("maxTokens")
+        if requested_max_tokens is None:
+            requested_max_tokens = preset["maxTokens"] if provider_changed else current.get("maxTokens", preset["maxTokens"])
+        max_tokens = max(128, min(MAX_AI_OUTPUT_TOKENS, int(requested_max_tokens)))
     except (TypeError, ValueError, OverflowError):
-        max_tokens = 1200
+        max_tokens = preset["maxTokens"]
 
     requested_model = data.get("model")
     if provider_changed and (
@@ -293,7 +312,28 @@ def _read_json(request: urllib.request.Request, timeout: int, secret: str = "") 
     return data
 
 
-def _response_text(data: dict, protocol: str = "openai") -> str:
+def _finish_reason(value: object) -> str:
+    return "length" if str(value or "").strip().lower() in {"length", "max_tokens"} else "stop"
+
+
+def _completion_metadata(data: dict, protocol: str) -> tuple[str, bool]:
+    if protocol == "anthropic":
+        reason = data.get("stop_reason")
+    else:
+        choices = data.get("choices") or []
+        reason = choices[0].get("finish_reason") if choices and isinstance(choices[0], dict) else None
+    if not reason:
+        return "stop", False
+    normalized = _finish_reason(reason)
+    return normalized, normalized == "length"
+
+
+def _response_char_limit(settings: dict) -> int:
+    normalized = normalize_ai_settings(settings)
+    return min(MAX_AI_RESPONSE_CHARS, max(MIN_AI_RESPONSE_CHARS, normalized["maxTokens"] * 4))
+
+
+def _response_text(data: dict, protocol: str = "openai", max_chars: int = MAX_AI_RESPONSE_CHARS) -> tuple[str, str, bool]:
     if protocol == "anthropic":
         content = data.get("content") or []
         text = "".join(str(item.get("text") or "") for item in content if isinstance(item, dict) and item.get("type") == "text")
@@ -309,7 +349,9 @@ def _response_text(data: dict, protocol: str = "openai") -> str:
     text = text.strip()
     if not text:
         raise AIServiceError("AI 服务返回了空内容")
-    return text[:MAX_AI_RESPONSE_CHARS]
+    finish_reason, provider_truncated = _completion_metadata(data, protocol)
+    text_truncated = len(text) > max_chars
+    return text[:max_chars], finish_reason if not text_truncated else "client_limit", provider_truncated or text_truncated
 
 
 def chat_completion(settings: dict, messages: List[Dict[str, str]]) -> dict:
@@ -317,10 +359,13 @@ def chat_completion(settings: dict, messages: List[Dict[str, str]]) -> dict:
     if not normalized["enabled"] or not normalized["apiKey"]:
         raise AIServiceError("请先在设置中启用 AI 并填写 API Key")
     data = _read_json(build_ai_request(normalized, messages), normalized["timeoutSeconds"], normalized["apiKey"])
+    answer, finish_reason, truncated = _response_text(data, _provider_protocol(normalized), _response_char_limit(normalized))
     return {
-        "answer": _response_text(data, _provider_protocol(normalized)),
+        "answer": answer,
         "model": normalized["model"],
         "usage": data.get("usage") or {},
+        "finishReason": finish_reason,
+        "truncated": truncated,
     }
 
 
@@ -368,6 +413,10 @@ def chat_completion_stream(settings: dict, messages: List[Dict[str, str]]) -> It
     answer_length = 0
     total_bytes = 0
     usage = {}
+    finish_reason = "connection_closed"
+    provider_marker_seen = False
+    truncated = False
+    response_char_limit = _response_char_limit(normalized)
     try:
         with urllib.request.urlopen(request, timeout=normalized["timeoutSeconds"]) as response:
             while True:
@@ -387,6 +436,8 @@ def chat_completion_stream(settings: dict, messages: List[Dict[str, str]]) -> It
                 if not payload:
                     continue
                 if payload == "[DONE]":
+                    provider_marker_seen = True
+                    finish_reason = finish_reason if finish_reason == "length" else "stop"
                     break
                 try:
                     data = json.loads(payload)
@@ -394,6 +445,17 @@ def chat_completion_stream(settings: dict, messages: List[Dict[str, str]]) -> It
                     raise AIServiceError("AI 服务返回了无效流式 JSON") from None
                 if not isinstance(data, dict):
                     continue
+                if protocol == "anthropic" and data.get("type") == "message_stop":
+                    provider_marker_seen = True
+                    finish_reason = finish_reason if finish_reason == "length" else "stop"
+                if protocol == "anthropic":
+                    delta = data.get("delta") or {}
+                    if isinstance(delta, dict) and delta.get("stop_reason"):
+                        finish_reason = _finish_reason(delta.get("stop_reason"))
+                else:
+                    choices = data.get("choices") or []
+                    if choices and isinstance(choices[0], dict) and choices[0].get("finish_reason"):
+                        finish_reason = _finish_reason(choices[0].get("finish_reason"))
                 provider_error = _stream_error(data)
                 if provider_error:
                     raise AIServiceError(f"AI 服务返回错误：{_safe_error_detail(provider_error, normalized['apiKey'])}")
@@ -401,14 +463,18 @@ def chat_completion_stream(settings: dict, messages: List[Dict[str, str]]) -> It
                 content = _stream_text(data, protocol)
                 if not content:
                     continue
-                remaining = MAX_AI_RESPONSE_CHARS - answer_length
+                remaining = response_char_limit - answer_length
                 if remaining <= 0:
+                    finish_reason = "client_limit"
+                    truncated = True
                     break
                 content = content[:remaining]
                 answer_parts.append(content)
                 answer_length += len(content)
                 yield {"type": "delta", "content": content}
-                if answer_length >= MAX_AI_RESPONSE_CHARS:
+                if len(content) < len(_stream_text(data, protocol)):
+                    finish_reason = "client_limit"
+                    truncated = True
                     break
     except urllib.error.HTTPError as exc:
         try:
@@ -428,7 +494,17 @@ def chat_completion_stream(settings: dict, messages: List[Dict[str, str]]) -> It
     answer = "".join(answer_parts).strip()
     if not answer:
         raise AIServiceError("AI 服务返回了空内容")
-    yield {"type": "done", "answer": answer, "model": normalized["model"], "usage": usage}
+    if not provider_marker_seen and not truncated and finish_reason != "length":
+        finish_reason = "connection_closed"
+    truncated = truncated or finish_reason in {"length", "connection_closed", "client_limit"}
+    yield {
+        "type": "done",
+        "answer": answer,
+        "model": normalized["model"],
+        "usage": usage,
+        "finishReason": finish_reason,
+        "truncated": truncated,
+    }
 
 
 def normalize_model_list(data: dict) -> list:

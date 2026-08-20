@@ -428,17 +428,21 @@
         <section class="ai-chat card">
           <div class="ai-chat-toolbar">
             <div><strong>数据对话</strong><span>上下文为聚合摘要，不发送完整连接原始表</span></div>
-            <button type="button" :disabled="aiLoading" @click="analyzeWithAi('all')"><Sparkles :size="15" />快速分析全部数据</button>
+            <div class="card-actions">
+              <button type="button" :disabled="aiLoading" @click="analyzeWithAi('all')"><Sparkles :size="15" />快速分析全部数据</button>
+              <button type="button" class="subtle-button" :disabled="aiLoading || !aiMessages.length" @click="clearAiHistory"><Trash2 :size="15" />清空记录</button>
+            </div>
           </div>
           <div class="ai-messages" aria-live="polite">
             <div v-if="!aiMessages.length" class="ai-empty"><Sparkles :size="24" /><strong>从一个问题开始</strong><span>例如：最近公网上传是否异常？哪个进程最值得关注？</span></div>
             <div v-for="(message, index) in aiMessages" :key="`${message.role}-${index}`" :class="['ai-message', message.role === 'user' ? 'user' : 'assistant']">
               <span class="ai-message-avatar"><UserRound v-if="message.role === 'user'" :size="15" /><Sparkles v-else :size="15" /></span>
-              <div><small>{{ message.role === 'user' ? "你" : "AI 分析助手" }}</small><p>{{ message.content }}</p></div>
+              <div><small>{{ message.role === 'user' ? "你" : "AI 分析助手" }}</small><p>{{ message.content }}</p><em v-if="message.truncated" class="ai-message-warning">本次回答未完整结束</em></div>
             </div>
             <div v-if="aiLoading" class="ai-message assistant"><span class="ai-message-avatar"><Sparkles :size="15" /></span><div><small>AI 分析助手</small><p class="ai-thinking">正在读取统计摘要<span>·</span><span>·</span><span>·</span></p></div></div>
           </div>
           <p v-if="aiError" class="ai-error"><CircleAlert :size="15" />{{ aiError }}</p>
+          <p v-if="aiWarning" class="ai-warning"><CircleAlert :size="15" />{{ aiWarning }}</p>
           <form class="ai-composer" @submit.prevent="sendAiChat">
             <textarea v-model="aiInput" rows="2" maxlength="2000" placeholder="输入你想分析的问题，例如：按公网上传排序，给出前 3 个风险来源"></textarea>
             <button type="submit" :disabled="aiLoading || !aiInput.trim()"><Send :size="16" />发送</button>
@@ -512,7 +516,7 @@
               <datalist id="ai-model-options"><option v-for="model in aiModels" :key="`list-${model.id}`" :value="model.id">{{ model.name }}</option></datalist>
             </label>
             <label>请求超时秒<input v-model.number="aiForm.timeoutSeconds" type="number" min="5" max="180" /></label>
-            <label>最大输出 Token<input v-model.number="aiForm.maxTokens" type="number" min="128" max="4096" /></label>
+            <label>最大输出 Token<input v-model.number="aiForm.maxTokens" type="number" min="128" max="393216" /></label>
             <label class="textarea-label wide">系统提示词<textarea v-model="aiForm.systemPrompt" rows="3" placeholder="定义 AI 分析时的角色和关注点"></textarea></label>
           </div>
           <p v-if="aiModelsError" class="settings-security-note"><CircleAlert :size="15" />{{ aiModelsError }}，仍可手动填写模型。</p>
@@ -874,13 +878,13 @@ const metricLabels = {
   daily_wan_tx_bytes: "每日公网上传总量",
 };
 const providerPresets = [
-  { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  { value: "claude", label: "Claude", baseUrl: "https://api.anthropic.com/v1", model: "claude-3-5-haiku-latest" },
-  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" },
-  { value: "kimi", label: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
-  { value: "qwen", label: "Qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
-  { value: "minimax", label: "MiniMax", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-Text-01" },
-  { value: "custom", label: "自定义兼容接口", baseUrl: "", model: "" },
+  { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", maxTokens: 1200 },
+  { value: "claude", label: "Claude", baseUrl: "https://api.anthropic.com/v1", model: "claude-3-5-haiku-latest", maxTokens: 4096 },
+  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", maxTokens: 393216 },
+  { value: "kimi", label: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", maxTokens: 4096 },
+  { value: "qwen", label: "Qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", maxTokens: 4096 },
+  { value: "minimax", label: "MiniMax", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-Text-01", maxTokens: 4096 },
+  { value: "custom", label: "自定义兼容接口", baseUrl: "", model: "", maxTokens: 1200 },
 ];
 const templateVariables = [
   ["app", "应用名"],
@@ -989,7 +993,10 @@ const aiModelsError = ref("");
 const aiMessages = ref([]);
 const aiInput = ref("");
 const aiError = ref("");
+const aiWarning = ref("");
 const aiLoading = ref(false);
+const aiHistoryLoaded = ref(false);
+let aiHistoryPromise = null;
 const historyChartEl = ref(null);
 const connectionDialog = ref(null);
 const dockerEditDialog = ref(null);
@@ -1390,12 +1397,34 @@ async function refreshAiSettings() {
   aiForm.apiKey = "";
   aiModels.value = [];
   aiModelsError.value = "";
+  await refreshAiHistory();
+}
+async function refreshAiHistory(force = false) {
+  if (aiHistoryPromise && !force) return aiHistoryPromise;
+  if (aiHistoryLoaded.value && !force) return;
+  aiHistoryPromise = api("/api/ai/history").then((data) => {
+    aiMessages.value = Array.isArray(data?.messages) ? data.messages : [];
+    aiHistoryLoaded.value = true;
+    return data;
+  }).finally(() => {
+    aiHistoryPromise = null;
+  });
+  return aiHistoryPromise;
+}
+async function clearAiHistory() {
+  if (!aiMessages.value.length || aiLoading.value) return;
+  await api("/api/ai/history", { method: "DELETE" });
+  aiMessages.value = [];
+  aiHistoryLoaded.value = true;
+  aiWarning.value = "";
+  showToast("AI 记录已清空");
 }
 function applyAiProviderPreset() {
   const preset = providerPresets.find((item) => item.value === aiForm.provider);
   if (!preset) return;
   aiForm.baseUrl = preset.baseUrl;
   aiForm.model = preset.model;
+  aiForm.maxTokens = preset.maxTokens;
   aiModels.value = [];
   aiModelsError.value = "";
 }
@@ -1427,7 +1456,7 @@ async function readAiModels() {
         apiKey: aiForm.apiKey,
         model: String(aiForm.model || "").trim(),
         timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 180, 60),
-        maxTokens: clampNumber(aiForm.maxTokens, 128, 4096, 1200),
+        maxTokens: clampNumber(aiForm.maxTokens, 128, 393216, 1200),
         systemPrompt: aiForm.systemPrompt,
       }),
     });
@@ -1731,7 +1760,7 @@ async function saveAiSettings() {
         apiKey: aiForm.apiKey,
         model: String(aiForm.model || "").trim(),
         timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 180, 60),
-        maxTokens: clampNumber(aiForm.maxTokens, 128, 4096, 1200),
+        maxTokens: clampNumber(aiForm.maxTokens, 128, 393216, 1200),
         systemPrompt: aiForm.systemPrompt,
       }),
     });
@@ -1744,16 +1773,31 @@ async function saveAiSettings() {
     showToast(`保存失败：${formatValidationError(error)}`);
   }
 }
+function applyAiStreamEvent(event, assistantIndex) {
+  if (event.type === "delta" && aiMessages.value[assistantIndex]) {
+    aiMessages.value[assistantIndex].content += event.content || "";
+  }
+  if (event.type !== "done" || !aiMessages.value[assistantIndex]) return;
+  if (!aiMessages.value[assistantIndex].content) aiMessages.value[assistantIndex].content = event.answer || "";
+  if (event.truncated) {
+    aiMessages.value[assistantIndex].truncated = true;
+    aiWarning.value = event.finishReason === "length"
+      ? "AI 已达到最大输出 Token，回答可能未完整结束。"
+      : "AI 流式连接未完整结束，回答可能不完整。";
+  }
+}
 async function analyzeWithAi(scope = "overview") {
   if (aiLoading.value) return;
   aiLoading.value = true;
   aiError.value = "";
+  aiWarning.value = "";
   const question = scope === "history"
     ? `请结合当前选择的历史周期（${historyPeriod.value}）分析公网和内网流量趋势，指出异常。`
     : scope === "monitor"
       ? "请检查监控规则、容器保护、通知渠道和最近告警，指出当前风险与配置建议。"
       : "请分析当前所有统计数据，重点指出公网上传风险、异常进程和 Docker/系统资源问题。";
   if (activeView.value !== "ai") setView("ai");
+  await refreshAiHistory();
   aiMessages.value.push({ role: "user", content: question });
   const assistantIndex = aiMessages.value.length;
   aiMessages.value.push({ role: "assistant", content: "" });
@@ -1763,10 +1807,7 @@ async function analyzeWithAi(scope = "overview") {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ scope, question }),
     }, (event) => {
-      if (event.type === "delta") aiMessages.value[assistantIndex].content += event.content || "";
-      if (event.type === "done" && !aiMessages.value[assistantIndex].content) {
-        aiMessages.value[assistantIndex].content = event.answer || "";
-      }
+      applyAiStreamEvent(event, assistantIndex);
     });
   } catch (error) {
     if (!aiMessages.value[assistantIndex]?.content) aiMessages.value.splice(assistantIndex, 1);
@@ -1778,10 +1819,15 @@ async function analyzeWithAi(scope = "overview") {
 async function sendAiChat() {
   const content = aiInput.value.trim();
   if (!content || aiLoading.value) return;
+  await refreshAiHistory();
   aiInput.value = "";
   aiError.value = "";
+  aiWarning.value = "";
   aiMessages.value.push({ role: "user", content });
-  const requestMessages = aiMessages.value.slice(-19);
+  const requestMessages = aiMessages.value.slice(-19).map((message) => ({
+    role: message.role,
+    content: String(message.content || "").slice(-6000),
+  }));
   const assistantIndex = aiMessages.value.length;
   aiMessages.value.push({ role: "assistant", content: "" });
   aiLoading.value = true;
@@ -1791,10 +1837,7 @@ async function sendAiChat() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ messages: requestMessages }),
     }, (event) => {
-      if (event.type === "delta") aiMessages.value[assistantIndex].content += event.content || "";
-      if (event.type === "done" && !aiMessages.value[assistantIndex].content) {
-        aiMessages.value[assistantIndex].content = event.answer || "";
-      }
+      applyAiStreamEvent(event, assistantIndex);
     });
   } catch (error) {
     if (!aiMessages.value[assistantIndex]?.content) aiMessages.value.splice(assistantIndex, 1);
