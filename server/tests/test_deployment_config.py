@@ -24,6 +24,68 @@ from server.services.notifications import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_builtin_docker_icons_match_names_images_and_compose_aliases():
+    from server.services.docker_icons import match_docker_icon
+
+    assert match_docker_icon(name="qbittorrent-nox")["key"] == "qbittorrent"
+    assert match_docker_icon(image="redis:7-alpine")["key"] == "redis"
+    assert match_docker_icon(compose_service="moviepolite")["key"] == "moviepilot"
+    assert match_docker_icon(name="postgres")["key"] == "postgresql"
+
+
+def test_builtin_docker_icon_list_is_bounded_and_local():
+    from server.services.docker_icons import list_docker_icons
+
+    icons = list_docker_icons()
+    assert len(icons) >= 5
+    assert all(item["dataUrl"].startswith("data:image/svg+xml,") for item in icons)
+    assert all(len(item["dataUrl"]) < 65536 for item in icons)
+
+
+def test_unknown_docker_service_does_not_receive_a_guess():
+    from server.services.docker_icons import match_docker_icon
+
+    assert match_docker_icon(name="totally-unrelated-service") == {}
+
+
+def test_docker_discovery_adds_builtin_icon_and_manual_icon_wins():
+    original = main.ENABLE_DOCKER_DISCOVERY
+    main.ENABLE_DOCKER_DISCOVERY = True
+    container = {
+        "Id": "abcdef1234567890",
+        "Names": ["/qbittorrent-nox"],
+        "Image": "linuxserver/qbittorrent:latest",
+        "Labels": {},
+        "State": "running",
+        "Status": "Up",
+        "Created": 1,
+        "HostConfig": {"NetworkMode": "bridge"},
+        "Ports": [],
+    }
+    try:
+        with patch("server.main.docker_api_get", return_value=[container]):
+            _ports, rows = main.discover_containers({}, main.empty_docker_overrides())
+        assert rows[0]["iconKey"] == "qbittorrent"
+        assert rows[0]["iconSource"] == "builtin"
+
+        custom_icon = "data:image/png;base64," + "a" * 32
+        overrides = {
+            "containers": {
+                "abcdef123456": {
+                    "containerId": "abcdef123456",
+                    "containerName": "qbittorrent-nox",
+                    "icon": custom_icon,
+                }
+            }
+        }
+        with patch("server.main.docker_api_get", return_value=[container]):
+            _ports, rows = main.discover_containers({}, overrides)
+        assert rows[0]["iconSource"] == "custom"
+        assert rows[0]["containerIcon"] == custom_icon
+    finally:
+        main.ENABLE_DOCKER_DISCOVERY = original
+
+
 class MemorySettingsDB:
     def __init__(self):
         self.settings = {}

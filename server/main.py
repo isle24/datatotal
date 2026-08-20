@@ -47,6 +47,7 @@ from server.services.ai import (
     public_ai_settings,
 )
 from server.services.system_status import system_status
+from server.services.docker_icons import list_docker_icons, match_docker_icon
 from server.services.go_collector_client import (
     wait_for_probe as go_wait_for_probe,
     snapshot as go_snapshot,
@@ -2038,6 +2039,8 @@ def discover_containers(
             )
             for item in container_ports:
                 ports[(item["proto"], int(item["hostPort"]))] = item
+            custom_icon = sanitize_docker_icon(override.get("icon") or "")
+            builtin_icon = match_docker_icon(name=name)
             rows.append(
                 {
                     "id": container_id or name,
@@ -2047,7 +2050,9 @@ def discover_containers(
                     "status": "手动端口配置",
                     "created": 0,
                     "networkMode": "manual",
-                    "containerIcon": sanitize_docker_icon(override.get("icon") or ""),
+                    "iconKey": "custom" if custom_icon else builtin_icon.get("key", ""),
+                    "iconSource": "custom" if custom_icon else builtin_icon.get("source", ""),
+                    "containerIcon": custom_icon or builtin_icon.get("dataUrl", ""),
                     "ports": container_ports,
                     "protection": {
                         "enabled": any(
@@ -2111,6 +2116,8 @@ def discover_containers(
             for item in container_ports:
                 ports[(item["proto"], int(item["hostPort"]))] = item
             stats = stats_cache.get(cid) or {}
+            custom_icon = sanitize_docker_icon((override or {}).get("icon") or "")
+            builtin_icon = match_docker_icon(name=name, image=image, compose_service=compose_service)
             row_identity = {
                 "id": cid,
                 "name": name,
@@ -2139,7 +2146,9 @@ def discover_containers(
                     "networkMode": network_mode,
                     **stats,
                     "uptimeSeconds": max(0, int(now()) - created) if created else None,
-                    "containerIcon": sanitize_docker_icon((override or {}).get("icon") or ""),
+                    "iconKey": "custom" if custom_icon else builtin_icon.get("key", ""),
+                    "iconSource": "custom" if custom_icon else builtin_icon.get("source", ""),
+                    "containerIcon": custom_icon or builtin_icon.get("dataUrl", ""),
                     "ports": container_ports,
                     "protection": {
                         "enabled": any(bool(rule.get("enabled")) for rule in protection_rule_rows),
@@ -5481,6 +5490,11 @@ async def clear_alerts() -> dict:
 @app.get("/api/logs")
 async def logs() -> dict:
     return log_status()
+
+
+@app.get("/api/docker/icons")
+async def docker_icons() -> dict:
+    return {"icons": list_docker_icons()}
 
 
 @app.get("/api/docker/containers")
