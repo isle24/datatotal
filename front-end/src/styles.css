@@ -911,6 +911,28 @@ label.check input, label.switch input { width: auto; min-height: auto; }
 .ai-chat-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 18px; border-bottom: 1px solid var(--line); background: var(--panel-soft); }
 .ai-chat-toolbar strong { display: block; font-size: 15px; }
 .ai-chat-toolbar span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.ai-mode-tabs { display: inline-flex; gap: 4px; margin-bottom: 10px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.ai-mode-tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border: 0; border-radius: 6px; padding: 5px 9px; color: var(--muted); background: transparent; font-size: 11px; }
+.ai-mode-tabs button:hover, .ai-mode-tabs button.active { color: var(--text); background: color-mix(in srgb, var(--cyan) 14%, var(--panel)); }
+.ai-configure-panel { display: grid; align-content: start; gap: 16px; min-height: 390px; padding: 22px; }
+.ai-configure-form { display: grid; gap: 12px; }
+.ai-configure-actions, .ai-proposal-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ai-proposal { display: grid; gap: 14px; border: 1px solid color-mix(in srgb, var(--cyan) 38%, var(--line)); border-radius: 8px; padding: 16px; background: color-mix(in srgb, var(--cyan) 5%, var(--panel)); }
+.ai-proposal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; color: var(--cyan); }
+.ai-proposal-head strong, .ai-proposal-head span { display: block; }
+.ai-proposal-head strong { color: var(--text); font-size: 14px; }
+.ai-proposal-head span { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.ai-proposal-list { display: grid; gap: 9px; }
+.ai-proposal-change { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 7px; padding: 12px; background: var(--panel); }
+.ai-proposal-change-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ai-proposal-change code { min-width: 0; overflow-wrap: anywhere; color: var(--cyan); font-size: 11px; }
+.ai-proposal-change p { margin: 0; color: var(--text); font-size: 12px; }
+.risk-badge { border-radius: 999px; padding: 3px 7px; color: var(--green); background: color-mix(in srgb, var(--green) 12%, var(--panel)); font-size: 10px; white-space: nowrap; }
+.risk-badge.high { color: var(--red); background: color-mix(in srgb, var(--red) 12%, var(--panel)); }
+.ai-proposal-values { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; }
+.ai-proposal-values span { min-width: 0; display: grid; gap: 3px; border-radius: 5px; padding: 7px 8px; background: var(--panel-soft); }
+.ai-proposal-values small { color: var(--muted); font-size: 10px; }
+.ai-proposal-values b { overflow-wrap: anywhere; color: var(--text); font-size: 11px; font-weight: 600; }
 .ai-messages { display: grid; align-content: start; gap: 14px; overflow-y: auto; max-height: 58vh; padding: 22px; }
 .ai-empty { min-height: 280px; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--muted); text-align: center; }
 .ai-empty strong { color: var(--text); }
@@ -1113,6 +1135,11 @@ label.check input, label.switch input { width: auto; min-height: auto; }
   .ai-messages { padding: 14px; }
   .ai-message { max-width: 96%; }
   .ai-composer { grid-template-columns: 1fr; padding: 12px; }
+  .ai-configure-panel { padding: 14px; }
+  .ai-configure-actions, .ai-proposal-actions { align-items: stretch; flex-direction: column; }
+  .ai-configure-actions button, .ai-proposal-actions button { width: 100%; justify-content: center; }
+  .ai-proposal-values { grid-template-columns: 1fr; }
+  .ai-proposal-values > svg { display: none; }
   .upload-diagnostic-summary, .diagnostic-grid { grid-template-columns: 1fr; }
   .diagnostic-date-control { width: 100%; justify-content: space-between; }
   .diagnostic-date-control input { width: min(180px, 58vw); }

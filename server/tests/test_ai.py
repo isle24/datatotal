@@ -23,6 +23,41 @@ from server.services.ai import (  # noqa: E402
 import server.main as main  # noqa: E402
 
 
+class ConfigurationSettingsDB:
+    def __init__(self):
+        self.settings = {}
+
+    def get_setting(self, key):
+        return self.settings.get(key)
+
+    def set_setting(self, key, value):
+        self.settings[key] = value
+        return {"ok": True}
+
+    def set_settings_atomic(self, values):
+        self.settings.update(values or {})
+        return {"ok": True}
+
+
+def make_configuration_collector(db=None):
+    collector = main.TrafficCollector.__new__(main.TrafficCollector)
+    collector.db = db or ConfigurationSettingsDB()
+    collector.ai_settings = normalize_ai_settings({"enabled": True, "apiKey": "configured-key"})
+    collector.monitor_rules = []
+    collector.notification_channels = []
+    collector.container_protection_rules = []
+    collector.docker_overrides = {"containers": {}}
+    collector.get_settings = lambda: {
+        "runtime": {"sampleSeconds": main.SAMPLE_SECONDS},
+        "monitor": {"rules": collector.monitor_rules, "channels": collector.notification_channels, "containerRules": collector.container_protection_rules},
+        "containerProtection": {"rules": collector.container_protection_rules},
+        "notifications": {"channels": collector.notification_channels},
+        "docker": {"containers": collector.docker_overrides.get("containers", {})},
+        "ai": {"enabled": True, "provider": "openai", "baseUrl": "https://example.test/v1", "model": "test", "timeoutSeconds": 60, "maxTokens": 1200, "systemPrompt": ""},
+    }
+    return collector
+
+
 def test_ai_settings_are_normalized_and_api_key_is_masked():
     settings = normalize_ai_settings(
         {
@@ -52,6 +87,103 @@ def test_ai_settings_are_normalized_and_api_key_is_masked():
         "keyConfigured": True,
         "apiKeyMasked": "sec...ken",
     }
+
+
+def test_configuration_schema_excludes_secrets_and_host_controls():
+    from server.services.config_assistant import configuration_schema
+
+    paths = {item["path"] for item in configuration_schema()["fields"]}
+    assert "runtime.sampleSeconds" in paths
+    assert "ai.apiKey" not in paths
+    assert "runtime.dbPath" not in paths
+    forbidden_segments = {"apikey", "password", "token", "secret"}
+    assert all(not (set(path.lower().split(".")) & forbidden_segments) for path in paths)
+
+
+def test_configuration_response_requires_bounded_json_change_list():
+    from server.services.config_assistant import parse_configuration_response
+
+    response = parse_configuration_response(
+        '{"changes":[{"path":"runtime.sampleSeconds","value":2,"summary":"采样间隔 2 秒","risk":"低"}]}'
+    )
+    assert response[0]["path"] == "runtime.sampleSeconds"
+    try:
+        parse_configuration_response("not json")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid AI configuration JSON should be rejected")
+
+
+def test_configuration_changes_reject_sensitive_and_unknown_paths():
+    from server.services.config_assistant import validate_configuration_changes
+
+    current = {"runtime": {"sampleSeconds": 1}}
+    for change, expected in (
+        ({"path": "ai.apiKey", "value": "secret"}, "不允许"),
+        ({"path": "runtime.execute", "value": "rm -rf /"}, "未知"),
+    ):
+        try:
+            validate_configuration_changes([change], current)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("unsafe configuration change should be rejected")
+
+
+def test_proposal_store_is_single_use_and_expires():
+    from server.services.config_assistant import ProposalStore
+
+    store = ProposalStore(ttl_seconds=1)
+    proposal_id = store.put({"changes": []}, now_value=100)
+    assert store.take(proposal_id, now_value=100)["changes"] == []
+    assert store.take(proposal_id, now_value=100) is None
+    expired = store.put({"changes": []}, now_value=100)
+    assert store.take(expired, now_value=102) is None
+
+
+def test_ai_configuration_proposal_does_not_persist_until_apply():
+    collector = make_configuration_collector()
+    response = '{"changes":[{"path":"runtime.sampleSeconds","value":2,"summary":"采样间隔 2 秒","risk":"低"}]}'
+    with patch.object(main, "chat_completion", return_value={"answer": response}):
+        result = collector.create_ai_configuration_proposal("把采样间隔改为 2 秒")
+    assert result["requiresConfirmation"] is True
+    assert collector.db.get_setting("runtime_settings") is None
+    applied = collector.apply_ai_configuration_proposal(result["proposal"]["id"])
+    assert applied["runtime"]["sampleSeconds"] == 2
+    assert collector.db.get_setting("runtime_settings")["sampleSeconds"] == 2
+    assert collector.apply_ai_configuration_proposal(result["proposal"]["id"])["ok"] is False
+
+
+def test_ai_configuration_proposal_rejects_sensitive_changes():
+    collector = make_configuration_collector()
+    response = '{"changes":[{"path":"ai.apiKey","value":"secret","summary":"set key","risk":"high"}]}'
+    with patch.object(main, "chat_completion", return_value={"answer": response}):
+        result = collector.create_ai_configuration_proposal("设置 API Key 为 secret")
+    assert result["ok"] is False
+    assert "不允许" in result["detail"] or "敏感" in result["detail"]
+
+
+def test_ai_configuration_applies_multiple_non_secret_setting_roots_and_preserves_key():
+    collector = make_configuration_collector()
+    response = json.dumps(
+        {
+            "changes": [
+                {"path": "monitor.rules", "value": [{"id": "upload", "name": "upload", "metric": "wan_tx_bps", "threshold": 100, "durationSeconds": 0}], "summary": "增加上传规则", "risk": "低"},
+                {"path": "ai.model", "value": "new-model", "summary": "切换模型", "risk": "低"},
+                {"path": "docker.containers", "value": {"qb": {"containerId": "abcdef123456", "containerName": "qb", "iconKey": "qbittorrent", "ports": []}}, "summary": "设置容器图标", "risk": "低"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+    with patch.object(main, "chat_completion", return_value={"answer": response}):
+        proposal = collector.create_ai_configuration_proposal("增加规则并设置容器图标")
+    applied = collector.apply_ai_configuration_proposal(proposal["proposal"]["id"])
+    assert applied["ok"] is True
+    assert collector.monitor_rules[0]["id"] == "upload"
+    assert collector.ai_settings["model"] == "new-model"
+    assert collector.ai_settings["apiKey"] == "configured-key"
+    assert collector.docker_overrides["containers"]["abcdef123456"]["iconKey"] == "qbittorrent"
 
 
 def test_ai_settings_reject_invalid_endpoint_and_preserve_existing_key():

@@ -69,6 +69,16 @@ test("AI assistant renders sanitized Markdown and supports Enter to send", () =>
   assert.match(styles, /\.ai-markdown pre/);
 });
 
+test("AI settings assistant exposes preview and confirmation controls", () => {
+  assert.match(source, /aiMode/);
+  assert.match(source, /设置助手/);
+  assert.match(source, /\/api\/ai\/configure/);
+  assert.match(source, /\/api\/ai\/configure\/apply/);
+  assert.match(source, /确认应用/);
+  assert.match(source, /取消变更/);
+  assert.match(source, /iconSource/);
+});
+
 test("Markdown renderer escapes HTML and blocks unsafe link protocols", () => {
   const html = renderMarkdown("# Result\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n- **safe**\n\n```sh\necho ok\n```");
   assert.match(html, /<h1>Result<\/h1>/);

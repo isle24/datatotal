@@ -83,6 +83,13 @@ def match_docker_icon(name: str = "", image: str = "", compose_service: str = ""
     return {"key": item["key"], "label": item["label"], "dataUrl": item["dataUrl"], "source": item["source"]}
 
 
+def get_docker_icon(key: str) -> dict:
+    item = DOCKER_ICON_REGISTRY.get(str(key or "").strip().lower())
+    if not item:
+        return {}
+    return {"key": item["key"], "label": item["label"], "dataUrl": item["dataUrl"], "source": item["source"]}
+
+
 def list_docker_icons() -> list[dict]:
     """Return bounded copies suitable for the authenticated icon-picker endpoint."""
     return [

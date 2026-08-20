@@ -279,8 +279,8 @@
           <div class="docker-stack">
             <article v-for="container in dockerContainers" :key="container.id || container.name" :class="['docker-card', 'accordion-card', { expanded: isDockerCardExpanded(container) }]">
               <button class="docker-card-trigger" type="button" :aria-expanded="isDockerCardExpanded(container)" @click="toggleDockerCard(container)">
-                <div class="docker-icon">
-                  <img v-if="container.containerIcon" :src="container.containerIcon" alt="" />
+                <div class="docker-icon" :title="container.iconSource ? `图标：${container.iconSource === 'builtin' ? '内置' : '自定义'}${container.iconKey ? ` · ${container.iconKey}` : ''}` : '未匹配图标'">
+                  <img v-if="container.containerIcon" :src="container.containerIcon" :alt="`${container.name} 图标`" />
                   <Server v-else :size="22" />
                 </div>
                 <div>
@@ -466,13 +466,20 @@
         </section>
         <section class="ai-chat card">
           <div class="ai-chat-toolbar">
-            <div><strong>数据对话</strong><span>上下文为聚合摘要，不发送完整连接原始表</span></div>
-            <div class="card-actions">
+            <div>
+              <div class="ai-mode-tabs" role="tablist" aria-label="AI 工作模式">
+                <button type="button" :class="{ active: aiMode === 'analysis' }" @click="aiMode = 'analysis'"><Sparkles :size="14" />数据分析</button>
+                <button type="button" :class="{ active: aiMode === 'configure' }" @click="aiMode = 'configure'"><Settings :size="14" />设置助手</button>
+              </div>
+              <strong>{{ aiMode === "configure" ? "设置助手" : "数据对话" }}</strong>
+              <span>{{ aiMode === "configure" ? "用一句话描述目标，AI 生成预览后一次确认应用" : "上下文为聚合摘要，不发送完整连接原始表" }}</span>
+            </div>
+            <div v-if="aiMode === 'analysis'" class="card-actions">
               <button type="button" :disabled="aiLoading" @click="analyzeWithAi('all')"><Sparkles :size="15" />快速分析全部数据</button>
               <button type="button" class="subtle-button" :disabled="aiLoading || !aiMessages.length" @click="clearAiHistory"><Trash2 :size="15" />清空记录</button>
             </div>
           </div>
-          <div class="ai-messages" aria-live="polite">
+          <div v-if="aiMode === 'analysis'" class="ai-messages" aria-live="polite">
             <div v-if="!aiMessages.length" class="ai-empty"><Sparkles :size="24" /><strong>从一个问题开始</strong><span>例如：最近公网上传是否异常？哪个进程最值得关注？</span></div>
             <div v-for="(message, index) in aiMessages" :key="`${message.role}-${index}`" :class="['ai-message', message.role === 'user' ? 'user' : 'assistant']">
               <span class="ai-message-avatar"><UserRound v-if="message.role === 'user'" :size="15" /><Sparkles v-else :size="15" /></span>
@@ -482,10 +489,31 @@
           </div>
           <p v-if="aiError" class="ai-error"><CircleAlert :size="15" />{{ aiError }}</p>
           <p v-if="aiWarning" class="ai-warning"><CircleAlert :size="15" />{{ aiWarning }}</p>
-          <form class="ai-composer" @submit.prevent="sendAiChat">
+          <form v-if="aiMode === 'analysis'" class="ai-composer" @submit.prevent="sendAiChat">
             <textarea v-model="aiInput" rows="2" maxlength="2000" placeholder="输入你想分析的问题，例如：按公网上传排序，给出前 3 个风险来源" @keydown="handleAiComposerKeydown"></textarea>
             <button type="submit" :disabled="aiLoading || !aiInput.trim()"><Send :size="16" />发送</button>
           </form>
+          <div v-else class="ai-configure-panel">
+            <form class="ai-configure-form" @submit.prevent="requestAiConfiguration">
+              <label class="textarea-label">告诉 AI 你想怎么设置<textarea v-model="aiConfigureInput" rows="4" maxlength="2000" placeholder="例如：把采样间隔改为 2 秒，并开启 Docker 自动发现"></textarea></label>
+              <div class="ai-configure-actions">
+                <span class="muted">敏感凭据、密码、Token、路径和宿主命令不会由 AI 修改。</span>
+                <button type="submit" :disabled="aiConfigureLoading || !aiConfigureInput.trim()"><Sparkles :size="16" />{{ aiConfigureLoading ? "生成中" : "生成配置预览" }}</button>
+              </div>
+            </form>
+            <p v-if="aiConfigureError" class="ai-error"><CircleAlert :size="15" />{{ aiConfigureError }}</p>
+            <section v-if="aiConfigureProposal" class="ai-proposal" aria-live="polite">
+              <div class="ai-proposal-head"><div><strong>配置变更预览</strong><span>确认后才会写入 SQLite · {{ formatDate(aiConfigureProposal.expiresAt) }} 过期</span></div><ShieldCheck :size="20" /></div>
+              <div class="ai-proposal-list">
+                <article v-for="change in aiConfigureProposal.changes || []" :key="change.path" class="ai-proposal-change">
+                  <div class="ai-proposal-change-head"><code>{{ change.path }}</code><span :class="['risk-badge', change.risk === '高' || change.risk === 'high' ? 'high' : 'low']">风险 {{ change.risk || "低" }}</span></div>
+                  <p>{{ change.summary }}</p>
+                  <div class="ai-proposal-values"><span><small>原值</small><b>{{ formatConfigValue(change.oldValue) }}</b></span><ArrowRight :size="15" /><span><small>新值</small><b>{{ formatConfigValue(change.newValue) }}</b></span></div>
+                </article>
+              </div>
+              <div class="ai-proposal-actions"><button type="button" class="subtle-button" :disabled="aiConfigureLoading" @click="cancelAiConfiguration"><X :size="16" />取消变更</button><button type="button" :disabled="aiConfigureLoading" @click="applyAiConfiguration"><CheckCircle2 :size="16" />{{ aiConfigureLoading ? "应用中" : "确认应用" }}</button></div>
+            </section>
+          </div>
         </section>
       </section>
 
@@ -791,14 +819,15 @@
         <div class="docker-editor">
           <div class="icon-editor">
             <div class="docker-icon large">
-              <img v-if="dockerEditor.icon" :src="dockerEditor.icon" alt="" />
+              <img v-if="dockerEditor.icon || dockerEditor.iconKey" :src="dockerEditor.icon || dockerIconByKey(dockerEditor.iconKey)" alt="" />
               <Server v-else :size="28" />
             </div>
+            <label>内置图标<select v-model="dockerEditor.iconKey" @change="dockerEditor.icon = ''"><option value="">自动匹配</option><option v-for="icon in dockerIcons" :key="icon.key" :value="icon.key">{{ icon.label }}</option></select></label>
             <label class="file-button">
               <ImagePlus :size="16" />上传图标
               <input type="file" accept="image/png,image/jpeg,image/webp" @change="uploadDockerIcon" />
             </label>
-            <button type="button" @click="dockerEditor.icon = ''">清除</button>
+            <button type="button" @click="dockerEditor.icon = ''; dockerEditor.iconKey = ''">清除</button>
           </div>
           <div class="port-editor-list">
             <div v-for="(port, index) in dockerEditor.ports" :key="index" class="port-editor">
@@ -833,6 +862,7 @@ import { renderMarkdown } from "./utils/markdown.js";
 import {
   Activity,
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Bell,
   CheckCircle2,
@@ -1038,6 +1068,11 @@ const aiForm = reactive({
 const aiModels = ref([]);
 const aiModelsLoading = ref(false);
 const aiModelsError = ref("");
+const aiMode = ref("analysis");
+const aiConfigureInput = ref("");
+const aiConfigureProposal = ref(null);
+const aiConfigureError = ref("");
+const aiConfigureLoading = ref(false);
 const aiMessages = ref([]);
 const aiInput = ref("");
 const aiError = ref("");
@@ -1048,7 +1083,8 @@ let aiHistoryPromise = null;
 const historyChartEl = ref(null);
 const connectionDialog = ref(null);
 const dockerEditDialog = ref(null);
-const dockerEditor = reactive({ id: "", name: "", icon: "", ports: [] });
+const dockerIcons = ref([]);
+const dockerEditor = reactive({ id: "", name: "", icon: "", iconKey: "", ports: [] });
 let historyChart = null;
 let overviewTimer = null;
 let processTimer = null;
@@ -1201,6 +1237,19 @@ function formatDuration(seconds) {
 }
 function formatDate(ts) {
   return ts ? new Date(ts * 1000).toLocaleString() : "-";
+}
+function formatConfigValue(value) {
+  if (value === undefined || value === null || value === "") return "未设置";
+  if (typeof value === "object") {
+    try {
+      const text = JSON.stringify(value, null, 0);
+      return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+    } catch {
+      return "复杂值";
+    }
+  }
+  if (typeof value === "boolean") return value ? "开启" : "关闭";
+  return String(value);
 }
 function formatPercent(value) {
   const number = Number(value);
@@ -1530,6 +1579,56 @@ async function clearAiHistory() {
   aiWarning.value = "";
   showToast("AI 记录已清空");
 }
+async function requestAiConfiguration() {
+  const request = aiConfigureInput.value.trim();
+  if (!request || aiConfigureLoading.value) return;
+  aiConfigureLoading.value = true;
+  aiConfigureError.value = "";
+  aiConfigureProposal.value = null;
+  try {
+    const messages = aiMessages.value.slice(-8).filter((message) => ["user", "assistant"].includes(message.role)).map((message) => ({
+      role: message.role,
+      content: String(message.content || "").slice(-6000),
+    }));
+    const result = await api("/api/ai/configure", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request, messages }),
+    });
+    if (!result?.ok) throw new Error(result?.detail || "配置预览生成失败");
+    aiConfigureProposal.value = result.proposal || null;
+    if (!aiConfigureProposal.value) throw new Error("AI 未返回配置预览");
+  } catch (error) {
+    aiConfigureError.value = formatValidationError(error);
+  } finally {
+    aiConfigureLoading.value = false;
+  }
+}
+function cancelAiConfiguration() {
+  aiConfigureProposal.value = null;
+  aiConfigureError.value = "";
+}
+async function applyAiConfiguration() {
+  const proposalId = aiConfigureProposal.value?.id;
+  if (!proposalId || aiConfigureLoading.value) return;
+  aiConfigureLoading.value = true;
+  aiConfigureError.value = "";
+  try {
+    const result = await api("/api/ai/configure/apply", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ proposalId }),
+    });
+    if (!result?.ok) throw new Error(result?.detail || "配置应用失败");
+    aiConfigureProposal.value = null;
+    await refreshSettings();
+    showToast("AI 配置已应用");
+  } catch (error) {
+    aiConfigureError.value = formatValidationError(error);
+  } finally {
+    aiConfigureLoading.value = false;
+  }
+}
 function applyAiProviderPreset() {
   const preset = providerPresets.find((item) => item.value === aiForm.provider);
   if (!preset) return;
@@ -1616,6 +1715,9 @@ async function refreshDockerContainerOptions() {
 function dockerKey(container) {
   return container?.id || container?.name || "";
 }
+function dockerIconByKey(key) {
+  return dockerIcons.value.find((item) => item.key === key)?.dataUrl || "";
+}
 function normalizeDockerContainer(container = {}, previous = {}) {
   const keepPorts = Array.isArray(previous.ports) ? previous.ports : [];
   return {
@@ -1624,6 +1726,8 @@ function normalizeDockerContainer(container = {}, previous = {}) {
     ports: Array.isArray(container.ports) ? container.ports : keepPorts,
     portsLoaded: Array.isArray(container.ports) ? true : Boolean(previous.portsLoaded),
     containerIcon: container.containerIcon || previous.containerIcon || "",
+    iconKey: container.iconKey || previous.iconKey || "",
+    iconSource: container.iconSource || previous.iconSource || "",
     showStats: Boolean(previous.showStats),
     stats: previous.stats || null,
     statsLoading: false,
@@ -1694,6 +1798,15 @@ async function loadDockerDetail(container) {
     return data.container;
   }
   return null;
+}
+async function refreshDockerIcons() {
+  if (dockerIcons.value.length) return;
+  try {
+    const data = await api("/api/docker/icons");
+    dockerIcons.value = Array.isArray(data?.icons) ? data.icons : [];
+  } catch (error) {
+    console.warn("load docker icons failed", error);
+  }
 }
 async function showDockerStats(container) {
   container.showStats = true;
@@ -2118,10 +2231,12 @@ function normalizeEditorPort(port = {}) {
   };
 }
 async function editDockerContainer(container) {
+  await refreshDockerIcons();
   const detail = container.portsLoaded ? container : (await loadDockerDetail(container)) || container;
   dockerEditor.id = detail.id || "";
   dockerEditor.name = detail.name || "";
   dockerEditor.icon = detail.containerIcon || "";
+  dockerEditor.iconKey = detail.iconSource === "builtin" ? (detail.iconKey || "") : "";
   dockerEditor.ports = (detail.ports || []).map(normalizeEditorPort);
   dockerEditDialog.value?.showModal();
 }
@@ -2132,7 +2247,7 @@ function removeDockerPort(index) {
   dockerEditor.ports.splice(index, 1);
 }
 async function saveDockerPorts() {
-  await saveDockerPortsFor({ id: dockerEditor.id, name: dockerEditor.name, containerIcon: dockerEditor.icon, ports: dockerEditor.ports });
+  await saveDockerPortsFor({ id: dockerEditor.id, name: dockerEditor.name, containerIcon: dockerEditor.icon, iconKey: dockerEditor.iconKey, ports: dockerEditor.ports });
   dockerEditDialog.value?.close();
   showToast("Docker 端口配置已保存");
 }
@@ -2143,7 +2258,8 @@ async function saveDockerPortsFor(container) {
     body: JSON.stringify({
       containerId: container.id || "",
       containerName: container.name || "",
-      icon: container.containerIcon || dockerEditor.icon || "",
+      icon: (container.iconKey || dockerEditor.iconKey) ? "" : (container.containerIcon || dockerEditor.icon || ""),
+      iconKey: container.iconKey || dockerEditor.iconKey || "",
       ports: (container.ports || []).map(normalizeEditorPort),
     }),
   });
@@ -2163,6 +2279,7 @@ function uploadDockerIcon(event) {
   const reader = new FileReader();
   reader.onload = () => {
     dockerEditor.icon = String(reader.result || "");
+    dockerEditor.iconKey = "";
   };
   reader.readAsDataURL(file);
 }

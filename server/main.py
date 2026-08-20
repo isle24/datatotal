@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import hashlib
 import heapq
 import hmac
@@ -47,7 +48,13 @@ from server.services.ai import (
     public_ai_settings,
 )
 from server.services.system_status import system_status
-from server.services.docker_icons import list_docker_icons, match_docker_icon
+from server.services.docker_icons import get_docker_icon, list_docker_icons, match_docker_icon
+from server.services.config_assistant import (
+    ProposalStore,
+    configuration_schema,
+    parse_configuration_response,
+    validate_configuration_changes,
+)
 from server.services.go_collector_client import (
     wait_for_probe as go_wait_for_probe,
     snapshot as go_snapshot,
@@ -61,6 +68,7 @@ from server.services.go_collector_client import (
 
 
 APP_NAME = "NAS Traffic Lens"
+AI_CONFIGURATION_PROPOSALS = ProposalStore()
 MAX_AI_CONTEXT_CHARS = 120000
 MAX_AI_HISTORY_MESSAGES = 100
 MAX_AI_HISTORY_CONTENT_CHARS = 200000
@@ -694,6 +702,15 @@ class AIChatPayload(BaseModel):
     messages: List[AIChatMessage] = Field(default_factory=list, max_length=20)
 
 
+class AIConfigurePayload(BaseModel):
+    request: str = Field(min_length=1, max_length=2000)
+    messages: List[AIChatMessage] = Field(default_factory=list, max_length=12)
+
+
+class AIConfigureApplyPayload(BaseModel):
+    proposalId: str = Field(min_length=20, max_length=128)
+
+
 def apply_runtime_settings(settings: RuntimeSettingsPayload) -> RuntimeSettingsPayload:
     global SAMPLE_SECONDS, RETENTION_SECONDS, CONNECTION_ACTIVE_SECONDS, CONNECTION_RETENTION_SECONDS
     global AUTO_START_STAGE, CONNTRACK_REFRESH_SECONDS, PERSIST_INTERVAL_SECONDS, HISTORY_RETENTION_DAYS
@@ -738,6 +755,7 @@ class DockerContainerPortsPayload(BaseModel):
     containerId: str = ""
     containerName: str = ""
     icon: str = ""
+    iconKey: str = ""
     ports: List[DockerPortPayload] = Field(default_factory=list)
 
 
@@ -1239,6 +1257,30 @@ class TrafficDB:
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
                 """,
                 (key, json.dumps(value, ensure_ascii=False, separators=(",", ":")), int(now())),
+            )
+            self.conn.commit()
+        return {"ok": True}
+
+    def set_settings_atomic(self, values: Dict[str, dict]) -> dict:
+        if not self.conn:
+            return {"ok": False}
+        rows = []
+        for key, value in (values or {}).items():
+            rows.append(
+                (
+                    str(key),
+                    json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+                    int(now()),
+                )
+            )
+        with self.lock:
+            self.conn.executemany(
+                """
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                rows,
             )
             self.conn.commit()
         return {"ok": True}
@@ -1883,6 +1925,9 @@ def sanitize_docker_overrides(payload: DockerContainerPortsPayload) -> dict:
     key = docker_container_key(container_id, container_name)
     if not key:
         raise ValueError("missing container")
+    icon_key = str(payload.iconKey or "").strip().lower()[:64]
+    if icon_key and not get_docker_icon(icon_key):
+        raise ValueError("unknown builtin docker icon")
     ports = []
     seen = set()
     for raw_port in payload.ports:
@@ -1899,6 +1944,7 @@ def sanitize_docker_overrides(payload: DockerContainerPortsPayload) -> dict:
         "containerId": container_id,
         "containerName": container_name,
         "icon": sanitize_docker_icon(payload.icon),
+        "iconKey": icon_key,
         "ports": sorted(ports, key=lambda row: (row.get("hostPort", 0), row.get("proto", ""))),
     }
 
@@ -2040,7 +2086,7 @@ def discover_containers(
             for item in container_ports:
                 ports[(item["proto"], int(item["hostPort"]))] = item
             custom_icon = sanitize_docker_icon(override.get("icon") or "")
-            builtin_icon = match_docker_icon(name=name)
+            builtin_icon = get_docker_icon(override.get("iconKey") or "") or match_docker_icon(name=name)
             rows.append(
                 {
                     "id": container_id or name,
@@ -2117,7 +2163,11 @@ def discover_containers(
                 ports[(item["proto"], int(item["hostPort"]))] = item
             stats = stats_cache.get(cid) or {}
             custom_icon = sanitize_docker_icon((override or {}).get("icon") or "")
-            builtin_icon = match_docker_icon(name=name, image=image, compose_service=compose_service)
+            builtin_icon = get_docker_icon((override or {}).get("iconKey") or "") or match_docker_icon(
+                name=name,
+                image=image,
+                compose_service=compose_service,
+            )
             row_identity = {
                 "id": cid,
                 "name": name,
@@ -4315,6 +4365,278 @@ class TrafficCollector:
                 self._persist_ai_exchange(question, event.get("answer", ""), "chat", event)
             yield event
 
+    @staticmethod
+    def _configuration_path_value(snapshot: dict, path: str):
+        value = snapshot
+        for part in str(path or "").split("."):
+            if not isinstance(value, dict) or part not in value:
+                return None
+            value = value[part]
+        return copy.deepcopy(value)
+
+    def _ai_configuration_snapshot(self) -> dict:
+        settings = self.get_settings()
+        runtime_source = settings.get("runtime") if isinstance(settings, dict) else {}
+        runtime = {
+            key: runtime_source.get(key)
+            for key in (
+                "sampleSeconds",
+                "retentionSeconds",
+                "persistIntervalSeconds",
+                "historyRetentionDays",
+                "connectionActiveSeconds",
+                "connectionRetentionSeconds",
+                "conntrackRefreshSeconds",
+                "autoStartStage",
+                "dockerDiscovery",
+            )
+            if isinstance(runtime_source, dict) and key in runtime_source
+        }
+        monitor_source = settings.get("monitor") if isinstance(settings, dict) else {}
+        monitor_source = monitor_source if isinstance(monitor_source, dict) else {}
+        channels_source = monitor_source.get("channels")
+        if not isinstance(channels_source, list):
+            channels_source = (settings.get("notifications") or {}).get("channels", []) if isinstance(settings, dict) else []
+        safe_channels = []
+        for channel in channels_source[:50] if isinstance(channels_source, list) else []:
+            if not isinstance(channel, dict):
+                continue
+            safe_channels.append(
+                {
+                    key: channel.get(key)
+                    for key in (
+                        "id",
+                        "name",
+                        "type",
+                        "enabled",
+                        "timeout",
+                        "titleTemplate",
+                        "bodyTemplate",
+                        "urlTemplate",
+                        "msgType",
+                        "htmlHeight",
+                    )
+                    if key in channel
+                }
+                | {"urlConfigured": bool(channel.get("url"))}
+            )
+        protection_source = monitor_source.get("containerRules")
+        if not isinstance(protection_source, list):
+            protection_source = (settings.get("containerProtection") or {}).get("rules", []) if isinstance(settings, dict) else []
+        docker_source = (settings.get("docker") or {}).get("containers") if isinstance(settings, dict) else None
+        if not isinstance(docker_source, dict):
+            docker_source = (self.docker_overrides or {}).get("containers", {})
+        safe_docker = {}
+        for key, item in list(docker_source.items())[:100] if isinstance(docker_source, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            safe_docker[str(key)[:160]] = {
+                "containerId": str(item.get("containerId") or "")[:12],
+                "containerName": str(item.get("containerName") or "")[:120],
+                "iconKey": str(item.get("iconKey") or "")[:64],
+                "iconConfigured": bool(item.get("icon")),
+                "ports": copy.deepcopy(item.get("ports") or [])[:100],
+            }
+        ai_source = public_ai_settings(self.ai_settings)
+        ai = {
+            key: ai_source.get(key)
+            for key in ("enabled", "provider", "baseUrl", "model", "timeoutSeconds", "maxTokens", "systemPrompt")
+        }
+        return {
+            "runtime": runtime,
+            "monitor": {
+                "rules": copy.deepcopy(monitor_source.get("rules") or self.monitor_rules)[:100],
+            },
+            "notifications": {"channels": safe_channels},
+            "containerProtection": {"rules": copy.deepcopy(protection_source)[:100] if isinstance(protection_source, list) else []},
+            "docker": {"containers": safe_docker},
+            "ai": ai,
+        }
+
+    def create_ai_configuration_proposal(self, request: str, history_messages: Optional[List[AIChatMessage]] = None) -> dict:
+        if not self.ai_settings.get("enabled") or not self.ai_settings.get("apiKey"):
+            return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": "请先在设置中启用 AI 并填写 API Key"}
+        question = str(request or "").strip()[:2000]
+        if not question:
+            return {"ok": False, "detail": "请输入想要修改的设置"}
+        snapshot = self._ai_configuration_snapshot()
+        schema = configuration_schema()
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是 NAS Traffic Lens 的安全设置助手。根据用户请求生成设置变更，"
+                    "只能使用 schema 中的 path。禁止密码、API Key、Token、socket、路径、SQL、命令和环境变量。"
+                    "只返回 JSON，不要 Markdown，不要解释。格式："
+                    '{"changes":[{"path":"runtime.sampleSeconds","value":2,"summary":"...","risk":"低"}]}\n'
+                    f"schema={json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}"
+                ),
+            }
+        ]
+        for item in (history_messages or [])[-8:]:
+            role = item.role if item.role in {"user", "assistant"} else "user"
+            messages.append({"role": role, "content": item.content[:6000]})
+        messages.append(
+            {
+                "role": "user",
+                "content": f"当前非敏感设置：\n{json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))[:MAX_AI_CONTEXT_CHARS]}\n用户请求：{question}",
+            }
+        )
+        try:
+            result = chat_completion(self.ai_settings, messages)
+            changes = parse_configuration_response(result.get("answer", ""))
+            validated = validate_configuration_changes(changes, snapshot)
+        except (AIServiceError, ValueError, TypeError) as exc:
+            return {"ok": False, "configured": True, "detail": str(exc)[:300]}
+        proposal_id = AI_CONFIGURATION_PROPOSALS.put({"changes": validated, "baseSnapshot": snapshot})
+        proposal = AI_CONFIGURATION_PROPOSALS.get(proposal_id) or {}
+        return {
+            "ok": True,
+            "requiresConfirmation": True,
+            "proposal": {
+                "id": proposal_id,
+                "expiresAt": proposal.get("expiresAt"),
+                "changes": validated,
+                "message": "已生成配置变更预览，请确认后应用",
+            },
+        }
+
+    def _sanitize_ai_docker_overrides(self, value: dict) -> dict:
+        if not isinstance(value, dict):
+            raise ValueError("Docker 配置格式无效")
+        existing = (self.docker_overrides or {}).get("containers") or {}
+        result = {"containers": {}}
+        for raw_key, raw_item in list(value.items())[:500]:
+            if not isinstance(raw_item, dict):
+                raise ValueError("Docker 容器配置格式无效")
+            container_id = str(raw_item.get("containerId") or "")[:12]
+            container_name = str(raw_item.get("containerName") or "").strip()[:120]
+            base = existing.get(raw_key) if isinstance(existing.get(raw_key), dict) else {}
+            if not container_id:
+                container_id = str(base.get("containerId") or "")[:12]
+            if not container_name:
+                container_name = str(base.get("containerName") or "").strip()[:120]
+            icon_key = str(raw_item.get("iconKey") or base.get("iconKey") or "").strip()[:64]
+            if icon_key and not get_docker_icon(icon_key):
+                raise ValueError(f"未知 Docker 图标：{icon_key}")
+            if "icon" in raw_item and raw_item.get("icon") not in {None, "", base.get("icon", "")}:
+                raise ValueError("AI 不能上传或修改自定义图标，请使用内置 iconKey")
+            port_rows = raw_item.get("ports", base.get("ports", []))
+            if not isinstance(port_rows, list):
+                raise ValueError("Docker 端口配置格式无效")
+            try:
+                payload = DockerContainerPortsPayload(
+                    containerId=container_id,
+                    containerName=container_name,
+                    icon=str(base.get("icon") or ""),
+                    ports=[DockerPortPayload(**item) for item in port_rows[:100]],
+                )
+                cleaned = sanitize_docker_overrides(payload)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Docker 端口配置无效：{exc}") from None
+            if icon_key:
+                cleaned["iconKey"] = icon_key
+            result["containers"][cleaned["key"]] = cleaned
+        return result
+
+    def _apply_ai_configuration_changes(self, changes: list[dict], current: dict) -> dict:
+        next_snapshot = copy.deepcopy(current)
+        for change in changes:
+            parts = change["path"].split(".")
+            target = next_snapshot
+            for part in parts[:-1]:
+                target = target.setdefault(part, {})
+            target[parts[-1]] = copy.deepcopy(change["newValue"])
+
+        runtime_settings = None
+        monitor_rows = None
+        channel_rows = None
+        protection_rows = None
+        ai_settings = None
+        docker_overrides = None
+        changed_paths = {change["path"] for change in changes}
+        if any(path.startswith("runtime.") for path in changed_paths):
+            runtime_settings = RuntimeSettingsPayload(**(next_snapshot.get("runtime") or {}))
+        if "monitor.rules" in changed_paths:
+            monitor_rows = [sanitize_monitor_rule(MonitorRule(**item)) for item in next_snapshot["monitor"]["rules"]]
+        if "notifications.channels" in changed_paths:
+            current_channels = {str(item.get("id")): item for item in self.notification_channels if isinstance(item, dict)}
+            channel_rows = []
+            for raw in next_snapshot["notifications"]["channels"]:
+                item = dict(raw)
+                existing = current_channels.get(str(item.get("id"))) or {}
+                item.pop("urlConfigured", None)
+                item["token"] = existing.get("token", "")
+                item["url"] = item.get("url", existing.get("url", ""))
+                channel_rows.append(sanitize_notification_channel(NotificationChannel(**item)))
+        if "containerProtection.rules" in changed_paths:
+            protection_rows = [
+                sanitize_container_protection_rule(ContainerProtectionRule(**item))
+                for item in next_snapshot["containerProtection"]["rules"]
+            ]
+        if any(path.startswith("ai.") for path in changed_paths):
+            ai_payload = dict(public_ai_settings(self.ai_settings))
+            ai_payload.update({"apiKey": ""})
+            for change in changes:
+                if change["path"].startswith("ai."):
+                    ai_payload[change["path"].split(".", 1)[1]] = change["newValue"]
+            ai_settings = normalize_ai_settings(ai_payload, existing=self.ai_settings)
+        if "docker.containers" in changed_paths:
+            docker_overrides = self._sanitize_ai_docker_overrides(next_snapshot["docker"]["containers"])
+
+        settings_to_save = {}
+        if runtime_settings is not None:
+            settings_to_save["runtime_settings"] = runtime_settings.model_dump()
+        if monitor_rows is not None:
+            settings_to_save["monitor_rules"] = {"rules": monitor_rows}
+        if channel_rows is not None:
+            settings_to_save["notification_channels"] = {"channels": channel_rows}
+        if protection_rows is not None:
+            settings_to_save["container_protection_rules"] = {"rules": protection_rows}
+        if ai_settings is not None:
+            settings_to_save["ai_settings"] = ai_settings
+        if docker_overrides is not None:
+            settings_to_save["docker_overrides"] = docker_overrides
+        result = self.db.set_settings_atomic(settings_to_save)
+        if not result.get("ok"):
+            raise ValueError("设置保存失败")
+
+        if runtime_settings is not None:
+            previous_docker_discovery = ENABLE_DOCKER_DISCOVERY
+            apply_runtime_settings(runtime_settings)
+            if hasattr(self, "container_status"):
+                self.container_status["enabled"] = ENABLE_DOCKER_DISCOVERY
+                if previous_docker_discovery != ENABLE_DOCKER_DISCOVERY:
+                    self.last_container_refresh = 0.0
+        if monitor_rows is not None:
+            self.monitor_rules = monitor_rows
+        if channel_rows is not None:
+            self.notification_channels = channel_rows
+        if protection_rows is not None:
+            self.container_protection_rules = protection_rows
+        if ai_settings is not None:
+            self.ai_settings = ai_settings
+        if docker_overrides is not None:
+            self.docker_overrides = docker_overrides
+        self.sync_legacy_settings()
+        return self.get_settings()
+
+    def apply_ai_configuration_proposal(self, proposal_id: str) -> dict:
+        proposal = AI_CONFIGURATION_PROPOSALS.take(proposal_id)
+        if not proposal:
+            return {"ok": False, "detail": "配置预览不存在、已过期或已应用"}
+        try:
+            current = self._ai_configuration_snapshot()
+            for change in proposal.get("changes") or []:
+                current_value = self._configuration_path_value(current, change.get("path"))
+                if current_value != change.get("oldValue"):
+                    raise ValueError(f"设置已发生变化，请重新生成预览：{change.get('path')}")
+            validated = validate_configuration_changes(proposal.get("changes") or [], current)
+            result = self._apply_ai_configuration_changes(validated, current)
+            return {"ok": True, "message": "设置已应用", **result}
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "detail": str(exc)[:300]}
+
     def ai_history(self) -> dict:
         return {"ok": True, "messages": self.db.get_ai_messages()}
 
@@ -4620,11 +4942,12 @@ class TrafficCollector:
             return {"ok": False, "detail": str(exc)}
         with self.lock:
             containers = dict((self.docker_overrides or {}).get("containers") or {})
-            if cleaned["ports"]:
+            if cleaned["ports"] or cleaned["icon"] or cleaned["iconKey"]:
                 containers[cleaned["key"]] = {
                     "containerId": cleaned["containerId"],
                     "containerName": cleaned["containerName"],
                     "icon": cleaned["icon"],
+                    "iconKey": cleaned["iconKey"],
                     "ports": cleaned["ports"],
                     "updatedAt": int(now()),
                 }
@@ -5465,6 +5788,21 @@ async def ai_chat(payload: AIChatPayload, stream: bool = False):
     if stream:
         return _ai_streaming_response(collector.ai_chat_stream(payload))
     return await asyncio.to_thread(collector.ai_chat, payload)
+
+
+@app.get("/api/ai/configure/schema")
+async def ai_configuration_schema() -> dict:
+    return configuration_schema()
+
+
+@app.post("/api/ai/configure")
+async def ai_configure(payload: AIConfigurePayload) -> dict:
+    return await asyncio.to_thread(collector.create_ai_configuration_proposal, payload.request, payload.messages)
+
+
+@app.post("/api/ai/configure/apply")
+async def ai_configure_apply(payload: AIConfigureApplyPayload) -> dict:
+    return await asyncio.to_thread(collector.apply_ai_configuration_proposal, payload.proposalId)
 
 
 @app.post("/api/notifications/test")

@@ -34,12 +34,14 @@ def test_builtin_docker_icons_match_names_images_and_compose_aliases():
 
 
 def test_builtin_docker_icon_list_is_bounded_and_local():
-    from server.services.docker_icons import list_docker_icons
+    from server.services.docker_icons import get_docker_icon, list_docker_icons
 
     icons = list_docker_icons()
     assert len(icons) >= 5
     assert all(item["dataUrl"].startswith("data:image/svg+xml,") for item in icons)
     assert all(len(item["dataUrl"]) < 65536 for item in icons)
+    assert get_docker_icon("moviepilot")["label"] == "MoviePilot"
+    assert get_docker_icon("missing") == {}
 
 
 def test_unknown_docker_service_does_not_receive_a_guess():
