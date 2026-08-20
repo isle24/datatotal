@@ -279,15 +279,16 @@ DOCKER_CONTEXT=default ./scripts/push-docker.sh
 
 ### AI 配置与隐私
 
-在“设置”页面的“AI 分析配置”中选择厂商、填写 API Key，然后启用按需请求。内置预设包括 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义兼容接口。OpenAI、DeepSeek、Kimi、Qwen、MiniMax 使用 OpenAI-compatible API；Claude 使用 Anthropic 原生 API（`/v1/messages` 和 `/v1/models`）。Base URL 和模型都可以手动覆盖，方便使用代理、自建网关或区域 endpoint；Base URL 只接受 `http://` 或 `https://`。
+在“设置”页面的“AI 分析配置”中选择厂商、填写 API Key，然后启用按需请求。内置预设包括 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义兼容接口。OpenAI、DeepSeek、Kimi、Qwen、MiniMax 使用 OpenAI-compatible API；Claude 使用 Anthropic 原生 API（`/v1/messages` 和 `/v1/models`）。DeepSeek 预设按官方文档使用 `https://api.deepseek.com` 和 `deepseek-v4-flash`，也可从 `/models` 读取并选择其他模型。Base URL 和模型都可以手动覆盖，方便使用代理、自建网关或区域 endpoint；Base URL 只接受 `http://` 或 `https://`。
 
 点击“读取模型”时，前端把当前未保存的配置发送到后端，由后端请求厂商的 `/models` 接口并缓存 60 秒。浏览器不会直接接触厂商 API Key；如果厂商不支持模型列表，仍可手动填写模型名称。
 
 - AI 请求只在点击“AI 分析”或发送 AI 中心对话时发起，不会进入后台采集循环，也不会定时调用外部服务。
+- 网页默认使用 SSE 流式显示回答，DeepSeek/OpenAI-compatible 和 Claude 原生流式格式都会统一转换为增量事件；普通 JSON 调用方式仍然保留。
 - 发送内容是有限的聚合摘要：当前概览、日/周/月/年历史、进程排行、最多 50 个 Docker 容器摘要、系统状态、监控规则和最近告警；不会发送完整连接原始表。
 - API Key 保存于 SQLite 的 `ai_settings` 配置中，接口只返回掩码，不回显完整 Key，也不会写入应用日志。请把 `/data` 目录当作敏感配置保存。
 - 未启用 AI 或没有 API Key 时，AI 接口会返回可读的配置提示，不会影响流量采集和首页显示。
-- 保存 AI 配置时，超时会规范化到 `5..30` 秒，最大输出 Token 会规范化到 `128..4096`；参数错误会显示具体字段和原因，而不是只显示 422。
+- 保存 AI 配置时，请求超时默认 60 秒并规范化到 `5..180` 秒，最大输出 Token 会规范化到 `128..4096`；参数错误会显示具体字段和原因，而不是只显示 422。
 
 首次启动没有 SQLite 配置时，程序使用代码默认值；保存后 SQLite 配置优先于对应环境变量。因此更新镜像时不需要把几十个默认参数复制到 compose。
 

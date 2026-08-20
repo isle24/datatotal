@@ -21,6 +21,9 @@ test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(source, /\/api\/ai\/analyze/);
   assert.match(source, /\/api\/ai\/chat/);
   assert.match(source, /\/api\/ai\/models/);
+  assert.match(source, /stream=true/);
+  assert.match(source, /async function streamApi/);
+  assert.match(source, /response\.body\.getReader\(\)/);
   assert.match(source, /providerPresets/);
   assert.match(source, /读取模型/);
   assert.match(source, /formatValidationError/);

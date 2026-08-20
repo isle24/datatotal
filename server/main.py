@@ -24,7 +24,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 import psutil
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from scapy.all import IP, TCP, UDP, IPv6, AsyncSniffer, conf
@@ -38,6 +38,7 @@ from server.services.notifications import (
 from server.services.ai import (
     AIServiceError,
     chat_completion,
+    chat_completion_stream,
     default_ai_settings,
     list_models,
     normalize_ai_settings,
@@ -57,6 +58,7 @@ from server.services.go_collector_client import (
 
 
 APP_NAME = "NAS Traffic Lens"
+MAX_AI_CONTEXT_CHARS = 120000
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -625,7 +627,7 @@ class AISettingsPayload(BaseModel):
     apiKey: str = Field(default="", max_length=512)
     model: str = Field(default="gpt-4o-mini", max_length=160)
     # Normalize numeric ranges in normalize_ai_settings so older clients do not get a bare 422.
-    timeoutSeconds: Optional[float] = Field(default=30)
+    timeoutSeconds: Optional[float] = Field(default=60)
     maxTokens: Optional[float] = Field(default=1200)
     systemPrompt: str = Field(default="", max_length=4000)
 
@@ -3722,32 +3724,63 @@ class TrafficCollector:
         }
 
     def ai_analyze(self, payload: AIAnalyzePayload) -> dict:
-        question = (payload.question or "请分析当前数据，指出异常、公网上传风险和最值得关注的进程。")[:2000]
-        context = self.ai_context(payload.scope)
-        messages = [
-            {"role": "system", "content": self.ai_settings.get("systemPrompt") or default_ai_settings()["systemPrompt"]},
-            {"role": "user", "content": f"请分析以下 NAS 流量统计摘要。{question}\n\n{json.dumps(context, ensure_ascii=False)}"[:300000]},
-        ]
+        context, messages = self._ai_analyze_messages(payload)
         try:
             result = chat_completion(self.ai_settings, messages)
         except AIServiceError as exc:
             return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": str(exc)}
         return {"ok": True, "scope": context["scope"], **result}
 
+    def _ai_analyze_messages(self, payload: AIAnalyzePayload) -> tuple:
+        question = (payload.question or "请分析当前数据，指出异常、公网上传风险和最值得关注的进程。")[:2000]
+        context = self.ai_context(payload.scope)
+        messages = [
+            {"role": "system", "content": self.ai_settings.get("systemPrompt") or default_ai_settings()["systemPrompt"]},
+            {
+                "role": "user",
+                "content": f"请分析以下 NAS 流量统计摘要。{question}\n\n{json.dumps(context, ensure_ascii=False)}"[
+                    :MAX_AI_CONTEXT_CHARS
+                ],
+            },
+        ]
+        return context, messages
+
+    def ai_analyze_stream(self, payload: AIAnalyzePayload):
+        context, messages = self._ai_analyze_messages(payload)
+        for event in chat_completion_stream(self.ai_settings, messages):
+            if event.get("type") == "done":
+                event = {**event, "scope": context["scope"]}
+            yield event
+
     def ai_chat(self, payload: AIChatPayload) -> dict:
+        try:
+            messages = self._ai_chat_messages(payload)
+            result = chat_completion(self.ai_settings, messages)
+        except AIServiceError as exc:
+            return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": str(exc)}
+        return {"ok": True, **result}
+
+    def _ai_chat_messages(self, payload: AIChatPayload) -> list:
         context = self.ai_context("all")
         messages = [{"role": "system", "content": self.ai_settings.get("systemPrompt") or default_ai_settings()["systemPrompt"]}]
         for item in payload.messages[-19:]:
             role = item.role if item.role in {"user", "assistant"} else "user"
             messages.append({"role": role, "content": item.content[:6000]})
         if len(messages) == 1:
-            return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": "请输入问题"}
-        messages.insert(1, {"role": "system", "content": f"以下是当前统计摘要，请结合它回答，不要虚构数据：\n{json.dumps(context, ensure_ascii=False)}"[:300000]})
-        try:
-            result = chat_completion(self.ai_settings, messages)
-        except AIServiceError as exc:
-            return {"ok": False, "configured": bool(self.ai_settings.get("apiKey")), "detail": str(exc)}
-        return {"ok": True, **result}
+            raise AIServiceError("请输入问题")
+        messages.insert(
+            1,
+            {
+                "role": "system",
+                "content": f"以下是当前统计摘要，请结合它回答，不要虚构数据：\n{json.dumps(context, ensure_ascii=False)}"[
+                    :MAX_AI_CONTEXT_CHARS
+                ],
+            },
+        )
+        return messages
+
+    def ai_chat_stream(self, payload: AIChatPayload):
+        yield from chat_completion_stream(self.ai_settings, self._ai_chat_messages(payload))
 
     def get_settings(self) -> dict:
         self.sync_legacy_settings()
@@ -4806,8 +4839,40 @@ async def update_ai_settings(payload: AISettingsPayload) -> dict:
     return collector.update_ai_settings(payload)
 
 
+def _ai_sse_events(events):
+    try:
+        for event in events:
+            yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    except AIServiceError as exc:
+        error = {
+            "type": "error",
+            "ok": False,
+            "configured": bool(collector.ai_settings.get("apiKey")),
+            "detail": str(exc),
+        }
+        yield f"data: {json.dumps(error, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        error = {"type": "error", "ok": False, "detail": "AI 流式响应异常，请查看服务日志"}
+        yield f"data: {json.dumps(error, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
+
+def _ai_streaming_response(events) -> StreamingResponse:
+    return StreamingResponse(
+        _ai_sse_events(events),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/ai/analyze")
-async def ai_analyze(payload: AIAnalyzePayload) -> dict:
+async def ai_analyze(payload: AIAnalyzePayload, stream: bool = False):
+    if stream:
+        return _ai_streaming_response(collector.ai_analyze_stream(payload))
     return await asyncio.to_thread(collector.ai_analyze, payload)
 
 
@@ -4845,7 +4910,9 @@ async def ai_models_from_settings(payload: AISettingsPayload, refresh: bool = Fa
 
 
 @app.post("/api/ai/chat")
-async def ai_chat(payload: AIChatPayload) -> dict:
+async def ai_chat(payload: AIChatPayload, stream: bool = False):
+    if stream:
+        return _ai_streaming_response(collector.ai_chat_stream(payload))
     return await asyncio.to_thread(collector.ai_chat, payload)
 
 

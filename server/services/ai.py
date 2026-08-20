@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 
 DEFAULT_AI_BASE_URL = "https://api.openai.com/v1"
@@ -17,6 +17,8 @@ DEFAULT_AI_SYSTEM_PROMPT = (
     "区分公网和内网，不要把未知数据猜成事实。优先给出结论、证据和可执行建议。"
 )
 MAX_AI_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_AI_RESPONSE_CHARS = 20000
+MAX_AI_STREAM_LINE_BYTES = 256 * 1024
 MAX_AI_MODELS = 200
 MAX_AI_MODEL_ID_LENGTH = 160
 AI_MODEL_CACHE_TTL_SECONDS = 60
@@ -39,8 +41,8 @@ AI_PROVIDERS = {
     },
     "deepseek": {
         "label": "DeepSeek",
-        "baseUrl": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
+        "baseUrl": "https://api.deepseek.com",
+        "model": "deepseek-v4-flash",
         "protocol": "openai",
     },
     "kimi": {
@@ -85,7 +87,7 @@ def default_ai_settings() -> dict:
         "baseUrl": preset["baseUrl"],
         "apiKey": "",
         "model": preset["model"],
-        "timeoutSeconds": 30,
+        "timeoutSeconds": 60,
         "maxTokens": 1200,
         "systemPrompt": DEFAULT_AI_SYSTEM_PROMPT,
     }
@@ -138,9 +140,9 @@ def normalize_ai_settings(payload: Optional[dict], existing: Optional[dict] = No
     if not api_key or ("..." in api_key and current.get("apiKey")):
         api_key = str(current.get("apiKey") or "").strip()
     try:
-        timeout = max(5, min(30, int(data.get("timeoutSeconds", current.get("timeoutSeconds", 30)))))
+        timeout = max(5, min(180, int(data.get("timeoutSeconds", current.get("timeoutSeconds", 60)))))
     except (TypeError, ValueError, OverflowError):
-        timeout = 30
+        timeout = 60
     try:
         max_tokens = max(128, min(4096, int(data.get("maxTokens", current.get("maxTokens", 1200)))))
     except (TypeError, ValueError, OverflowError):
@@ -222,7 +224,11 @@ def _anthropic_messages(messages: List[Dict[str, str]]) -> tuple[str, list]:
     return "\n\n".join(system_parts), converted
 
 
-def build_ai_request(settings: dict, messages: List[Dict[str, str]]) -> urllib.request.Request:
+def build_ai_request(
+    settings: dict,
+    messages: List[Dict[str, str]],
+    stream: bool = False,
+) -> urllib.request.Request:
     normalized = normalize_ai_settings(settings)
     if _provider_protocol(normalized) == "anthropic":
         system, converted = _anthropic_messages(messages)
@@ -243,6 +249,8 @@ def build_ai_request(settings: dict, messages: List[Dict[str, str]]) -> urllib.r
             "max_tokens": normalized["maxTokens"],
         }
         endpoint = _endpoint(normalized, "/chat/completions")
+    if stream:
+        payload["stream"] = True
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     return urllib.request.Request(endpoint, data=body, method="POST", headers=_request_headers(normalized))
 
@@ -301,7 +309,7 @@ def _response_text(data: dict, protocol: str = "openai") -> str:
     text = text.strip()
     if not text:
         raise AIServiceError("AI 服务返回了空内容")
-    return text[:20000]
+    return text[:MAX_AI_RESPONSE_CHARS]
 
 
 def chat_completion(settings: dict, messages: List[Dict[str, str]]) -> dict:
@@ -314,6 +322,113 @@ def chat_completion(settings: dict, messages: List[Dict[str, str]]) -> dict:
         "model": normalized["model"],
         "usage": data.get("usage") or {},
     }
+
+
+def _stream_text(data: dict, protocol: str) -> str:
+    if protocol == "anthropic":
+        if data.get("type") != "content_block_delta":
+            return ""
+        delta = data.get("delta") or {}
+        return str(delta.get("text") or "") if delta.get("type") == "text_delta" else ""
+    choices = data.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return ""
+    content = (choices[0].get("delta") or {}).get("content")
+    if isinstance(content, list):
+        return "".join(str(item.get("text") or "") for item in content if isinstance(item, dict))
+    return str(content or "")
+
+
+def _stream_usage(data: dict, protocol: str, current: dict) -> dict:
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return current
+    if protocol == "anthropic":
+        return {**current, **usage}
+    return usage
+
+
+def _stream_error(data: dict) -> str:
+    if data.get("type") != "error":
+        return ""
+    error = data.get("error") or {}
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("type") or "AI 服务流式响应失败")
+    return str(error or "AI 服务流式响应失败")
+
+
+def chat_completion_stream(settings: dict, messages: List[Dict[str, str]]) -> Iterator[dict]:
+    normalized = normalize_ai_settings(settings)
+    if not normalized["enabled"] or not normalized["apiKey"]:
+        raise AIServiceError("请先在设置中启用 AI 并填写 API Key")
+
+    request = build_ai_request(normalized, messages, stream=True)
+    protocol = _provider_protocol(normalized)
+    answer_parts = []
+    answer_length = 0
+    total_bytes = 0
+    usage = {}
+    try:
+        with urllib.request.urlopen(request, timeout=normalized["timeoutSeconds"]) as response:
+            while True:
+                raw_line = response.readline(MAX_AI_STREAM_LINE_BYTES + 1)
+                if not raw_line:
+                    break
+                total_bytes += len(raw_line)
+                if len(raw_line) > MAX_AI_STREAM_LINE_BYTES or total_bytes > MAX_AI_RESPONSE_BYTES:
+                    raise AIServiceError("AI 服务流式响应过大")
+                try:
+                    line = raw_line.decode("utf-8").strip()
+                except UnicodeDecodeError:
+                    raise AIServiceError("AI 服务返回了无效流式数据") from None
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload:
+                    continue
+                if payload == "[DONE]":
+                    break
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    raise AIServiceError("AI 服务返回了无效流式 JSON") from None
+                if not isinstance(data, dict):
+                    continue
+                provider_error = _stream_error(data)
+                if provider_error:
+                    raise AIServiceError(f"AI 服务返回错误：{_safe_error_detail(provider_error, normalized['apiKey'])}")
+                usage = _stream_usage(data, protocol, usage)
+                content = _stream_text(data, protocol)
+                if not content:
+                    continue
+                remaining = MAX_AI_RESPONSE_CHARS - answer_length
+                if remaining <= 0:
+                    break
+                content = content[:remaining]
+                answer_parts.append(content)
+                answer_length += len(content)
+                yield {"type": "delta", "content": content}
+                if answer_length >= MAX_AI_RESPONSE_CHARS:
+                    break
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read(4096).decode("utf-8", errors="replace")
+        except OSError:
+            detail = ""
+        raise AIServiceError(
+            f"AI 服务 HTTP {exc.code}：{_safe_error_detail(detail, normalized['apiKey']) or exc.reason}"
+        ) from None
+    except AIServiceError:
+        raise
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise AIServiceError(
+            f"AI 服务连接失败：{_safe_error_detail(exc, normalized['apiKey'])[:240]}"
+        ) from None
+
+    answer = "".join(answer_parts).strip()
+    if not answer:
+        raise AIServiceError("AI 服务返回了空内容")
+    yield {"type": "done", "answer": answer, "model": normalized["model"], "usage": usage}
 
 
 def normalize_model_list(data: dict) -> list:

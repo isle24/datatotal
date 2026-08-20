@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from server.services.ai import (  # noqa: E402
     build_ai_request,
+    chat_completion_stream,
     default_ai_settings,
     list_models,
     normalize_model_list,
@@ -36,7 +37,7 @@ def test_ai_settings_are_normalized_and_api_key_is_masked():
 
     assert settings["baseUrl"] == "https://example.test/v1"
     assert settings["apiKey"] == "secret-token"
-    assert settings["timeoutSeconds"] == 30
+    assert settings["timeoutSeconds"] == 45
     assert settings["maxTokens"] == 4096
     assert settings["provider"] == "openai"
     assert public_ai_settings(settings) == {
@@ -44,7 +45,7 @@ def test_ai_settings_are_normalized_and_api_key_is_masked():
         "provider": "openai",
         "baseUrl": "https://example.test/v1",
         "model": "local-model",
-        "timeoutSeconds": 30,
+        "timeoutSeconds": 45,
         "maxTokens": 4096,
         "systemPrompt": "分析 NAS 流量",
         "keyConfigured": True,
@@ -67,13 +68,13 @@ def test_provider_defaults_and_legacy_settings_are_compatible():
     assert default_ai_settings()["provider"] == "openai"
     assert normalize_ai_settings({"baseUrl": "https://api.openai.com/v1"})["provider"] == "openai"
     deepseek = normalize_ai_settings({"provider": "deepseek"})
-    assert deepseek["baseUrl"] == "https://api.deepseek.com/v1"
-    assert deepseek["model"] == "deepseek-chat"
+    assert deepseek["baseUrl"] == "https://api.deepseek.com"
+    assert deepseek["model"] == "deepseek-v4-flash"
     deepseek_from_api_payload = normalize_ai_settings(
         {"provider": "deepseek", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini"}
     )
-    assert deepseek_from_api_payload["baseUrl"] == "https://api.deepseek.com/v1"
-    assert deepseek_from_api_payload["model"] == "deepseek-chat"
+    assert deepseek_from_api_payload["baseUrl"] == "https://api.deepseek.com"
+    assert deepseek_from_api_payload["model"] == "deepseek-v4-flash"
     assert normalize_ai_settings({"provider": "anthropic"})["provider"] == "claude"
 
 
@@ -102,6 +103,80 @@ def test_claude_request_uses_native_headers_and_message_shape():
     assert body["system"] == "rules"
     assert body["messages"] == [{"role": "user", "content": "hello"}]
     assert body["max_tokens"] == 1200
+
+
+def test_stream_request_enables_streaming_for_openai_compatible_provider():
+    settings = normalize_ai_settings({"provider": "deepseek", "apiKey": "secret", "enabled": True})
+    request = build_ai_request(settings, [{"role": "user", "content": "hello"}], stream=True)
+    body = json.loads(request.data)
+    assert body["stream"] is True
+    assert request.full_url.endswith("/chat/completions")
+
+
+def test_stream_completion_parses_openai_sse_and_emits_done_event():
+    class StreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def readline(self, _limit):
+            if self.lines:
+                return self.lines.pop(0)
+            return b""
+
+        def close(self):
+            pass
+
+        lines = [
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n",
+            b"data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n",
+            b"data: [DONE]\n",
+            b"\n",
+        ]
+
+    settings = normalize_ai_settings({"provider": "deepseek", "apiKey": "secret", "enabled": True})
+    with patch("server.services.ai.urllib.request.urlopen", return_value=StreamResponse()):
+        events = list(chat_completion_stream(settings, [{"role": "user", "content": "hello"}]))
+    assert events == [
+        {"type": "delta", "content": "hello"},
+        {"type": "delta", "content": " world"},
+        {"type": "done", "answer": "hello world", "model": "deepseek-v4-flash", "usage": {}},
+    ]
+
+
+def test_stream_completion_parses_anthropic_sse_and_usage():
+    class StreamResponse:
+        def __init__(self):
+            self.lines = [
+                b'event: content_block_delta\n',
+                b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}\n',
+                b'event: message_delta\n',
+                b'data: {"type":"message_delta","usage":{"output_tokens":7}}\n',
+                b'event: message_stop\n',
+                b'data: {"type":"message_stop"}\n',
+                b'\n',
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def readline(self, _limit):
+            return self.lines.pop(0) if self.lines else b""
+
+    settings = normalize_ai_settings(
+        {"provider": "claude", "apiKey": "secret", "model": "claude-test", "enabled": True}
+    )
+    with patch("server.services.ai.urllib.request.urlopen", return_value=StreamResponse()):
+        events = list(chat_completion_stream(settings, [{"role": "user", "content": "hello"}]))
+    assert events == [
+        {"type": "delta", "content": "hello"},
+        {"type": "done", "answer": "hello", "model": "claude-test", "usage": {"output_tokens": 7}},
+    ]
 
 
 def test_model_discovery_uses_short_bounded_cache():
@@ -168,6 +243,33 @@ def test_models_route_returns_structured_provider_error_without_500():
     assert "API Key" in result["detail"]
 
 
+def test_analyze_route_streams_sse_when_requested():
+    payload = main.AIAnalyzePayload(scope="overview", question="check traffic")
+
+    async def collect_response():
+        with patch.object(
+            main.collector,
+            "ai_analyze_stream",
+            return_value=iter(
+                [
+                    {"type": "delta", "content": "hello"},
+                    {"type": "done", "answer": "hello", "model": "test", "usage": {}},
+                ]
+            ),
+        ):
+            response = await main.ai_analyze(payload, stream=True)
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+            return response, "".join(chunks)
+
+    response, body = asyncio.run(collect_response())
+    assert response.media_type == "text/event-stream"
+    assert response.headers["cache-control"] == "no-cache"
+    assert 'data: {"type":"delta","content":"hello"}' in body
+    assert 'data: {"type":"done","answer":"hello"' in body
+
+
 class HistoryStub:
     def query_history(self, period):
         return {"period": period, "totals": {}, "buckets": []}
@@ -217,6 +319,8 @@ def test_ai_request_models_reject_oversized_or_privileged_input():
         pass
     else:
         raise AssertionError("unknown AI provider was accepted")
+    assert normalize_ai_settings({"timeoutSeconds": 90})["timeoutSeconds"] == 90
+    assert normalize_ai_settings({"timeoutSeconds": 999})["timeoutSeconds"] == 180
 
 
 if __name__ == "__main__":
@@ -225,9 +329,13 @@ if __name__ == "__main__":
     test_provider_defaults_and_legacy_settings_are_compatible()
     test_model_payload_is_bounded_and_supports_openai_and_anthropic_shapes()
     test_claude_request_uses_native_headers_and_message_shape()
+    test_stream_request_enables_streaming_for_openai_compatible_provider()
+    test_stream_completion_parses_openai_sse_and_emits_done_event()
+    test_stream_completion_parses_anthropic_sse_and_usage()
     test_model_discovery_uses_short_bounded_cache()
     test_model_discovery_caches_safe_error_without_repeating_request()
     test_models_route_returns_structured_provider_error_without_500()
+    test_analyze_route_streams_sse_when_requested()
     test_ai_context_uses_docker_summary_port_count()
     test_ai_request_models_reject_oversized_or_privileged_input()
     print("ai tests passed")

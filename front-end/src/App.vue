@@ -506,12 +506,12 @@
                 <select v-if="aiModels.length" v-model="aiForm.model" aria-label="从模型列表选择">
                   <option v-for="model in aiModels" :key="model.id" :value="model.id">{{ model.name || model.id }}</option>
                 </select>
-                <input v-model="aiForm.model" list="ai-model-options" placeholder="gpt-4o-mini / qwen-plus / deepseek-chat" />
+                <input v-model="aiForm.model" list="ai-model-options" placeholder="gpt-4o-mini / qwen-plus / deepseek-v4-flash" />
                 <button type="button" class="subtle-button" :disabled="aiModelsLoading" @click="readAiModels"><RefreshCw :size="15" />{{ aiModelsLoading ? "读取中" : "读取模型" }}</button>
               </div>
               <datalist id="ai-model-options"><option v-for="model in aiModels" :key="`list-${model.id}`" :value="model.id">{{ model.name }}</option></datalist>
             </label>
-            <label>请求超时秒<input v-model.number="aiForm.timeoutSeconds" type="number" min="5" max="30" /></label>
+            <label>请求超时秒<input v-model.number="aiForm.timeoutSeconds" type="number" min="5" max="180" /></label>
             <label>最大输出 Token<input v-model.number="aiForm.maxTokens" type="number" min="128" max="4096" /></label>
             <label class="textarea-label wide">系统提示词<textarea v-model="aiForm.systemPrompt" rows="3" placeholder="定义 AI 分析时的角色和关注点"></textarea></label>
           </div>
@@ -876,7 +876,7 @@ const metricLabels = {
 const providerPresets = [
   { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
   { value: "claude", label: "Claude", baseUrl: "https://api.anthropic.com/v1", model: "claude-3-5-haiku-latest" },
-  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" },
   { value: "kimi", label: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
   { value: "qwen", label: "Qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
   { value: "minimax", label: "MiniMax", baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-Text-01" },
@@ -979,7 +979,7 @@ const aiForm = reactive({
   apiKeyMasked: "",
   keyConfigured: false,
   model: "gpt-4o-mini",
-  timeoutSeconds: 30,
+  timeoutSeconds: 60,
   maxTokens: 1200,
   systemPrompt: "",
 });
@@ -1261,6 +1261,77 @@ async function readJson(response) {
 async function api(url, options) {
   return readJson(await fetch(url, { cache: "no-store", ...options }));
 }
+function parseSseBlock(block) {
+  const payload = block
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n")
+    .trim();
+  if (!payload || payload === "[DONE]") return null;
+  try {
+    return JSON.parse(payload);
+  } catch {
+    throw new Error("AI 服务返回了无效的流式数据");
+  }
+}
+async function streamApi(url, options, onEvent) {
+  const response = await fetch(url, { cache: "no-store", ...options });
+  if (response.status === 401) {
+    location.href = "/login";
+    throw new Error("authentication required");
+  }
+  if (!response.ok) return readJson(response);
+  if (!response.body) throw new Error("当前浏览器不支持流式响应");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed = null;
+  const consume = (final = false) => {
+    buffer = buffer.replace(/\r\n/g, "\n");
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const event = parseSseBlock(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      if (event) {
+        if (event.type === "error" || event.ok === false) throw new Error(event.detail || "AI 请求失败");
+        onEvent?.(event);
+        if (event.type === "done") completed = event;
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+    if (final && buffer.trim()) {
+      const event = parseSseBlock(buffer);
+      buffer = "";
+      if (event) {
+        if (event.type === "error" || event.ok === false) throw new Error(event.detail || "AI 请求失败");
+        onEvent?.(event);
+        if (event.type === "done") completed = event;
+      }
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        consume(true);
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      consume();
+    }
+  } catch (error) {
+    try { await reader.cancel(); } catch {}
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  if (!completed) throw new Error("AI 流式响应意外结束");
+  return completed;
+}
 async function refreshOverview() {
   if (overviewLoading) return;
   overviewLoading = true;
@@ -1355,7 +1426,7 @@ async function readAiModels() {
         baseUrl: String(aiForm.baseUrl || "").trim(),
         apiKey: aiForm.apiKey,
         model: String(aiForm.model || "").trim(),
-        timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 30, 30),
+        timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 180, 60),
         maxTokens: clampNumber(aiForm.maxTokens, 128, 4096, 1200),
         systemPrompt: aiForm.systemPrompt,
       }),
@@ -1659,7 +1730,7 @@ async function saveAiSettings() {
         baseUrl: String(aiForm.baseUrl || "").trim(),
         apiKey: aiForm.apiKey,
         model: String(aiForm.model || "").trim(),
-        timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 30, 30),
+        timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 180, 60),
         maxTokens: clampNumber(aiForm.maxTokens, 128, 4096, 1200),
         systemPrompt: aiForm.systemPrompt,
       }),
@@ -1682,20 +1753,23 @@ async function analyzeWithAi(scope = "overview") {
     : scope === "monitor"
       ? "请检查监控规则、容器保护、通知渠道和最近告警，指出当前风险与配置建议。"
       : "请分析当前所有统计数据，重点指出公网上传风险、异常进程和 Docker/系统资源问题。";
+  if (activeView.value !== "ai") setView("ai");
+  aiMessages.value.push({ role: "user", content: question });
+  const assistantIndex = aiMessages.value.length;
+  aiMessages.value.push({ role: "assistant", content: "" });
   try {
-    const result = await api("/api/ai/analyze", {
+    await streamApi("/api/ai/analyze?stream=true", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ scope, question }),
+    }, (event) => {
+      if (event.type === "delta") aiMessages.value[assistantIndex].content += event.content || "";
+      if (event.type === "done" && !aiMessages.value[assistantIndex].content) {
+        aiMessages.value[assistantIndex].content = event.answer || "";
+      }
     });
-    if (!result.ok) {
-      aiError.value = result.detail || "AI 分析失败";
-      if (activeView.value !== "ai") setView("ai");
-      return;
-    }
-    aiMessages.value.push({ role: "user", content: question }, { role: "assistant", content: result.answer });
-    if (activeView.value !== "ai") setView("ai");
   } catch (error) {
+    if (!aiMessages.value[assistantIndex]?.content) aiMessages.value.splice(assistantIndex, 1);
     aiError.value = error.message || "AI 分析请求失败";
   } finally {
     aiLoading.value = false;
@@ -1707,19 +1781,23 @@ async function sendAiChat() {
   aiInput.value = "";
   aiError.value = "";
   aiMessages.value.push({ role: "user", content });
+  const requestMessages = aiMessages.value.slice(-19);
+  const assistantIndex = aiMessages.value.length;
+  aiMessages.value.push({ role: "assistant", content: "" });
   aiLoading.value = true;
   try {
-    const result = await api("/api/ai/chat", {
+    await streamApi("/api/ai/chat?stream=true", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages: aiMessages.value.slice(-19) }),
+      body: JSON.stringify({ messages: requestMessages }),
+    }, (event) => {
+      if (event.type === "delta") aiMessages.value[assistantIndex].content += event.content || "";
+      if (event.type === "done" && !aiMessages.value[assistantIndex].content) {
+        aiMessages.value[assistantIndex].content = event.answer || "";
+      }
     });
-    if (!result.ok) {
-      aiError.value = result.detail || "AI 对话失败";
-      return;
-    }
-    aiMessages.value.push({ role: "assistant", content: result.answer });
   } catch (error) {
+    if (!aiMessages.value[assistantIndex]?.content) aiMessages.value.splice(assistantIndex, 1);
     aiError.value = error.message || "AI 对话请求失败";
   } finally {
     aiLoading.value = false;
