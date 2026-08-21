@@ -147,6 +147,15 @@ DRY_RUN=1 ./scripts/push-docker.sh
 docker --context orbstack login
 ```
 
+推送脚本默认使用宿主机代理 `http://127.0.0.1:10808`，可覆盖或关闭：
+
+```bash
+DOCKER_PUSH_PROXY=http://127.0.0.1:10808 ./scripts/push-docker.sh
+DOCKER_PUSH_PROXY_ENABLED=false ./scripts/push-docker.sh
+```
+
+脚本设置的是 Docker CLI/buildx 的代理。若 OrbStack daemon 仍使用自己的代理，需要在 OrbStack 中配置宿主机网关地址，通常为 `host.lima.internal:10808`。
+
 页面和 API 显示的版本号来自镜像内 `/app/VERSION`，源码对应根目录 `VERSION` 文件。发新版时先更新 `VERSION`，再按同一个版本号打 Docker tag。
 
 推送到 Docker Hub 后，NAS 端可以直接使用项目里的 `docker-compose.nas.yml`：
@@ -294,10 +303,12 @@ volumes:
 ```
 
 - SQLite 数据在 `./data/traffic.db`。
+- 每次启动会在 `./data/backups/` 创建数据库快照，默认保留最近 7 份。
 - 日志在 `./logs/uvicorn.log` 和 `./logs/uvicorn-error.log`。
 - 默认也会把这两个日志同步到容器控制台，方便在极空间 Docker 页面直接排查重启和 500 错误。若只想写文件，可设置 `CONSOLE_LOG=false`。
 - 清历史统计可以停容器后删除 `./data/traffic.db`。
 - 清运行日志可以直接删除 `./logs/*.log`，重启容器后会重新生成。
+- 更新镜像时必须继续映射原来的 `./data:/data`；否则容器会创建新的空数据库，页面中的规则、通知渠道和容器保护规则会显示为默认值。可用 `docker inspect` 检查 Mounts，`GET /api/settings` 的 `settingsRecovery` 可查看配置恢复警告。
 
 ## Docker 权限说明
 

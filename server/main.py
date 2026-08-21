@@ -239,6 +239,9 @@ PERSIST_INTERVAL_SECONDS = DEFAULT_PERSIST_INTERVAL_SECONDS
 HISTORY_RETENTION_DAYS = DEFAULT_HISTORY_RETENTION_DAYS
 FRONTEND_DIR = Path(os.getenv("FRONTEND_DIR", Path(__file__).resolve().parents[1] / "front-end"))
 DB_PATH = Path(os.getenv("DB_PATH", "/data/traffic.db"))
+DB_BACKUP_ENABLED = env_bool("DB_BACKUP_ENABLED", True)
+DB_BACKUP_RETENTION = max(1, min(30, int(os.getenv("DB_BACKUP_RETENTION", "7"))))
+DB_BACKUP_DIR = os.getenv("DB_BACKUP_DIR", "").strip()
 ENABLE_DOCKER_DISCOVERY = DEFAULT_ENABLE_DOCKER_DISCOVERY
 DOCKER_SOCKET = os.getenv("DOCKER_SOCKET", "/var/run/docker.sock")
 
@@ -815,6 +818,7 @@ class TrafficDB:
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        self.backup_before_schema()
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute(
@@ -913,6 +917,34 @@ class TrafficDB:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_messages_created ON ai_messages(created_at, id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_configuration_audit_created ON configuration_audit(created_at, id)")
         self.conn.commit()
+
+    def backup_before_schema(self) -> None:
+        if not DB_BACKUP_ENABLED or not self.path.exists() or self.path.stat().st_size <= 0:
+            return
+        backup_dir = Path(DB_BACKUP_DIR) if DB_BACKUP_DIR else self.path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / f"{self.path.name}.{int(now())}.bak"
+        temp_path = backup_path.with_suffix(".tmp")
+        backup_conn = None
+        try:
+            backup_conn = sqlite3.connect(temp_path)
+            self.conn.backup(backup_conn)
+            backup_conn.commit()
+            backup_conn.close()
+            backup_conn = None
+            temp_path.replace(backup_path)
+            backups = sorted(
+                backup_dir.glob(f"{self.path.name}.*.bak"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+            for old_backup in backups[DB_BACKUP_RETENTION:]:
+                old_backup.unlink(missing_ok=True)
+        except (OSError, sqlite3.DatabaseError) as exc:
+            print(f"database backup skipped: {exc}", flush=True)
+            if backup_conn is not None:
+                backup_conn.close()
+            temp_path.unlink(missing_ok=True)
 
     def add_minute(self, bucket: int, rows: List[dict]) -> None:
         if not self.conn or not rows:
@@ -1685,6 +1717,145 @@ def sanitize_container_protection_rule(rule: ContainerProtectionRule) -> dict:
     if not cleaned.conditions:
         cleaned.conditions = [sanitize_container_protection_condition(ContainerProtectionCondition())]
     return cleaned.model_dump()
+
+
+def _saved_text(value, fallback: str = "", limit: int = 120) -> str:
+    text = str(value).strip() if value is not None else ""
+    return text[:limit] if text else fallback[:limit]
+
+
+def _saved_int(value, fallback: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+
+
+def _saved_bool(value, fallback: bool = False) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+    return bool(value) if value is not None else fallback
+
+
+def _saved_string_list(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip()[:64] for item in value if str(item).strip()][:50]
+
+
+def load_saved_monitor_rules(value) -> tuple[Optional[list], int]:
+    if not isinstance(value, dict) or not isinstance(value.get("rules"), list):
+        return None, 0
+    loaded = []
+    skipped = 0
+    defaults = default_monitor_rules()
+    for index, raw in enumerate(value["rules"]):
+        if not isinstance(raw, dict):
+            skipped += 1
+            continue
+        base = dict(defaults[index % len(defaults)])
+        base.update(raw)
+        candidate = {
+            "id": _saved_text(raw.get("id"), f"migrated-rule-{index + 1}", 64),
+            "name": _saved_text(raw.get("name"), f"未命名规则 {index + 1}", 80),
+            "metric": _saved_text(base.get("metric"), "wan_tx_bps", 64),
+            "operator": _saved_text(base.get("operator"), "gte", 8),
+            "threshold": max(0, _saved_int(base.get("threshold"), 0)),
+            "durationSeconds": max(0, _saved_int(base.get("durationSeconds"), 0)),
+            "scope": _saved_text(base.get("scope"), "wan", 16),
+            "direction": _saved_text(base.get("direction"), "tx", 16),
+            "window": _saved_text(base.get("window"), "realtime", 16),
+            "enabled": _saved_bool(base.get("enabled"), True),
+            "channelIds": _saved_string_list(base.get("channelIds")),
+        }
+        try:
+            loaded.append(sanitize_monitor_rule(MonitorRule(**candidate)))
+        except Exception:
+            skipped += 1
+    return loaded, skipped
+
+
+def load_saved_notification_channels(value) -> tuple[Optional[list], int]:
+    if not isinstance(value, dict) or not isinstance(value.get("channels"), list):
+        return None, 0
+    loaded = []
+    skipped = 0
+    defaults = {item["id"]: item for item in default_notification_channels()}
+    for index, raw in enumerate(value["channels"]):
+        if not isinstance(raw, dict):
+            skipped += 1
+            continue
+        channel_id = _saved_text(raw.get("id"), f"migrated-channel-{index + 1}", 64)
+        base = dict(defaults.get(channel_id) or defaults["webhook"])
+        base.update(raw)
+        candidate = {
+            "id": channel_id,
+            "name": _saved_text(raw.get("name"), channel_id, 80),
+            "type": _saved_text(base.get("type"), "webhook", 16).lower(),
+            "enabled": _saved_bool(base.get("enabled"), False),
+            "url": _saved_text(base.get("url"), "", 1000),
+            "token": _saved_text(base.get("token"), "", 512),
+            "timeout": max(1, min(30, _saved_int(base.get("timeout"), 5))),
+            "titleTemplate": _saved_text(base.get("titleTemplate"), DEFAULT_NOTIFY_TITLE_TEMPLATE, 500),
+            "bodyTemplate": _saved_text(base.get("bodyTemplate"), DEFAULT_NOTIFY_BODY_TEMPLATE, 4000),
+            "urlTemplate": _saved_text(base.get("urlTemplate"), "", 1000),
+            "msgType": _saved_text(base.get("msgType"), "text", 16).lower(),
+            "htmlHeight": max(100, min(1200, _saved_int(base.get("htmlHeight"), 200))),
+        }
+        try:
+            loaded.append(sanitize_notification_channel(NotificationChannel(**candidate)))
+        except Exception:
+            skipped += 1
+    return loaded, skipped
+
+
+def load_saved_container_protection_rules(value) -> tuple[Optional[list], int]:
+    if not isinstance(value, dict) or not isinstance(value.get("rules"), list):
+        return None, 0
+    loaded = []
+    skipped = 0
+    for index, raw in enumerate(value["rules"]):
+        if not isinstance(raw, dict):
+            skipped += 1
+            continue
+        conditions = raw.get("conditions")
+        normalized_conditions = []
+        if isinstance(conditions, list):
+            for condition in conditions[:20]:
+                if not isinstance(condition, dict):
+                    continue
+                normalized_conditions.append(
+                    {
+                        "metric": _saved_text(condition.get("metric"), "cpuPercent", 32),
+                        "operator": _saved_text(condition.get("operator"), "gte", 8),
+                        "threshold": max(0, _saved_int(condition.get("threshold"), 0)),
+                        "durationSeconds": max(0, _saved_int(condition.get("durationSeconds"), 0)),
+                    }
+                )
+        candidate = {
+            "id": _saved_text(raw.get("id"), f"migrated-protection-{index + 1}", 64),
+            "name": _saved_text(raw.get("name"), f"容器保护 {index + 1}", 80),
+            "containerId": _saved_text(raw.get("containerId"), "", 64),
+            "containerName": _saved_text(raw.get("containerName"), "", 120),
+            "composeProject": _saved_text(raw.get("composeProject"), "", 120),
+            "composeService": _saved_text(raw.get("composeService"), "", 120),
+            "enabled": _saved_bool(raw.get("enabled"), True),
+            "channelIds": _saved_string_list(raw.get("channelIds")),
+            "logic": _saved_text(raw.get("logic"), "and", 8).lower(),
+            "action": _saved_text(raw.get("action"), "restart", 8).lower(),
+            "maxActions": max(1, _saved_int(raw.get("maxActions"), 3)),
+            "cooldownSeconds": max(0, _saved_int(raw.get("cooldownSeconds"), 60)),
+            "conditions": normalized_conditions,
+        }
+        try:
+            loaded.append(sanitize_container_protection_rule(ContainerProtectionRule(**candidate)))
+        except Exception:
+            skipped += 1
+    return loaded, skipped
 
 
 def docker_container_key(container_id: str = "", container_name: str = "") -> str:
@@ -2678,6 +2849,7 @@ class TrafficCollector:
         self.daily_alert_date = ""
         self.rule_states: Dict[str, dict] = {}
         self.container_protection_states: Dict[str, dict] = {}
+        self.settings_recovery: List[dict] = []
 
     def start(self) -> None:
         if getattr(self, "started", False):
@@ -2789,6 +2961,7 @@ class TrafficCollector:
         }
 
     def load_saved_settings(self) -> None:
+        self.settings_recovery = []
         alerts = self.db.get_setting("alerts")
         notify = self.db.get_setting("notify")
         rules = self.db.get_setting("monitor_rules")
@@ -2798,28 +2971,31 @@ class TrafficCollector:
         docker_overrides = self.db.get_setting("docker_overrides")
         saved_ai = self.db.get_setting("ai_settings")
         self.ai_settings = normalize_ai_settings(saved_ai, getattr(self, "ai_settings", default_ai_settings()))
-        if rules and isinstance(rules.get("rules"), list):
-            try:
-                self.monitor_rules = [sanitize_monitor_rule(MonitorRule(**item)) for item in rules["rules"]]
-            except Exception as exc:
-                print(f"ignore invalid saved monitor rules: {exc}", flush=True)
+        saved_monitor_rules, skipped_monitor_rules = load_saved_monitor_rules(rules)
+        if saved_monitor_rules is not None:
+            if saved_monitor_rules or not rules.get("rules"):
+                self.monitor_rules = saved_monitor_rules
+            if skipped_monitor_rules:
+                self.settings_recovery.append({"key": "monitor_rules", "skipped": skipped_monitor_rules, "fallback": not bool(saved_monitor_rules)})
         elif alerts:
             try:
                 self.monitor_rules = rules_from_alert_settings(AlertSettings(**alerts))
             except Exception as exc:
                 print(f"ignore invalid saved alert settings: {exc}", flush=True)
 
-        if protection and isinstance(protection.get("rules"), list):
-            try:
-                self.container_protection_rules = [sanitize_container_protection_rule(ContainerProtectionRule(**item)) for item in protection["rules"]]
-            except Exception as exc:
-                print(f"ignore invalid saved container protection rules: {exc}", flush=True)
+        saved_protection_rules, skipped_protection_rules = load_saved_container_protection_rules(protection)
+        if saved_protection_rules is not None:
+            if saved_protection_rules or not protection.get("rules"):
+                self.container_protection_rules = saved_protection_rules
+            if skipped_protection_rules:
+                self.settings_recovery.append({"key": "container_protection_rules", "skipped": skipped_protection_rules, "fallback": not bool(saved_protection_rules)})
 
-        if channels and isinstance(channels.get("channels"), list):
-            try:
-                self.notification_channels = [sanitize_notification_channel(NotificationChannel(**item)) for item in channels["channels"]]
-            except Exception as exc:
-                print(f"ignore invalid saved notification channels: {exc}", flush=True)
+        saved_channels, skipped_channels = load_saved_notification_channels(channels)
+        if saved_channels is not None:
+            if saved_channels or not channels.get("channels"):
+                self.notification_channels = saved_channels
+            if skipped_channels:
+                self.settings_recovery.append({"key": "notification_channels", "skipped": skipped_channels, "fallback": not bool(saved_channels)})
         elif notify:
             try:
                 legacy = NotifySettings(**notify)
@@ -2862,6 +3038,8 @@ class TrafficCollector:
             self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
         if saved_ai is None:
             self.db.set_setting("ai_settings", self.ai_settings)
+        if self.settings_recovery:
+            print(f"recovered saved settings with skipped records: {self.settings_recovery}", flush=True)
         self.sync_legacy_settings()
 
     def sync_legacy_settings(self) -> None:
@@ -3731,6 +3909,7 @@ class TrafficCollector:
             "version": APP_VERSION,
             "timestamp": now(),
             "authEnabled": bool(DASHBOARD_PASSWORD),
+            "settingsRecovery": copy.deepcopy(getattr(self, "settings_recovery", [])),
             "interfaceView": interface_view,
             "summary": summarize_interfaces(interfaces, rates),
             "stageSummary": stage_summary,

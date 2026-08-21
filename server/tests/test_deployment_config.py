@@ -226,6 +226,89 @@ def test_existing_monitor_rules_are_not_rewritten_on_startup():
     assert db.settings["monitor_rules"] == original
 
 
+def test_saved_rule_collections_recover_items_individually_without_overwriting_raw_data():
+    db = MemorySettingsDB()
+    original_rules = {
+        "rules": [
+            {
+                "id": "keep-rule",
+                "name": "keep rule",
+                "metric": "wan_tx_bps",
+                "threshold": 100,
+                "channelIds": ["webhook"],
+            },
+            {"name": "legacy rule", "metric": "daily_wan_tx_bytes", "threshold": "2048"},
+            "malformed rule",
+        ]
+    }
+    original_channels = {
+        "channels": [
+            {"id": "webhook", "name": "Webhook", "type": "webhook", "enabled": True, "url": "https://notify.test"},
+            {"type": "meow", "enabled": True, "token": "legacy-token"},
+        ]
+    }
+    original_protection = {
+        "rules": [
+            {"id": "protect-qb", "name": "protect qb", "containerName": "qbittorrent", "conditions": [{"threshold": "90"}]},
+            {"containerName": "legacy-container", "conditions": [{"metric": "blkWriteBps", "threshold": 3}]},
+            None,
+        ]
+    }
+    db.settings.update({
+        "monitor_rules": original_rules,
+        "notification_channels": original_channels,
+        "container_protection_rules": original_protection,
+    })
+    collector = make_settings_collector(db)
+
+    with redirect_stdout(io.StringIO()):
+        collector.load_saved_settings()
+
+    assert len(collector.monitor_rules) == 2
+    assert collector.monitor_rules[0]["id"] == "keep-rule"
+    assert collector.monitor_rules[1]["name"] == "legacy rule"
+    assert len(collector.notification_channels) == 2
+    assert collector.notification_channels[1]["type"] == "meow"
+    assert collector.notification_channels[1]["token"] == "legacy-token"
+    assert len(collector.container_protection_rules) == 2
+    assert collector.container_protection_rules[0]["containerName"] == "qbittorrent"
+    assert collector.container_protection_rules[1]["containerName"] == "legacy-container"
+    assert db.settings["monitor_rules"] == original_rules
+    assert db.settings["notification_channels"] == original_channels
+    assert db.settings["container_protection_rules"] == original_protection
+
+
+def test_empty_saved_rule_collections_remain_empty():
+    db = MemorySettingsDB()
+    db.settings["monitor_rules"] = {"rules": []}
+    db.settings["notification_channels"] = {"channels": []}
+    db.settings["container_protection_rules"] = {"rules": []}
+    collector = make_settings_collector(db)
+
+    collector.load_saved_settings()
+
+    assert collector.monitor_rules == []
+    assert collector.notification_channels == []
+    assert collector.container_protection_rules == []
+
+
+def test_database_start_creates_a_recovery_backup():
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = Path(directory) / "traffic.db"
+        db = main.TrafficDB(database_path)
+        db.start()
+        db.set_setting("monitor_rules", {"rules": [{"id": "keep"}]})
+        db.conn.close()
+
+        reopened = main.TrafficDB(database_path)
+        reopened.start()
+
+        backups = list((Path(directory) / "backups").glob("traffic.db.*.bak"))
+        assert backups
+        assert reopened.get_setting("monitor_rules")["rules"][0]["id"] == "keep"
+        reopened.conn.close()
+
+
 def test_pyyaml_is_a_direct_dependency():
     requirements = (ROOT / "server" / "requirements.txt").read_text(encoding="utf-8").lower()
     assert "pyyaml==" in requirements

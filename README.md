@@ -271,6 +271,15 @@ docker push isle204/nas-traffic-lens:latest-arm64
 DRY_RUN=1 ./scripts/push-docker.sh
 ```
 
+脚本默认给 Docker CLI/buildx 设置本机代理 `http://127.0.0.1:10808`，不需要每次手动切换代理环境。可用以下变量覆盖或关闭：
+
+```bash
+DOCKER_PUSH_PROXY=http://127.0.0.1:10808 ./scripts/push-docker.sh
+DOCKER_PUSH_PROXY_ENABLED=false ./scripts/push-docker.sh
+```
+
+说明：`docker push` 的网络请求最终由 Docker 守护进程发起。若 OrbStack 自身仍显示独立的 daemon proxy，需要在 OrbStack 中把代理设置为宿主机网关地址（通常是 `host.lima.internal:10808`）；脚本中的 `127.0.0.1` 适用于宿主机上的 Docker CLI/buildx 请求。
+
 如果你的 Docker context 名称不同，可以覆盖：
 
 ```bash
@@ -419,6 +428,16 @@ volumes:
 - SQLite：`./data/traffic.db`
 - 普通日志：`./logs/uvicorn.log`
 - 错误日志：`./logs/uvicorn-error.log`
+- 数据库启动时会在 `./data/backups/` 保留最近 7 份 SQLite 快照，用于升级后配置恢复。
+
+规则、通知渠道和容器保护规则都保存在 `traffic.db` 的 `settings` 表中。更新镜像不会自动迁移旧容器内部的 `/data`，必须始终把同一个宿主机目录映射到 `/data`。检查当前容器是否使用了原来的数据库：
+
+```bash
+docker inspect nas-traffic-lens --format '{{json .Mounts}}'
+ls -lh ./data/traffic.db ./data/backups/
+```
+
+如果升级时误用了新的空目录，先停止容器并重新挂载原来的 `data` 目录。启动时若发现单条旧配置格式异常，接口 `GET /api/settings` 会通过 `settingsRecovery` 返回跳过记录数量，其他有效规则仍会继续加载，原始配置不会被启动过程覆盖。
 
 清理历史统计：
 
