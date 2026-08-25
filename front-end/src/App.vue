@@ -268,6 +268,23 @@
             </div>
           </section>
         </div>
+        <section class="card">
+          <CardHead title="风扇转速" :meta="system?.fans?.length ? `${system.fans.length} 个传感器 · RPM` : 'psutil / hwmon'" />
+          <div v-if="system?.fans?.length" class="fan-grid">
+            <article v-for="fan in system.fans" :key="fan.id || `${fan.rawName}-${fan.rawLabel}`" class="fan-card">
+              <div class="fan-card-head">
+                <div class="fan-icon" :class="{ stopped: fan.status === 'stopped' }"><Gauge :size="18" /></div>
+                <div>
+                  <strong>{{ fan.name }}</strong>
+                  <span>{{ fan.rawLabel || fan.rawName || "风扇传感器" }}</span>
+                </div>
+                <span :class="['fan-status', fan.status === 'running' ? 'running' : 'stopped']">{{ fan.status === 'running' ? "运行中" : "已停止" }}</span>
+              </div>
+              <div class="fan-rpm"><b>{{ formatFanRpm(fan.rpm) }}</b><span>转/分</span></div>
+            </article>
+          </div>
+          <div v-else class="empty fan-empty">当前环境未暴露风扇转速传感器</div>
+        </section>
       </section>
 
       <section v-if="activeView === 'docker'" class="view">
@@ -1264,6 +1281,10 @@ function rateBarWidth(value) {
 function formatTemperature(value) {
   const number = Number(value);
   return Number.isFinite(number) ? `${number.toFixed(1)}°C` : "-";
+}
+function formatFanRpm(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString("zh-CN", { maximumFractionDigits: 1 }) : "-";
 }
 function maxTemperature(group) {
   const values = (group?.items || []).map((item) => Number(item.current)).filter((value) => Number.isFinite(value));

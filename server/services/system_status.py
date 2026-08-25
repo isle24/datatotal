@@ -159,6 +159,60 @@ def read_npu_stats() -> List[dict]:
     return npus
 
 
+def friendly_fan_label(raw_label: str, raw_name: str, index: int) -> str:
+    label = str(raw_label or "").strip()
+    normalized = label.lower().replace("_", " ").replace("-", " ")
+    if "cpu" in normalized or normalized in {"processor fan", "cpu cooler"}:
+        return "CPU 风扇"
+    if "system" in normalized or normalized in {"sys fan", "system cooler"}:
+        return "系统风扇"
+    if "chassis" in normalized or "case" in normalized:
+        return "机箱风扇"
+    if "aux" in normalized:
+        return "辅助风扇"
+    if normalized.startswith("fan"):
+        suffix = normalized[3:].strip()
+        if suffix.isdigit():
+            return f"风扇 {int(suffix)}"
+    return label or f"风扇 {index}"
+
+
+def read_fan_stats() -> List[dict]:
+    """Read all host fan sensors without inventing values when unsupported."""
+    try:
+        readings = psutil.sensors_fans()
+    except (AttributeError, OSError, NotImplementedError):
+        return []
+    if not isinstance(readings, dict):
+        return []
+
+    fans = []
+    friendly_counts: Dict[str, int] = {}
+    for raw_name, entries in readings.items():
+        if not isinstance(entries, (list, tuple)):
+            continue
+        for index, item in enumerate(entries, start=1):
+            try:
+                rpm = float(getattr(item, "current", None))
+            except (TypeError, ValueError):
+                continue
+            raw_label = str(getattr(item, "label", "") or "").strip()
+            base_name = friendly_fan_label(raw_label, str(raw_name or ""), index)
+            friendly_counts[base_name] = friendly_counts.get(base_name, 0) + 1
+            name = base_name if friendly_counts[base_name] == 1 else f"{base_name} {friendly_counts[base_name]}"
+            fans.append(
+                {
+                    "id": f"{str(raw_name or 'fan')}:{index}",
+                    "name": name,
+                    "rawName": str(raw_name or "")[:120],
+                    "rawLabel": raw_label[:120],
+                    "rpm": max(0, round(rpm, 1)),
+                    "status": "running" if rpm > 0 else "stopped",
+                }
+            )
+    return fans
+
+
 def friendly_temperature_group(raw_name: str, index: int) -> str:
     name = (raw_name or "").lower()
     if name.startswith(("coretemp", "k10temp", "zenpower")):
@@ -274,6 +328,7 @@ def collect_system_status() -> dict:
         "temperatureGroups": friendly_temperatures(temps),
         "gpu": read_gpu_stats(),
         "npu": read_npu_stats(),
+        "fans": read_fan_stats(),
         "uptimeSeconds": max(0, int(time.time() - boot)),
     }
 

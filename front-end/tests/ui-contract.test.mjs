@@ -40,6 +40,9 @@ test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(source, /setView\("ai"\)/);
   assert.match(source, /manualOnly/);
   assert.match(source, /function dockerNetworkLabel/);
+  assert.match(source, /title="风扇转速"/);
+  assert.match(source, /system\?\.fans/);
+  assert.match(source, /formatFanRpm/);
   assert.match(styles, /\.dashboard-board/);
   assert.match(styles, /\.accordion-stack/);
   assert.match(styles, /\.docker-card-trigger/);

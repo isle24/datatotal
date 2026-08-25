@@ -292,6 +292,47 @@ h1, h2, h3, p { margin: 0; }
   gap: 12px;
   padding: 18px;
 }
+.fan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+  padding: 18px;
+}
+.fan-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--cyan) 8%, var(--panel)), var(--panel-soft));
+}
+.fan-card-head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.fan-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: var(--cyan);
+  background: color-mix(in srgb, var(--cyan) 15%, var(--panel));
+}
+.fan-icon.stopped { color: var(--muted); background: var(--panel-soft); }
+.fan-card-head strong, .fan-card-head span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fan-card-head strong { font-size: 14px; }
+.fan-card-head div:nth-child(2) span { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.fan-status { border-radius: 999px; padding: 4px 8px; font-size: 10px; font-weight: 800; }
+.fan-status.running { color: var(--green); background: color-mix(in srgb, var(--green) 14%, var(--panel)); }
+.fan-status.stopped { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, var(--panel)); }
+.fan-rpm { display: flex; align-items: baseline; gap: 7px; padding-top: 12px; border-top: 1px solid var(--line); }
+.fan-rpm b { color: var(--cyan); font-size: 28px; font-variant-numeric: tabular-nums; }
+.fan-rpm span { color: var(--muted); font-size: 12px; }
+.fan-empty { padding: 26px 18px; }
 .history-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .info-item {
   padding: 14px;
