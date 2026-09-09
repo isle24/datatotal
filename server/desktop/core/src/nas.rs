@@ -63,7 +63,11 @@ fn network_error(error: reqwest::Error) -> String {
         details.push(cause.to_string());
         source = cause.source();
     }
-    format!("NAS 连接失败：{}", details.join("；"))
+    let detail = details.join("；");
+    if cfg!(target_os = "macos") && detail.contains("os error 65") {
+        return "macOS 无法访问此局域网地址。请检查路由及系统设置 → 隐私与安全 → 本地网络；临时签名测试包可能需要 Apple 开发者签名才能获得授权。（No route to host）".into();
+    }
+    format!("NAS 连接失败：{detail}")
 }
 fn credential(id: &str) -> Result<keyring::Entry> {
     keyring::Entry::new("cn.isle.traffic-lens", id).map_err(|_| "系统凭据库不可用".into())

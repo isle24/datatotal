@@ -49,3 +49,39 @@ fn targets_reject_credentials_paths_and_cross_origin_requests() {
         Some("localhost")
     );
 }
+
+#[test]
+fn sqlite_restart_preserves_period_totals_and_interface_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("desktop.db");
+    {
+        let mut db = crate::storage::Store::open(&path).unwrap();
+        db.add_traffic(86400, "en0", 100, 200).unwrap();
+        db.add_traffic(86460, "en0", 300, 400).unwrap();
+        db.add_traffic(172800, "en0", 500, 600).unwrap();
+        db.add_traffic(86400, "utun0", 999, 999).unwrap();
+    }
+    let mut db = crate::storage::Store::open(&path).unwrap();
+    let first = db.history(86400, 172800, "en0", 3600).unwrap();
+    assert_eq!(
+        (first.rx_bytes, first.tx_bytes, first.points.len()),
+        (400, 600, 1)
+    );
+    assert_eq!(
+        db.history(86400, 259200, "en0", 3600).unwrap().rx_bytes,
+        900
+    );
+    db.prune(172800).unwrap();
+    assert_eq!(
+        db.history(86400, 259200, "en0", 3600).unwrap().rx_bytes,
+        500
+    );
+}
+
+#[test]
+fn historical_buckets_align_to_the_selected_local_period() {
+    let mut db = crate::storage::Store::open_in_memory().unwrap();
+    db.add_traffic(600, "en0", 100, 50).unwrap();
+    let history = db.history(600, 7200, "en0", 3600).unwrap();
+    assert_eq!(history.points[0].timestamp, 600);
+}

@@ -144,7 +144,7 @@ impl Store {
         {
             return Err("历史范围或粒度无效".into());
         }
-        let mut statement = self.conn.prepare("SELECT (minute / ?4) * ?4, SUM(rx), SUM(tx) FROM traffic WHERE minute>=?1 AND minute<?2 AND (?3='' OR interface=?3) GROUP BY 1 ORDER BY 1").map_err(|e|e.to_string())?;
+        let mut statement = self.conn.prepare("SELECT ((minute - ?1) / ?4) * ?4 + ?1, SUM(rx), SUM(tx) FROM traffic WHERE minute>=?1 AND minute<?2 AND (?3='' OR interface=?3) GROUP BY 1 ORDER BY 1").map_err(|e|e.to_string())?;
         let points = statement
             .query_map(params![start / 60 * 60, end, interface, bucket], |r| {
                 Ok(HistoryPoint {

@@ -1,7 +1,13 @@
 {
-  "$schema":"../gen/schemas/desktop-schema.json",
-  "identifier":"main",
-  "description":"Bundled desktop UI only; no remote origins or shell access.",
-  "windows":["main"],
-  "permissions":["core:default","dialog:allow-confirm","autostart:allow-is-enabled","autostart:allow-enable","autostart:allow-disable"]
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Bundled desktop UI only; no remote origins or shell access.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-confirm",
+    "autostart:allow-is-enabled",
+    "autostart:allow-enable",
+    "autostart:allow-disable"
+  ]
 }

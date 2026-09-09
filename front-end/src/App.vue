@@ -1902,7 +1902,7 @@ async function refreshVisibleDockerStats() {
   if (activeView.value !== "docker") return;
   const targets = dockerContainers.value.filter((container) => container.showStats && container.id && isDockerCardExpanded(container));
   for (const container of targets) {
-    if (document.hidden || activeView.value !== "docker") break;
+    if (transport.hidden() || activeView.value !== "docker") break;
     try {
       await refreshDockerStats(container);
     } catch (error) {
@@ -1994,6 +1994,7 @@ async function refreshActive() {
   } catch (error) { console.warn("refresh failed", error); }
 }
 function startViewTimer() {
+  if (disposed) return;
   viewTimer?.stop();
   const view = activeView.value;
   const delay = { overview: 2000, interfaces: 2000, processes: 10000, system: 5000, history: 30000 }[view];
@@ -2001,12 +2002,13 @@ function startViewTimer() {
   viewTimer = createPollLoop(async () => {
     if (historyRequest.busy || processRequest.busy || interfaceRequest.busy) return;
     await refreshActive();
-  }, delay, { shouldRun: () => !document.hidden && activeView.value === view });
+  }, delay, { shouldRun: () => !disposed && !transport.hidden() && activeView.value === view });
   viewTimer.start();
 }
 function startDockerTimer() {
+  if (disposed) return;
   stopDockerTimer();
-  dockerTimer = createPollLoop(refreshVisibleDockerStats, 5000, { shouldRun: () => !document.hidden && activeView.value === "docker" });
+  dockerTimer = createPollLoop(refreshVisibleDockerStats, 5000, { shouldRun: () => !disposed && !transport.hidden() && activeView.value === "docker" });
   dockerTimer.start();
 }
 function stopDockerTimer() {
@@ -2033,7 +2035,7 @@ function openWanConnections() {
 }
 function startConnectionTimer() {
   connectionTimer?.stop();
-  connectionTimer = createPollLoop(() => connectionRequest.busy ? undefined : refreshConnections(false), 5000, { shouldRun: () => !document.hidden && connectionDialog.value?.open });
+  connectionTimer = createPollLoop(() => connectionRequest.busy ? undefined : refreshConnections(false), 5000, { shouldRun: () => !disposed && !transport.hidden() && connectionDialog.value?.open });
   connectionTimer.start();
 }
 function stopConnectionTimer() {
@@ -2389,6 +2391,7 @@ function showToast(message) {
 }
 
 watch(theme, (value) => {
+  transport.themeChanged?.(value);
   document.documentElement.dataset.theme = value;
   localStorage.setItem("ntl-theme", value);
   nextTick(renderHistoryChart);
@@ -2412,7 +2415,7 @@ onUnmounted(() => {
   historyChart?.dispose();
 });
 function handleVisibility() {
-  if (document.hidden) {
+  if (transport.hidden()) {
     [viewTimer, connectionTimer, dockerTimer].forEach((timer) => timer?.stop());
     [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
   } else {

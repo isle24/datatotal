@@ -10,15 +10,43 @@
     "frontendDist": "../../../front-end/dist-desktop"
   },
   "app": {
-    "windows": [{"label":"main","title":"Traffic Lens","url":"desktop.html","width":1280,"height":840,"minWidth":760,"minHeight":580}],
-    "security": {"csp":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"}
+    "windows": [
+      {
+        "label": "main",
+        "title": "Traffic Lens",
+        "url": "desktop.html",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 760,
+        "minHeight": 580
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
+    }
   },
   "bundle": {
-    "active":true,
-    "targets":["app","dmg","nsis"],
-    "shortDescription":"Local system monitoring and NAS dashboard",
-    "icon":["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"],
-    "macOS":{"minimumSystemVersion":"11.0","signingIdentity":"-","infoPlist":"Info.plist"},
-    "windows":{"nsis":{"languages":["SimpChinese","English"],"displayLanguageSelector":true,"installMode":"currentUser"}}
+    "active": true,
+    "targets": ["app", "dmg", "nsis"],
+    "shortDescription": "Local system monitoring and NAS dashboard",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "infoPlist": "Info.plist"
+    },
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true,
+        "installMode": "currentUser"
+      }
+    }
   }
 }

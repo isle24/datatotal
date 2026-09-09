@@ -10,9 +10,9 @@ Constraints: no real credentials or captured personal data in fixtures or commit
 
 ## Tasks
 
-- [ ] Core metrics and storage: add Rust models, system sampler and transactional SQLite history/profile/settings stores. Test first-sample baselines, counter reset, sleep gaps, process identity and history windows with synthetic counters; then implement and run `cargo test -p traffic-lens-core`.
-- [ ] NAS transport: add URL/path validation, bounded HTTP/SSE, per-profile sessions, optional OS credential storage and cancellation. Test external redirects, malformed paths, oversized bodies, auth failures and session isolation against local mock HTTP servers. Extract browser transport and test target-specific URL construction/cancellation with `node --test tests/*.test.mjs`.
-- [ ] Desktop UI and controllers: add Tauri commands/capabilities, tray, hide/quit lifecycle, autostart and directory actions. Build a local dashboard with actual counters, interfaces, process resource table, period history and connection settings. Reuse the existing NAS App for remote targets, keeping credentials and native permissions outside the WebView.
+- [x] Core metrics and storage: Rust system sampler, bounded in-memory counters and transactional SQLite stores. Synthetic tests cover baselines, resets, sleep gaps, restart persistence, interface isolation and history windows; process identity includes PID and start time.
+- [x] NAS transport: validated URL/path, bounded HTTP/SSE, per-profile cookies, optional OS credential storage and cancellation. Mock tests cover redirects, malformed paths, oversized responses, auth failures and session isolation; frontend transport tests cover stream bytes and disposed targets. Real NAS read-only Rust probe returned HTTP 200 and logged out without saving the password.
+- [x] Desktop UI and controllers: Tauri capabilities, tray, hide/quit, single instance, optional autostart and fixed directory actions. Native Mac UI verified local values, process search, charts, history restoration, theme and source settings. Existing NAS Vue views use the injected transport.
 - [ ] Packaging: add independent desktop version, icons, build scripts and Windows Actions workflow. Run Rust tests, frontend tests and both Vite builds. Build `.app`/`.dmg` for this Apple Silicon Mac; build Intel when the toolchain permits.
 - [ ] Acceptance/delivery: open the native Mac app, inspect local sampling/history/target switching/tray, inspect a NAS read-only without saving the test password, and test cancellation/cleanup. Push GitHub, run Windows CI, inspect its result and retrieve installer artifacts. Report unsigned-package and Windows runtime-test limits accurately.
 
@@ -29,3 +29,5 @@ npm run desktop:build
 ```
 
 Core test cases use temporary SQLite databases and loopback mock servers. Production NAS tests only read statistics and log in/out; no restart, stop, notification send or history deletion.
+
+Mac GUI NAS acceptance limitation: macOS 27 rejected local-network access for the ad-hoc-signed app, with `No team ID found` in the OS log. There is no installed Apple signing identity. Local monitoring and the same Rust transport run as a read-only development probe were verified; signed GUI LAN acceptance remains pending. No system privacy protections were bypassed.

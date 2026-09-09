@@ -3,7 +3,7 @@ name: Desktop preview
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'codex/desktop-*']
+    branches: [main]
     paths:
       - 'server/desktop/**'
       - 'front-end/**'
