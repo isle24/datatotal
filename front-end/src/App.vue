@@ -884,7 +884,10 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, defineComponent, h, inject, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { browserTransport } from "./api/transport.js";
+const transport = inject("trafficTransport", browserTransport);
+let disposed = false;
 import { createLatestRequest, createPollLoop } from "./utils/requests.js";
 import { LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
@@ -1424,7 +1427,7 @@ function rateOf(name, scope, key) {
 }
 async function readJson(response) {
   if (response.status === 401) {
-    location.href = "/login";
+    transport.authenticationRequired();
     throw new Error("authentication required");
   }
   const text = await response.text();
@@ -1444,6 +1447,7 @@ async function readJson(response) {
   return data;
 }
 async function api(url, options) {
+  if (disposed) throw new DOMException("页面已关闭", "AbortError");
   const controller = new AbortController();
   const view = activeView.value;
   const abort = () => controller.abort();
@@ -1451,7 +1455,7 @@ async function api(url, options) {
   if (options?.signal?.aborted) abort();
   const timer = setTimeout(abort, url.startsWith('/api/ai/') ? 190000 : 15000);
   try {
-    const value = await readJson(await fetch(url, { cache: "no-store", ...options, signal: controller.signal }));
+    const value = await readJson(await transport.fetch(url, { cache: "no-store", ...options, signal: controller.signal }));
     if (view === activeView.value && requestErrorUrl === url) requestError.value = "";
     return value;
   } catch (error) {
@@ -1480,9 +1484,9 @@ function parseSseBlock(block) {
   }
 }
 async function streamApi(url, options, onEvent) {
-  const response = await fetch(url, { cache: "no-store", ...options });
+  const response = await transport.fetch(url, { cache: "no-store", ...options });
   if (response.status === 401) {
-    location.href = "/login";
+    transport.authenticationRequired();
     throw new Error("authentication required");
   }
   if (!response.ok) return readJson(response);
@@ -1887,7 +1891,7 @@ async function probeContainerPort(container, port) {
   if (result.isWeb) {
     port.accessMode = "web";
     port.scheme = result.scheme || port.scheme || "http";
-    showToast(`已识别为 Web：${port.scheme}://${location.hostname}:${port.hostPort}`);
+    showToast(`已识别为 Web：${port.scheme}://${transport.hostname()}:${port.hostPort}`);
   } else {
     port.accessMode = "copy";
     showToast("探测完成：看起来不是 Web 服务");
@@ -2052,12 +2056,12 @@ async function clearAlerts() {
 }
 function protectionState(rule) { return settings.value?.monitor?.containerStates?.[rule.id] || {}; }
 async function resetProtection(rule) {
-  if (!window.confirm(`重置“${rule.name}”的保护计数并解除锁定？启用的规则将恢复监控。`)) return;
+  if (!await transport.confirm(`重置“${rule.name}”的保护计数并解除锁定？启用的规则将恢复监控。`)) return;
   settings.value = await api(`/api/settings/container-protection/${encodeURIComponent(rule.id)}/reset`, { method: "POST" });
   showToast("保护计数已重置");
 }
 async function clearTrafficHistory() {
-  if (!window.confirm("清除全部网卡和进程流量历史？此操作不可撤销。规则、通知渠道、AI 对话和告警证据会保留。")) return;
+  if (!await transport.confirm("清除全部网卡和进程流量历史？此操作不可撤销。规则、通知渠道、AI 对话和告警证据会保留。")) return;
   await api("/api/history/clear", { method: "POST" });
   historyData.value = { buckets: [], totals: {} };
   showToast("流量历史已清理，配置已保留");
@@ -2282,20 +2286,20 @@ function removeChannel(id) {
   expandedMonitorCards.delete(monitorCardKey("channel", id));
 }
 async function editLabel(key, current) {
-  const label = window.prompt("给这个容器端口设置备注，留空则清除", current || "");
+  const label = await transport.prompt("给这个容器端口设置备注，留空则清除", current || "");
   if (label === null) return;
   await api("/api/labels", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, label }) });
   refreshConnections();
 }
 function openContainerPort(port) {
   const protocol = port.scheme === "https" ? "https:" : "http:";
-  const host = location.hostname;
+  const host = transport.hostname();
   const path = port.path || "/";
   const url = `${protocol}//${host}:${port.hostPort}${path.startsWith("/") ? path : `/${path}`}`;
-  window.open(url, "_blank", "noopener,noreferrer");
+  transport.open(url);
 }
 function containerPortAddress(port) {
-  return `${location.hostname}:${port.hostPort}`;
+  return `${transport.hostname()}:${port.hostPort}`;
 }
 async function copyContainerPort(port) {
   const text = containerPortAddress(port);
@@ -2303,7 +2307,7 @@ async function copyContainerPort(port) {
     await navigator.clipboard.writeText(text);
     showToast(`已复制 ${text}`);
   } catch {
-    window.prompt("复制连接地址", text);
+    await transport.prompt("复制连接地址", text);
   }
 }
 function normalizeEditorPort(port = {}) {
@@ -2374,8 +2378,7 @@ function uploadDockerIcon(event) {
   reader.readAsDataURL(file);
 }
 async function logout() {
-  await fetch("/api/auth/logout", { method: "POST" });
-  location.href = "/login";
+  await transport.logout();
 }
 function showToast(message) {
   toast.value = message;
@@ -2393,11 +2396,13 @@ watch(theme, (value) => {
 
 onMounted(async () => {
   await refreshOverview();
+  if (disposed) return;
   startViewTimer();
   document.addEventListener("visibilitychange", handleVisibility);
   window.addEventListener("resize", handleResize);
 });
 onUnmounted(() => {
+  disposed = true;
   [viewTimer, connectionTimer, dockerTimer].forEach((timer) => timer?.stop());
   [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
   document.removeEventListener("visibilitychange", handleVisibility);

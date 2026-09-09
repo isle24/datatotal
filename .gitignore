@@ -9,3 +9,7 @@ front-end/dist/
 nas-traffic-lens-amd64.tar
 nas-traffic-lens-arm64.tar
 nas-traffic-lens-*.tar
+server/desktop/target/
+server/desktop/app/gen/
+front-end/dist-desktop/
+artifacts/
