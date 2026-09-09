@@ -24,7 +24,7 @@ pub struct History {
 }
 
 pub struct Store {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl Store {
@@ -41,7 +41,12 @@ impl Store {
             CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS traffic(minute INTEGER NOT NULL, interface TEXT NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL, PRIMARY KEY(minute,interface));
-            PRAGMA user_version=1;").map_err(|e| e.to_string())?;
+            PRAGMA foreign_keys=ON;
+            CREATE TABLE IF NOT EXISTS ai_chats(id TEXT PRIMARY KEY, title TEXT NOT NULL, updated INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS ai_messages(id INTEGER PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES ai_chats(id) ON DELETE CASCADE, role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, model TEXT NOT NULL, created INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS ai_messages_chat ON ai_messages(chat_id,id);
+            UPDATE ai_messages SET status='interrupted' WHERE status='streaming';
+            PRAGMA user_version=2;").map_err(|e| e.to_string())?;
         Ok(Self { conn })
     }
     pub fn save_profile(&mut self, id: Option<&str>, name: &str, address: &str) -> Result<Profile> {

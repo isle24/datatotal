@@ -4741,7 +4741,7 @@ dependencies = [
 
 [[package]]
 name = "traffic-lens-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "futures-util",
@@ -4760,7 +4760,7 @@ dependencies = [
 
 [[package]]
 name = "traffic-lens-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "serde",

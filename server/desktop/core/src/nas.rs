@@ -160,6 +160,12 @@ impl NasClient {
     }
     pub fn disconnect(&self, id: &str) {
         self.sessions.lock().unwrap().remove(id);
+        self.pause(id);
+    }
+    pub fn connected(&self) -> Vec<String> {
+        self.sessions.lock().unwrap().keys().cloned().collect()
+    }
+    pub fn pause(&self, id: &str) {
         for (profile, token) in self.pending.lock().unwrap().values() {
             if profile == id {
                 token.cancel();
@@ -338,12 +344,16 @@ mod tests {
         }
         for p in [&a, &b] {
             client.request(request(&p.id), |_| Ok(())).await.unwrap();
+            client.pause(&p.id);
+            assert!(client.connected().contains(&p.id));
         }
         let ar = ta.await.unwrap();
         let br = tb.await.unwrap();
         assert!(ar[1].to_lowercase().contains("cookie: session=only-a"));
         assert!(!br[1].to_lowercase().contains("cookie:"));
         assert!(client.pending.lock().unwrap().is_empty());
+        client.disconnect(&a.id);
+        assert_eq!(client.connected(), vec![b.id]);
     }
     #[tokio::test]
     async fn auth_failures_redirects_and_oversized_responses_are_rejected() {

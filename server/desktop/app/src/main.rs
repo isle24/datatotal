@@ -6,11 +6,12 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
-use traffic_lens_core::{monitor::Monitor, nas::NasClient};
+use traffic_lens_core::{ai::AiService, monitor::Monitor, nas::NasClient};
 
 pub struct AppState {
     monitor: Arc<Monitor>,
     nas: Arc<NasClient>,
+    ai: Arc<AiService>,
 }
 
 fn show(app: &tauri::AppHandle) {
@@ -44,6 +45,7 @@ fn main() {
             let monitor =
                 Monitor::start(&data.join("desktop.db")).map_err(std::io::Error::other)?;
             app.manage(AppState {
+                ai: Arc::new(AiService::new(monitor.clone())),
                 monitor,
                 nas: Arc::new(NasClient::default()),
             });
@@ -100,6 +102,18 @@ fn main() {
             controllers::nas_login,
             controllers::nas_logout,
             controllers::nas_disconnect,
+            controllers::nas_pause,
+            controllers::local_ai_settings,
+            controllers::local_ai_save,
+            controllers::local_ai_models,
+            controllers::local_ai_test,
+            controllers::local_ai_proposal,
+            controllers::local_ai_apply,
+            controllers::local_ai_chat,
+            controllers::local_ai_cancel,
+            controllers::local_ai_chats,
+            controllers::local_ai_messages,
+            controllers::local_ai_delete,
             controllers::nas_request,
             controllers::nas_cancel,
             controllers::open_external,
@@ -109,7 +123,10 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Traffic Lens could not start");
     app.run(|app, event| match event {
-        tauri::RunEvent::Exit => app.state::<AppState>().monitor.stop(),
+        tauri::RunEvent::Exit => {
+            app.state::<AppState>().ai.cancel_all();
+            app.state::<AppState>().monitor.stop();
+        }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => show(app),
         _ => {}

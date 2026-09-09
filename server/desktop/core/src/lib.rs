@@ -1,3 +1,5 @@
+pub mod ai;
+mod ai_storage;
 pub mod metrics;
 pub mod monitor;
 pub mod nas;

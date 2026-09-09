@@ -2,7 +2,7 @@
 
 NAS Traffic Lens 是一个面向极空间、家庭 NAS 和 x86/ARM Linux 主机的轻量网络监控面板。它用于补齐 NAS 自带系统缺少的实时公网流量、累计公网流量、进程和端口归因、Docker 容器识别、告警通知等能力。
 
-Windows / macOS 另有 **Traffic Lens 桌面预览版**：无需 Docker，可查看本机基础资源与网卡总流量，也可连接已有 NAS。桌面首版不包含本机公网归属、进程网络流量和传感器采集；完整能力与构建方法见 [桌面客户端使用与构建](doc/desktop-usage.md)。Windows x64 安装包通过 [GitHub Actions](https://github.com/isle24/datatotal/actions/workflows/desktop.yml) 构建，在成功运行的 Artifacts 中下载。
+Windows / macOS 另有 **Traffic Lens 桌面预览版**：无需 Docker，可查看本机基础资源与网卡总流量、使用本机 AI 分析，也可保存并切换多台 NAS。桌面版不包含本机公网归属、进程网络流量和传感器采集；完整能力与构建方法见 [桌面客户端使用与构建](doc/desktop-usage.md)。Mac Apple Silicon / Intel 和 Windows x64 安装包见 [桌面 Releases](https://github.com/isle24/datatotal/releases?q=desktop-v)；Windows 由 [GitHub Actions](https://github.com/isle24/datatotal/actions/workflows/desktop.yml) 编译。
 
 当前项目已经拆分为前后端：
 

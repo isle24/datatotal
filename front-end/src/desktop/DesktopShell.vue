@@ -22,7 +22,8 @@
             :value="profile.id"
             :key="profile.id"
           >
-            {{ profile.name }}
+            {{ profile.name
+            }}{{ config.connected?.includes(profile.id) ? " · 已登录" : "" }}
           </option>
         </select>
         <button
@@ -137,6 +138,9 @@
             <div>
               <strong>{{ profile.name }}</strong
               ><small>{{ profile.url }}</small>
+              <small>{{
+                config.connected.includes(profile.id) ? "已登录" : "未连接"
+              }}</small>
             </div>
             <div class="ds-actions">
               <button class="ds-button" @click="switchSource(profile.id)">
@@ -156,6 +160,15 @@
               >
                 <Trash2 :size="16" />
               </button>
+              <button
+                v-if="config.connected.includes(profile.id)"
+                class="ds-icon"
+                title="断开此 NAS"
+                aria-label="断开此 NAS"
+                @click="disconnectProfile(profile.id)"
+              >
+                <Power :size="16" />
+              </button>
             </div>
           </article>
         </div>
@@ -171,6 +184,7 @@
           <Power :size="16" />退出并停止本机监控
         </button>
       </section>
+      <AiSettings />
     </main>
     <template v-else-if="source === 'local'">
       <nav class="ds-tabs" aria-label="本机页面">
@@ -183,8 +197,8 @@
           <component :is="item.icon" :size="17" />{{ item.name }}
         </button>
       </nav>
-      <main class="ds-content">
-        <div class="ds-heading">
+      <main class="ds-content" :class="{ 'ds-ai-content': view === 'ai' }">
+        <div v-if="view !== 'ai'" class="ds-heading">
           <div>
             <span class="ds-eyebrow">LOCAL MONITOR</span>
             <h1>{{ tabs.find((t) => t.id === view)?.name }}</h1>
@@ -193,6 +207,13 @@
               <span class="ds-dot">·</span> {{ snapshot.os }}
             </p>
           </div>
+          <button
+            v-if="['overview', 'history', 'processes', 'system'].includes(view)"
+            class="ds-button"
+            @click="analyze"
+          >
+            <Sparkles :size="17" />AI 分析
+          </button>
           <div class="ds-live">
             <span :class="{ stale: stale }"></span
             >{{ stale ? "等待采样" : "实时采集中"
@@ -200,6 +221,15 @@
           </div>
         </div>
         <div v-if="snapshot.error" class="ds-error">{{ snapshot.error }}</div>
+        <LocalAiView
+          v-if="view === 'ai'"
+          :interfaces="snapshot.interfaces"
+          :selected="selected"
+          :initial-period="period"
+          :initial-prompt="aiPrompt"
+          @settings="settingsOpen = true"
+          @preferences="loadConfig"
+        />
         <template v-if="view === 'overview'">
           <div class="ds-metrics">
             <article class="ds-metric">
@@ -524,7 +554,7 @@
         :key="sessionKey"
         :profile="currentProfile"
         :prompt="promptText"
-        @expired="authenticated = false"
+        @expired="expireSession"
         @theme="dark = $event === 'dark'"
       />
       <div v-else class="ds-login-wrap">
@@ -640,16 +670,21 @@ import {
   HardDrive,
   History,
   LayoutDashboard,
+  Sparkles,
 } from "@lucide/vue";
 import TrafficChart from "./TrafficChart.vue";
+const AiSettings = defineAsyncComponent(() => import("./AiSettings.vue"));
+const LocalAiView = defineAsyncComponent(() => import("./LocalAiView.vue"));
 const NasView = defineAsyncComponent(() => import("./NasView.vue"));
 const config = reactive({
   version: "",
   profiles: [],
+  connected: [],
   closeToTray: true,
   retentionDays: 30,
 });
 const snapshot = ref({ interfaces: [], processes: [], disks: [] });
+const aiPrompt = ref("");
 const error = ref("");
 const source = ref("local"),
   settingsOpen = ref(false),
@@ -680,6 +715,7 @@ const tabs = [
   { id: "processes", name: "进程", icon: Cpu },
   { id: "history", name: "流量历史", icon: History },
   { id: "system", name: "系统", icon: HardDrive },
+  { id: "ai", name: "AI 中心", icon: Sparkles },
 ];
 const periods = [
   { id: "today", name: "今日" },
@@ -756,6 +792,17 @@ async function run(task) {
 }
 async function loadConfig() {
   Object.assign(config, await invoke("desktop_config"));
+  if (config.interface) selected.value = config.interface;
+}
+async function disconnectProfile(id) {
+  await run(async () => {
+    await invoke("nas_logout", { id });
+  });
+  config.connected = config.connected.filter((value) => value !== id);
+  if (source.value === id) {
+    authenticated.value = false;
+    sessionKey.value++;
+  }
 }
 async function preference(key, value) {
   await run(async () => {
@@ -801,17 +848,18 @@ async function deleteProfile(profile) {
     })
   )
     await run(async () => {
-      if (source.value === profile.id) switchSource("local");
+      if (source.value === profile.id) await switchSource("local");
       await invoke("delete_profile", { id: profile.id });
       await loadConfig();
     });
 }
 let sourceGeneration = 0;
-function switchSource(id) {
+async function switchSource(id) {
+  const generation = ++sourceGeneration;
   if (source.value !== "local")
-    invoke("nas_disconnect", { id: source.value }).catch(() => {});
-  sourceGeneration++;
-  authenticated.value = false;
+    await invoke("nas_pause", { id: source.value }).catch(() => {});
+  if (generation !== sourceGeneration) return;
+  authenticated.value = config.connected.includes(id);
   password.value = "";
   remember.value = false;
   source.value = id;
@@ -838,12 +886,25 @@ async function login(saved) {
       return;
     }
     authenticated.value = true;
+    if (!config.connected.includes(id)) config.connected.push(id);
     sessionKey.value++;
   } catch (e) {
     if (generation === sourceGeneration) error.value = String(e);
   } finally {
     loginBusy.value = false;
   }
+}
+function expireSession() {
+  authenticated.value = false;
+  config.connected = config.connected.filter((id) => id !== source.value);
+  invoke("nas_disconnect", { id: source.value }).catch(() => {});
+}
+function analyze() {
+  aiPrompt.value =
+    view.value === "history"
+      ? "请分析所选时段的流量趋势、上传高峰及排查建议。"
+      : "请分析当前本机的流量和资源占用，给出有依据的建议。";
+  view.value = "ai";
 }
 function promptText(message, value) {
   return new Promise((resolve) => {
@@ -909,7 +970,8 @@ async function poll() {
     polling ||
     isPageHidden() ||
     source.value !== "local" ||
-    settingsOpen.value
+    settingsOpen.value ||
+    (view.value === "ai" && snapshot.value.interfaces.length > 0)
   )
     return;
   polling = true;
@@ -982,6 +1044,12 @@ watch([period, selected], () => {
 watch([view, settingsOpen, source], () => {
   if (view.value === "history") lastHistory = 0;
   poll();
+});
+watch(view, (next, previous) => {
+  if (previous === "ai") aiPrompt.value = "";
+});
+watch(settingsOpen, (open) => {
+  if (open) aiPrompt.value = "";
 });
 watch([search, sort], () => (page.value = 1));
 watch(pages, (count) => {
