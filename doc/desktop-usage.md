@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-- macOS：打开对应架构的 DMG，将 Traffic Lens 拖入 Applications，再启动应用。当前本地测试构建为 Apple Silicon。使用系统 WebView，无需 Docker、Python 或 Node.js。
+- macOS：打开对应架构的 DMG，将 Traffic Lens 拖入 Applications，再启动应用。已生成 Apple Silicon 和 Intel 两种包；本地原生运行验收使用 Apple Silicon。使用系统 WebView，无需 Docker、Python 或 Node.js。
 - Windows：从 GitHub Actions 的 `Desktop preview` 成功运行中下载 `Traffic-Lens-Windows-x64-*` Artifact，解压并运行 `*-setup.exe`。安装到当前用户目录；需要 WebView2 Runtime，安装器会在缺少时引导安装。
 - 测试包没有公开发行证书或 Apple 公证。macOS 使用临时签名；Windows 安装器未签名。请从本仓库构建记录下载，并遵循系统对未知开发者应用的操作提示。
 - 首次启动进入本机概览。顶部选择数据来源；右上角设置可添加、编辑或删除 NAS 地址，并配置后台监控、开机启动和历史保留时间。
@@ -67,6 +67,12 @@ npm --prefix front-end run desktop:dev
 
 交叉编译 Intel Mac 时先安装 `x86_64-apple-darwin` Rust target，再增加 `--target x86_64-apple-darwin`；产物目录会增加该 target 层。编译成功不代表已在 Intel Mac 或 Windows 实机验收。
 
+```sh
+rustup target add x86_64-apple-darwin
+npm --prefix front-end run desktop:build -- --target x86_64-apple-darwin --bundles app
+node scripts/package-macos.mjs 'server/desktop/target/x86_64-apple-darwin/release/bundle/macos/Traffic Lens.app'
+```
+
 Tauri 配置版本与 Rust workspace 版本均为桌面 `0.1.0`，两者需同步修改；顶部版本由 Rust 编译时的包版本返回。前端 NAS 版本仍取 NAS API。
 
 ## GitHub Actions
@@ -74,6 +80,8 @@ Tauri 配置版本与 Rust workspace 版本均为桌面 `0.1.0`，两者需同�
 工作流为 `.github/workflows/desktop.yml`。桌面代码在 `main` 分支或 Pull Request 变动时自动运行，也可以在 Actions 页面选择 `Desktop preview` → `Run workflow`，指定分支手动执行。
 
 流水线在 Windows 原生 runner 上安装依赖，运行 Rust 核心与前端回归测试，构建 NAS Web 确保兼容，再构建桌面安装器并保存 30 天 Artifact。工作流只需要仓库读取权限，不需要 DockerHub 凭据、NAS 密码或发行证书。
+
+0.1.0 的主分支验证构建为 [Actions run 34314618578](https://github.com/isle24/datatotal/actions/runs/34314618578)，源码提交 `6187873`，Windows 安装包保存在该运行的 `Traffic-Lens-Windows-x64-2` Artifact。后续重新构建请使用工作流页面，以免下载已过期的 Artifact。
 
 ## 验收边界
 

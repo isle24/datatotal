@@ -1,6 +1,6 @@
 # Windows / macOS 桌面客户端设计
 
-状态：用户已批准分阶段方案，首个桌面预览版进入实现与验收。实际首版能力和构建步骤以 [desktop-usage.md](desktop-usage.md) 为准。
+状态：0.1.0 桌面预览版已实现，Mac Apple Silicon / Intel 安装包和 Windows Actions 构建已生成。本机 Mac 基础监控完成运行验收；签名相关的 GUI 局域网访问限制见 [desktop-usage.md](desktop-usage.md)。完整本机流量归属仍为后续阶段。
 
 ## 目标与推荐方案
 
