@@ -63,11 +63,12 @@ func main() {
 	cts := envStr("CONNTRACK_TCP_STATES", *ctTCPStatesF)
 	cua := envBool("CONNTRACK_UDP_REQUIRE_ASSURED", *ctUDPAssuredF)
 
-	listenAddr := fmt.Sprintf(":%d", portNum)
+	listenAddr := fmt.Sprintf("127.0.0.1:%d", portNum)
 	log.Printf("go-collector starting on %s", listenAddr)
 	log.Printf("go-collector: sample=%.1fs max_eps=%d dynamic=%v", sampleSec, maxEPS, ds)
 
 	agg := collector.NewAggregator()
+	instanceID := strconv.FormatInt(time.Now().UnixNano(), 10)
 
 	details := collector.GetInterfaceDetails(nil)
 	captureList := collector.DetermineCaptureInterfaces(details, ifaceStr)
@@ -160,6 +161,9 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/process-totals", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]interface{}{"instanceId": instanceID, "totals": agg.ProcessTotalsSnapshot()})
+	})
 
 	mux.HandleFunc("/api/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		d := collector.GetInterfaceDetails(captured)
@@ -180,6 +184,7 @@ func main() {
 		stageActive, stageStartedAt, stageIfaces := agg.StageSnapshot()
 
 		writeJSON(w, collector.SnapshotResponse{
+			InstanceID:        instanceID,
 			Timestamp:         float64(time.Now().UnixNano()) / 1e9,
 			Interfaces:        ifaces,
 			Rates:             rates,
@@ -328,7 +333,29 @@ func main() {
 		})
 	})
 
-	log.Fatal(http.ListenAndServe(listenAddr, mux))
+	log.Fatal(collectorHTTPServer(portNum, mux).ListenAndServe())
+}
+
+func collectorHTTPServer(port int, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			method := http.MethodGet
+			if r.URL.Path == "/api/stage/start" || r.URL.Path == "/api/stage/stop" || r.URL.Path == "/api/stage/reset" {
+				method = http.MethodPost
+			}
+			if r.Method != method {
+				w.Header().Set("Allow", method)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			handler.ServeHTTP(w, r)
+		}),
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

@@ -37,6 +37,7 @@
           <button v-if="overview?.authEnabled" type="button" @click="logout">退出</button>
         </div>
       </header>
+      <div v-if="requestError" class="request-error" role="alert"><CircleAlert :size="18" /><span>{{ requestError }}</span><button type="button" @click="refreshActive"><RefreshCw :size="15" />重试</button></div>
 
       <section v-if="activeView === 'overview'" class="view">
         <section class="dashboard-board">
@@ -196,6 +197,7 @@
             <InfoItem label="内网上行" :value="formatBytes(historyTotals.lan?.txBytes)" />
           </div>
           <div ref="historyChartEl" class="history-chart"></div>
+          <p class="refresh-note">{{ historyLoading ? '正在更新，当前显示上次结果' : (historyUpdatedAt ? `更新于 ${formatDate(historyUpdatedAt)} · 每 30 秒刷新` : '等待历史数据') }}</p>
         </section>
       </section>
 
@@ -525,7 +527,8 @@
                 <article v-for="change in aiConfigureProposal.changes || []" :key="change.path" class="ai-proposal-change">
                   <div class="ai-proposal-change-head"><code>{{ change.path }}</code><span :class="['risk-badge', change.risk === '高' || change.risk === 'high' ? 'high' : 'low']">风险 {{ change.risk || "低" }}</span></div>
                   <p>{{ change.summary }}</p>
-                  <div class="ai-proposal-values"><span><small>原值</small><b>{{ formatConfigValue(change.oldValue) }}</b></span><ArrowRight :size="15" /><span><small>新值</small><b>{{ formatConfigValue(change.newValue) }}</b></span></div>
+                  <p v-if="change.removeIds?.length" class="ai-warning">将删除：{{ change.removeIds.join('、') }}</p>
+                  <div class="ai-proposal-values"><span><small>原值</small><b>{{ formatConfigValue(change.oldValue) }}</b></span><ArrowRight :size="15" /><span><small>{{ Array.isArray(change.newValue) || change.path === 'docker.containers' ? '新增或更新的条目' : '新值' }}</small><b>{{ formatConfigValue(change.newValue) }}</b></span></div>
                 </article>
               </div>
               <div class="ai-proposal-actions"><button type="button" class="subtle-button" :disabled="aiConfigureLoading" @click="cancelAiConfiguration"><X :size="16" />取消变更</button><button type="button" :disabled="aiConfigureLoading" @click="applyAiConfiguration"><CheckCircle2 :size="16" />{{ aiConfigureLoading ? "应用中" : "确认应用" }}</button></div>
@@ -535,6 +538,11 @@
       </section>
 
       <section v-if="activeView === 'settings'" class="view">
+        <section class="card">
+          <CardHead title="历史数据维护" meta="清理流量历史，保留规则、渠道、图标、AI 对话和告警证据">
+            <button type="button" class="danger" @click="clearTrafficHistory"><Trash2 :size="16" />清理流量历史</button>
+          </CardHead>
+        </section>
         <div class="grid two">
           <section class="card">
             <CardHead title="运行参数" meta="可热更新项会写入 SQLite">
@@ -669,8 +677,8 @@
                   </span>
                 </button>
                 <div class="summary-actions">
-                  <span :class="['rule-state', rule.enabled ? 'enabled' : 'disabled']">
-                    <component :is="rule.enabled ? ShieldCheck : CircleOff" :size="14" />{{ rule.enabled ? "监控中" : "停用" }}
+                  <span :class="['rule-state', rule.enabled && !protectionState(rule).locked ? 'enabled' : 'disabled']">
+                    <component :is="protectionState(rule).locked ? CircleAlert : rule.enabled ? ShieldCheck : CircleOff" :size="14" />{{ protectionState(rule).locked ? "已锁定" : rule.enabled ? "监控中" : "停用" }}
                   </span>
                 </div>
               </div>
@@ -700,6 +708,11 @@
                 <label>动作<select v-model="rule.action"><option v-for="item in containerProtectionActions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
                 <label>最大次数<input v-model.number="rule.maxActions" type="number" min="1" /></label>
                 <label>冷却秒<input v-model.number="rule.cooldownSeconds" type="number" min="0" /></label>
+                <div class="field-block wide">
+                  <span>保护记录：{{ protectionState(rule).count || 0 }} 次重启尝试 · {{ protectionState(rule).locked ? '已锁定' : rule.enabled ? '监控中' : '停用' }}</span>
+                  <p class="field-hint">{{ protectionState(rule).reason || '次数跨重启保留；达到上限后再次持续超限将停止容器。' }}</p>
+                  <button type="button" @click="resetProtection(rule)"><RotateCcw :size="15" />重置计数并解除锁定</button>
+                </div>
                 <div class="field-block wide">
                   <span>告警渠道</span>
                   <div class="channel-checks">
@@ -784,6 +797,7 @@
     <dialog ref="connectionDialog" class="modal" @close="stopConnectionTimer">
       <div class="modal-box">
         <CardHead title="连接与端口" :meta="`${connPagination.total || 0} 条筛选结果`">
+          <span class="connection-status" :role="connectionError ? 'alert' : 'status'">{{ connectionError || (connLoading ? '更新中' : '') }}</span>
           <button type="button" @click="connectionDialog?.close()"><X :size="16" />关闭</button>
         </CardHead>
         <div class="connection-filters">
@@ -799,7 +813,7 @@
           <input v-model.number="connFilters.minDuration" type="number" min="0" placeholder="最小秒" @input="debounceConnections" />
           <button type="button" @click="refreshConnections(false)"><RefreshCw :size="16" />刷新</button>
         </div>
-        <div class="table-wrap modal-table" :class="{ loading: connLoading }">
+        <div class="table-wrap modal-table" :aria-busy="connLoading">
           <table>
             <thead><tr><th>网卡</th><th>范围</th><th>协议</th><th>流量</th><th>源</th><th>目标</th><th>归属</th><th>下行</th><th>上行</th><th>时长</th><th>备注</th></tr></thead>
             <tbody>
@@ -871,6 +885,7 @@
 
 <script setup>
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { createLatestRequest, createPollLoop } from "./utils/requests.js";
 import { LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
@@ -902,6 +917,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Send,
   Server,
@@ -1038,6 +1054,8 @@ const historyPeriods = [
 
 const activeView = ref("overview");
 const toast = ref("");
+const requestError = ref("");
+let requestErrorUrl = "";
 const theme = ref(localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 const overview = ref(null);
 const overviewFresh = ref(false);
@@ -1052,9 +1070,16 @@ const connPagination = ref({ total: 0, page: 1, pages: 1 });
 const connOffset = ref(0);
 const connLimit = 80;
 const connLoading = ref(false);
+const connectionError = ref("");
 const interfaceView = ref("physical");
 const ifaceFilter = ref("all");
 const historyPeriod = ref("day");
+const historyLoading = ref(false);
+const historyUpdatedAt = ref(null);
+const historyRequest = createLatestRequest();
+const connectionRequest = createLatestRequest();
+const processRequest = createLatestRequest();
+const interfaceRequest = createLatestRequest();
 const processPeriod = ref("30s");
 const processStart = ref("");
 const processEnd = ref("");
@@ -1103,18 +1128,13 @@ const dockerEditDialog = ref(null);
 const dockerIcons = ref([]);
 const dockerEditor = reactive({ id: "", name: "", icon: "", iconKey: "", ports: [] });
 let historyChart = null;
-let overviewTimer = null;
-let processTimer = null;
-let systemTimer = null;
+let viewTimer = null;
 let connectionTimer = null;
 let dockerTimer = null;
 let connectionDebounce = null;
 let overviewLoading = false;
-let interfaceLoading = false;
-let processLoading = false;
 let systemLoading = false;
 let dockerLoading = false;
-let connectionLoading = false;
 const handleResize = () => historyChart?.resize();
 
 const connFilters = reactive({ mode: "capture", iface: "all", scope: "all", proto: "all", direction: "all", owner: "", source: "", dest: "", minBytes: null, minDuration: null });
@@ -1424,7 +1444,26 @@ async function readJson(response) {
   return data;
 }
 async function api(url, options) {
-  return readJson(await fetch(url, { cache: "no-store", ...options }));
+  const controller = new AbortController();
+  const view = activeView.value;
+  const abort = () => controller.abort();
+  options?.signal?.addEventListener("abort", abort, { once: true });
+  if (options?.signal?.aborted) abort();
+  const timer = setTimeout(abort, url.startsWith('/api/ai/') ? 190000 : 15000);
+  try {
+    const value = await readJson(await fetch(url, { cache: "no-store", ...options, signal: controller.signal }));
+    if (view === activeView.value && requestErrorUrl === url) requestError.value = "";
+    return value;
+  } catch (error) {
+    if (!options?.signal?.aborted && view === activeView.value) {
+      requestErrorUrl = url;
+      requestError.value = error.name === "AbortError" ? "请求超时，显示上次成功的数据" : `请求失败：${error.message}`;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    options?.signal?.removeEventListener("abort", abort);
+  }
 }
 function parseSseBlock(block) {
   const payload = block
@@ -1511,33 +1550,29 @@ async function refreshOverview() {
   }
 }
 async function refreshInterfaces() {
-  if (interfaceLoading) return;
-  interfaceLoading = true;
-  try {
-  snapshot.value = await api(`/api/snapshot?interfaces=${encodeURIComponent(interfaceView.value)}`);
-  } finally {
-    interfaceLoading = false;
-  }
+  return interfaceRequest.run((signal) => api(`/api/snapshot?interfaces=${encodeURIComponent(interfaceView.value)}`, { signal }), (data) => { snapshot.value = data; });
 }
 async function refreshHistory(period = historyPeriod.value) {
   historyPeriod.value = period;
-  historyData.value = await api(`/api/history?period=${encodeURIComponent(period)}`);
-  await nextTick();
-  renderHistoryChart();
+  historyLoading.value = true;
+  try {
+    await historyRequest.run((signal) => api(`/api/history?period=${encodeURIComponent(period)}`, { signal }), async (data) => {
+      historyData.value = data;
+      historyUpdatedAt.value = Date.now() / 1000;
+      await nextTick();
+      renderHistoryChart();
+    });
+  } finally {
+    historyLoading.value = historyRequest.busy;
+  }
 }
 async function refreshProcesses() {
-  if (processLoading) return;
-  processLoading = true;
-  try {
   const params = new URLSearchParams({ period: processPeriod.value, limit: "30" });
   if (processPeriod.value === "custom") {
     if (processStart.value) params.set("start", Math.floor(new Date(processStart.value).getTime() / 1000));
     if (processEnd.value) params.set("end", Math.floor(new Date(processEnd.value).getTime() / 1000));
   }
-  processes.value = (await api(`/api/processes?${params.toString()}`)).processes || [];
-  } finally {
-    processLoading = false;
-  }
+  return processRequest.run((signal) => api(`/api/processes?${params.toString()}`, { signal }), (data) => { processes.value = data.processes || []; });
 }
 async function refreshSettings() {
   settings.value = await api("/api/settings");
@@ -1834,10 +1869,14 @@ async function showDockerStats(container) {
   await refreshDockerStats(container);
 }
 async function refreshDockerStats(container) {
-  if (!container?.id) return;
+  if (!container?.id || container.statsLoading) return;
+  container.statsLoading = true;
+  try {
   const key = encodeURIComponent(container.id);
   const data = await api(`/api/docker/containers/${key}/stats`);
-  container.stats = data.stats || {};
+  if (!data.ok) throw new Error(data.detail || "容器统计暂时不可用");
+  container.stats = data.stats;
+  } finally { container.statsLoading = false; }
 }
 async function probeContainerPort(container, port) {
   const result = await api("/api/docker/ports/probe", {
@@ -1857,8 +1896,9 @@ async function probeContainerPort(container, port) {
 }
 async function refreshVisibleDockerStats() {
   if (activeView.value !== "docker") return;
-  const targets = (dockerData.value?.containers || []).filter((container) => container.showStats && container.id);
+  const targets = dockerContainers.value.filter((container) => container.showStats && container.id && isDockerCardExpanded(container));
   for (const container of targets) {
+    if (document.hidden || activeView.value !== "docker") break;
     try {
       await refreshDockerStats(container);
     } catch (error) {
@@ -1867,10 +1907,8 @@ async function refreshVisibleDockerStats() {
   }
 }
 async function refreshConnections(resetPage = false) {
-  if (connectionLoading) return;
   if (resetPage) connOffset.value = 0;
   connLoading.value = true;
-  connectionLoading = true;
   try {
     const params = new URLSearchParams({
       mode: connFilters.mode,
@@ -1887,12 +1925,15 @@ async function refreshConnections(resetPage = false) {
       limit: String(connLimit),
       offset: String(connOffset.value),
     });
-    const data = await api(`/api/connections?${params.toString()}`);
-    connections.value = data.connections || [];
-    connPagination.value = data.pagination || {};
+    await connectionRequest.run((signal) => api(`/api/connections?${params.toString()}`, { signal }), (data) => {
+      connections.value = data.connections || [];
+      connPagination.value = data.pagination || {};
+      connectionError.value = "";
+    });
+  } catch (error) {
+    connectionError.value = "刷新失败，保留上次结果";
   } finally {
-    connLoading.value = false;
-    connectionLoading = false;
+    connLoading.value = connectionRequest.busy;
   }
 }
 function renderHistoryChart() {
@@ -1920,6 +1961,8 @@ function renderHistoryChart() {
   requestAnimationFrame(() => historyChart?.resize());
 }
 function setView(view) {
+  [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
+  requestError.value = "";
   if (activeView.value === "history" && view !== "history" && historyChart) {
     historyChart.dispose();
     historyChart = null;
@@ -1927,31 +1970,43 @@ function setView(view) {
   if (view !== "docker") stopDockerTimer();
   activeView.value = view;
   refreshActive();
+  startViewTimer();
   if (view === "docker") startDockerTimer();
 }
-function refreshActive() {
-  if (activeView.value === "overview") refreshOverview();
-  if (activeView.value === "interfaces") refreshInterfaces();
-  if (activeView.value === "history") refreshHistory();
-  if (activeView.value === "processes") refreshProcesses();
+async function refreshActive() {
+  try {
+  if (activeView.value === "overview") await refreshOverview();
+  if (activeView.value === "interfaces") await refreshInterfaces();
+  if (activeView.value === "history") await refreshHistory();
+  if (activeView.value === "processes") await refreshProcesses();
   if (activeView.value === "monitor") {
-    refreshSettings();
-    refreshUploadDiagnostic();
+    await refreshSettings();
+    await refreshUploadDiagnostic();
   }
-  if (activeView.value === "settings") refreshSettings();
-  if (activeView.value === "ai") refreshAiSettings();
-  if (activeView.value === "system") refreshSystem();
-  if (activeView.value === "docker") refreshDocker();
+  if (activeView.value === "settings") await refreshSettings();
+  if (activeView.value === "ai") await refreshAiSettings();
+  if (activeView.value === "system") await refreshSystem();
+  if (activeView.value === "docker") await refreshDocker();
+  } catch (error) { console.warn("refresh failed", error); }
+}
+function startViewTimer() {
+  viewTimer?.stop();
+  const view = activeView.value;
+  const delay = { overview: 2000, interfaces: 2000, processes: 10000, system: 5000, history: 30000 }[view];
+  if (!delay) return;
+  viewTimer = createPollLoop(async () => {
+    if (historyRequest.busy || processRequest.busy || interfaceRequest.busy) return;
+    await refreshActive();
+  }, delay, { shouldRun: () => !document.hidden && activeView.value === view });
+  viewTimer.start();
 }
 function startDockerTimer() {
   stopDockerTimer();
-  dockerTimer = setInterval(() => {
-    if (activeView.value !== "docker") return;
-    refreshVisibleDockerStats();
-  }, 5000);
+  dockerTimer = createPollLoop(refreshVisibleDockerStats, 5000, { shouldRun: () => !document.hidden && activeView.value === "docker" });
+  dockerTimer.start();
 }
 function stopDockerTimer() {
-  if (dockerTimer) clearInterval(dockerTimer);
+  dockerTimer?.stop();
   dockerTimer = null;
 }
 function toggleTheme() {
@@ -1973,11 +2028,13 @@ function openWanConnections() {
   startConnectionTimer();
 }
 function startConnectionTimer() {
-  stopConnectionTimer();
-  connectionTimer = setInterval(() => refreshConnections(false), 5000);
+  connectionTimer?.stop();
+  connectionTimer = createPollLoop(() => connectionRequest.busy ? undefined : refreshConnections(false), 5000, { shouldRun: () => !document.hidden && connectionDialog.value?.open });
+  connectionTimer.start();
 }
 function stopConnectionTimer() {
-  if (connectionTimer) clearInterval(connectionTimer);
+  connectionTimer?.stop();
+  connectionRequest.cancel();
   connectionTimer = null;
 }
 function debounceConnections() {
@@ -1992,6 +2049,18 @@ async function clearAlerts() {
   await api("/api/alerts/clear", { method: "POST" });
   refreshOverview();
   if (activeView.value === "monitor") refreshUploadDiagnostic();
+}
+function protectionState(rule) { return settings.value?.monitor?.containerStates?.[rule.id] || {}; }
+async function resetProtection(rule) {
+  if (!window.confirm(`重置“${rule.name}”的保护计数并解除锁定？启用的规则将恢复监控。`)) return;
+  settings.value = await api(`/api/settings/container-protection/${encodeURIComponent(rule.id)}/reset`, { method: "POST" });
+  showToast("保护计数已重置");
+}
+async function clearTrafficHistory() {
+  if (!window.confirm("清除全部网卡和进程流量历史？此操作不可撤销。规则、通知渠道、AI 对话和告警证据会保留。")) return;
+  await api("/api/history/clear", { method: "POST" });
+  historyData.value = { buckets: [], totals: {} };
+  showToast("流量历史已清理，配置已保留");
 }
 async function saveRuntime() {
   settings.value = await api("/api/settings/runtime", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(runtimeForm) });
@@ -2324,18 +2393,28 @@ watch(theme, (value) => {
 
 onMounted(async () => {
   await refreshOverview();
-  overviewTimer = setInterval(() => {
-    if (activeView.value === "overview") refreshOverview();
-    if (activeView.value === "interfaces") refreshInterfaces();
-  }, 2000);
-  processTimer = setInterval(() => activeView.value === "processes" && refreshProcesses(), 10000);
-  systemTimer = setInterval(() => activeView.value === "system" && refreshSystem(), 3000);
+  startViewTimer();
+  document.addEventListener("visibilitychange", handleVisibility);
   window.addEventListener("resize", handleResize);
 });
 onUnmounted(() => {
-  [overviewTimer, processTimer, systemTimer, connectionTimer, dockerTimer].forEach((timer) => timer && clearInterval(timer));
+  [viewTimer, connectionTimer, dockerTimer].forEach((timer) => timer?.stop());
+  [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
+  document.removeEventListener("visibilitychange", handleVisibility);
+  window.clearTimeout(showToast.timer);
   if (connectionDebounce) clearTimeout(connectionDebounce);
   window.removeEventListener("resize", handleResize);
   historyChart?.dispose();
 });
+function handleVisibility() {
+  if (document.hidden) {
+    [viewTimer, connectionTimer, dockerTimer].forEach((timer) => timer?.stop());
+    [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
+  } else {
+    refreshActive();
+    startViewTimer();
+    if (activeView.value === "docker") startDockerTimer();
+    if (connectionDialog.value?.open) { refreshConnections(); startConnectionTimer(); }
+  }
+}
 </script>

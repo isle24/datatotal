@@ -48,17 +48,20 @@ from server.services.ai import (
     public_ai_settings,
 )
 from server.services.system_status import system_status
+from server.services.protection_state import durable_states, restore_states
 from server.services.docker_icons import get_docker_icon, list_docker_icons, match_docker_icon
 from server.services.config_assistant import (
     ProposalStore,
     configuration_schema,
     parse_configuration_response,
     validate_configuration_changes,
+    merge_configuration_collection,
 )
 from server.services.go_collector_client import (
     wait_for_probe as go_wait_for_probe,
     snapshot as go_snapshot,
     processes as go_processes,
+    process_totals as go_process_totals,
     connections as go_connections,
     diagnostics as go_diagnostics,
     stage_start as go_stage_start,
@@ -1281,6 +1284,13 @@ class TrafficDB:
             self.conn.execute("DELETE FROM alerts")
             self.conn.execute("DELETE FROM alert_evidence")
             self.conn.commit()
+
+    def clear_traffic_history(self) -> None:
+        if not self.conn:
+            raise RuntimeError("database unavailable")
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM minute_stats")
+            self.conn.execute("DELETE FROM process_minute_stats")
 
     def get_labels(self) -> Dict[str, str]:
         if not self.conn:
@@ -2790,6 +2800,10 @@ def process_period_seconds(period: str) -> int:
 class TrafficCollector:
     def __init__(self) -> None:
         self.lock = threading.RLock()
+        self.protection_lock = threading.RLock()
+        self.settings_lock = threading.RLock()
+        self.history_lock = threading.RLock()
+        self.docker_stats_locks = tuple(threading.Lock() for _ in range(32))
         self.db = TrafficDB(DB_PATH)
         self.iface_totals: Dict[str, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
         self.calibrated_iface_totals: Dict[str, Dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
@@ -2839,8 +2853,11 @@ class TrafficCollector:
         self.conntrack_summary = {"available": False, "source": "capture", "total": None, "wan": None, "lan": None}
         self.last_conntrack_refresh = 0.0
         self.last_persist_totals: Optional[dict] = None
+        self.last_persist_instance = None
         self.last_process_persist_totals: Optional[dict] = None
         self.go_collector_available = False
+        self.last_go_sample = None
+        self.last_process_instance = None
         self.high_tx_started_at: Optional[float] = None
         self.high_tx_alert_active = False
         self.stage_alert_active = False
@@ -2874,6 +2891,8 @@ class TrafficCollector:
         self.go_collector_available = go_available
         if go_available:
             print("Go collector detected — delegating packet capture to Go backend", flush=True)
+            if self.stage_started_at:
+                go_stage_start()
 
         python_capture_enabled = ENABLE_PACKET_CAPTURE and COLLECTOR_PROFILE != "low" and COLLECTOR_MODE not in {"off", "golibpcap"}
         if python_capture_enabled and not go_available:
@@ -2889,6 +2908,7 @@ class TrafficCollector:
         threading.Thread(target=self.socket_loop, daemon=True).start()
         threading.Thread(target=self.interface_loop, daemon=True).start()
         threading.Thread(target=self.conntrack_loop, daemon=True).start()
+        threading.Thread(target=self.protection_loop, daemon=True).start()
 
     def _probe_go_collector(self) -> bool:
         if not GO_COLLECTOR_ENABLED or not ENABLE_PACKET_CAPTURE or COLLECTOR_PROFILE == "low" or COLLECTOR_MODE in {"off", "python"}:
@@ -3042,6 +3062,11 @@ class TrafficCollector:
             print(f"recovered saved settings with skipped records: {self.settings_recovery}", flush=True)
         self.sync_legacy_settings()
 
+        self.container_protection_states = restore_states(
+            self.db.get_setting("container_protection_states"),
+            {rule["id"] for rule in self.container_protection_rules},
+        )
+
     def sync_legacy_settings(self) -> None:
         self.alert_settings = AlertSettings(**alert_settings_from_rules(self.monitor_rules))
         primary = next((item for item in self.notification_channels if item.get("id") == "webhook"), None)
@@ -3073,9 +3098,7 @@ class TrafficCollector:
             "blkReadBytes": blk_read,
             "blkWriteBytes": blk_write,
             "blkIoBytes": blk_io,
-            "blkReadBps": float(stats.get("blkReadBps") or 0),
-            "blkWriteBps": float(stats.get("blkWriteBps") or 0),
-            "blkIoBps": float(stats.get("blkIoBps") or 0),
+            **{key: float(stats[key]) for key in ("blkReadBps", "blkWriteBps", "blkIoBps") if stats.get(key) is not None},
         }
 
     def container_protection_metric_value(self, state: dict, stats: dict, metric: str, timestamp: float) -> float:
@@ -3171,13 +3194,13 @@ class TrafficCollector:
         ready = []
         hot = []
         details = []
-        for condition in conditions:
+        for index, condition in enumerate(conditions):
             metric = str(condition.get("metric") or "cpuPercent").strip()
             threshold = int(condition.get("threshold") or 0)
             duration = max(0, int(condition.get("durationSeconds") or 0))
             if threshold <= 0:
                 continue
-            metric_state = state["metrics"].setdefault(metric, {"startedAt": None, "active": False})
+            metric_state = state["metrics"].setdefault(f"{index}:{metric}", {"startedAt": None, "active": False})
             value = self.container_protection_metric_value(metric_state, stats, metric, timestamp)
             operator = str(condition.get("operator") or "gte").strip().lower()
             is_hot = value >= threshold if operator != "lte" else value <= threshold
@@ -3212,6 +3235,31 @@ class TrafficCollector:
         return matched, value, ready, details, bool(hot)
 
     def evaluate_container_protection(self, timestamp: float) -> List[dict]:
+        with self.protection_lock:
+            return self._evaluate_container_protection(timestamp)
+
+    def save_protection_states(self) -> None:
+        result = self.db.set_setting("container_protection_states", durable_states(
+            self.container_protection_states, {rule["id"] for rule in self.container_protection_rules},
+        ))
+        if not result.get("ok"):
+            raise RuntimeError("could not persist protection state")
+
+    def reset_container_protection(self, rule_id: str) -> dict:
+        with self.protection_lock:
+            if not any(rule.get("id") == rule_id for rule in self.container_protection_rules):
+                raise HTTPException(status_code=404, detail="rule not found")
+            previous = self.container_protection_states.pop(rule_id, None)
+            try:
+                self.save_protection_states()
+            except Exception:
+                if previous is not None:
+                    self.container_protection_states[rule_id] = previous
+                raise
+        self.record_alert("protection_reset", "info", "容器保护计数已手动重置", 0, 0, {"id": rule_id})
+        return self.get_settings()
+
+    def _evaluate_container_protection(self, timestamp: float) -> List[dict]:
         actions = []
         for rule in list(self.container_protection_rules):
             if not rule.get("enabled"):
@@ -3235,37 +3283,70 @@ class TrafficCollector:
                 state["composeProject"] = target.get("composeProject")
             if target.get("composeService"):
                 state["composeService"] = target.get("composeService")
+            if state.get("locked"):
+                continue
             stats_result = self.docker_container_stats(container_id)
             if not isinstance(stats_result, dict) or not stats_result.get("ok"):
+                state["metrics"] = {}
                 continue
+            sample_at = float(stats_result.get("cachedAt") or timestamp)
+            if timestamp - sample_at > max(10.0, DOCKER_STATS_CACHE_SECONDS * 2):
+                state["metrics"] = {}
+                continue
+            if stats_result.get("cachedAt"):
+                previous_sample = state.get("lastStatsAt")
+                if previous_sample is not None and sample_at <= previous_sample:
+                    continue
+                if previous_sample is not None and sample_at - previous_sample > max(15.0, DOCKER_STATS_CACHE_SECONDS * 3):
+                    state["metrics"] = {}
+                state["lastStatsAt"] = sample_at
             stats = self.normalize_container_stats(stats_result.get("stats") or {})
-            matched, value, ready_metrics, details, hot = self.match_container_protection(rule, stats, timestamp)
+            matched, value, ready_metrics, details, hot = self.match_container_protection(rule, stats, sample_at)
             if not hot:
-                state["count"] = 0
-                state["locked"] = False
                 state["active"] = False
                 continue
             state["active"] = bool(matched)
             cooldown = max(0, int(rule.get("cooldownSeconds") or 0))
+            if state.get("actionFailed"):
+                cooldown = max(60, cooldown)
             last_action_at = float(state.get("lastActionAt") or 0)
             if cooldown and last_action_at and timestamp - last_action_at < cooldown:
                 continue
-            if state.get("locked"):
+            if not matched:
                 continue
             desired_action = str(rule.get("action") or "restart").strip().lower()
             max_actions = max(1, int(rule.get("maxActions") or 1))
             if int(state.get("count") or 0) >= max_actions:
                 desired_action = "stop"
-                state["locked"] = True
-            if not matched and desired_action != "stop":
-                continue
-            action_result = self.docker_container_action(container_id, desired_action)
-            state["count"] = int(state.get("count") or 0) + 1
+            previous_state = copy.deepcopy(state)
+            if desired_action == "restart":
+                state["count"] = int(state.get("count") or 0) + 1
+            else:
+                state["stopAttempts"] = int(state.get("stopAttempts") or 0) + 1
             state["lastActionAt"] = timestamp
             state["lastAction"] = desired_action
-            state["reason"] = f"{desired_action} after " + ", ".join(item["metric"] for item in details)
-            if desired_action == "stop":
-                state["locked"] = True
+            state["pending"] = True
+            try:
+                self.save_protection_states()
+            except Exception:
+                state.clear()
+                state.update(previous_state, reason="action skipped: could not persist protection state")
+                continue
+            try:
+                action_result = self.docker_container_action(container_id, desired_action)
+            except Exception as exc:
+                action_result = {"ok": False, "detail": type(exc).__name__}
+            state["pending"] = False
+            state["metrics"] = {}
+            state["actionFailed"] = not action_result.get("ok")
+            state["reason"] = f"{desired_action} {'failed' if state['actionFailed'] else 'completed'}: " + ", ".join(
+                f"{item['metric']}={item['value']} threshold={item['threshold']} duration={item['durationSeconds']}s" for item in details
+            )
+            state["locked"] = desired_action == "stop" and (not state["actionFailed"] or state["stopAttempts"] >= 3)
+            try:
+                self.save_protection_states()
+            except Exception:
+                state.update(locked=True, pending=True, reason="action result could not be saved; manual reset required")
             alert_rule = {
                 **rule,
                 "containerId": container_id,
@@ -3519,38 +3600,66 @@ class TrafficCollector:
             if bucket < cutoff:
                 del self.process_recent[bucket]
 
+    def protection_loop(self) -> None:
+        while True:
+            try:
+                self.evaluate_container_protection(now())
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+            time.sleep(5)
+
+    def collect_traffic_sample(self, previous, timestamp: float) -> Optional[dict]:
+        if self.go_collector_available:
+            data = go_snapshot()
+            if not data or not data.get("interfaces"):
+                self.last_go_sample = None
+                for metric in ("wan_tx_bps", "wan_rx_bps", "lan_tx_bps", "lan_rx_bps", "stage_wan_tx_bytes"):
+                    for rule in self.monitor_rules:
+                        if rule.get("metric") == metric:
+                            self.rule_states.pop(rule["id"], None)
+                return None
+            self.last_go_sample = data
+            return {"interfaces": data["interfaces"], "rates": data.get("rates") or {}}
+        current = self.snapshot_interfaces()
+        rates = {}
+        if previous:
+            if COLLECTOR_PROFILE == "low":
+                self.record_low_profile_deltas(previous["interfaces"], current)
+            else:
+                self.calibrate_system_traffic(previous["interfaces"], current)
+            current = self.snapshot_interfaces()
+            rates = diff_rates(previous["interfaces"], current, max(0.001, timestamp - previous["timestamp"]))
+        return {"interfaces": current, "rates": rates}
+
     def rate_loop(self) -> None:
         previous = None
         last_persist = 0.0
         last_prune = 0.0
         while True:
-            current = self.snapshot_interfaces()
             current_time = now()
-            if previous:
-                elapsed = max(0.001, current_time - previous["timestamp"])
-                if COLLECTOR_PROFILE == "low":
-                    self.record_low_profile_deltas(previous["interfaces"], current)
-                else:
-                    self.calibrate_system_traffic(previous["interfaces"], current)
-                current = self.snapshot_interfaces()
-                rates = diff_rates(previous["interfaces"], current, elapsed)
-                with self.lock:
-                    self.last_rates = rates
-                    self.history.append({"timestamp": current_time, "rates": rates})
-                self.evaluate_alerts(rates, current_time)
-                self.evaluate_container_protection(current_time)
-            if current_time - last_prune >= 60:
-                self.prune_stale()
-                self.prune_recent_processes(current_time)
-                self.db.prune_old(int(current_time - HISTORY_RETENTION_DAYS * 86400))
-                last_prune = current_time
-            if current_time - last_persist >= PERSIST_INTERVAL_SECONDS:
-                persist_interfaces = self.history_persist_interfaces(current)
-                self.persist_minute(persist_interfaces, current_time)
-                self.persist_process_minute(current_time)
-                self.evaluate_daily_alert(current_time)
-                last_persist = current_time
-            previous = {"timestamp": current_time, "interfaces": current}
+            try:
+                sample = self.collect_traffic_sample(previous, current_time)
+                if sample is not None:
+                    current, rates = sample["interfaces"], sample["rates"]
+                    if rates:
+                        with self.lock:
+                            self.last_rates = rates
+                            self.history.append({"timestamp": current_time, "rates": rates})
+                        self.evaluate_alerts(rates, current_time)
+                    if current_time - last_persist >= PERSIST_INTERVAL_SECONDS:
+                        with self.history_lock:
+                            self.persist_minute(current, current_time)
+                            self.persist_process_minute(current_time)
+                        self.evaluate_daily_alert(current_time)
+                        last_persist = current_time
+                    previous = {"timestamp": current_time, "interfaces": current}
+                if current_time - last_prune >= 60:
+                    self.prune_stale()
+                    self.prune_recent_processes(current_time)
+                    self.db.prune_old(int(current_time - HISTORY_RETENTION_DAYS * 86400))
+                    last_prune = current_time
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
             time.sleep(max(0.5, SAMPLE_SECONDS))
 
     def history_persist_interfaces(self, current_interfaces: dict) -> dict:
@@ -3709,6 +3818,8 @@ class TrafficCollector:
         with self.lock:
             conntrack = dict(self.conntrack_summary)
             socket_summary = socket_connection_summary(self.socket_map)
+        if self.go_collector_available and getattr(self, "last_go_sample", None):
+            return go_connection_summary(self.last_go_sample, socket_summary)
         prefer_socket = CONNECTION_COUNT_SOURCE == "socket" and socket_summary.get("available")
         prefer_conntrack = CONNECTION_COUNT_SOURCE == "conntrack" and conntrack.get("available")
         source = "capture"
@@ -3864,6 +3975,8 @@ class TrafficCollector:
         # Use Go collector data when available
         if self.go_collector_available:
             go_data = go_snapshot()
+            if go_data is None:
+                raise HTTPException(status_code=503, detail="采集器暂时不可用，请稍后重试")
             if go_data and (go_data.get("interfaces") or go_data.get("rates") or (go_data.get("connectionSummary") or {}).get("total")):
                 return self._merge_go_snapshot(go_data, interface_view)
         return self._local_snapshot(interface_view)
@@ -3873,6 +3986,8 @@ class TrafficCollector:
         # Use Go collector data when available
         if self.go_collector_available:
             go_data = go_snapshot()
+            if go_data is None:
+                raise HTTPException(status_code=503, detail="采集器暂时不可用，请稍后重试")
             if go_data and (go_data.get("interfaces") or go_data.get("rates") or (go_data.get("connectionSummary") or {}).get("total")):
                 go_ifaces = filter_interfaces(go_data.get("interfaces") or {}, interface_view)
                 go_rates = filter_rates(go_data.get("rates") or {}, set(go_ifaces.keys()))
@@ -3923,8 +4038,9 @@ class TrafficCollector:
         # Use Go collector when available for memory period
         if self.go_collector_available and period == "30s" and not (start and end):
             go_data = go_processes(period, limit)
-            if go_data and go_data.get("processes"):
-                return go_data
+            if go_data is None:
+                raise HTTPException(status_code=503, detail="采集器暂时不可用，请稍后重试")
+            return go_data
         period = normalize_process_period(period)
         limit = max(1, min(100, int(limit or 30)))
         current = int(now())
@@ -4027,8 +4143,9 @@ class TrafficCollector:
                 limit=limit,
                 offset=offset,
             )
-            if go_data and (go_data.get("connections") or (go_data.get("summary") or {}).get("total")):
-                return go_data
+            if go_data is None:
+                raise HTTPException(status_code=503, detail="采集器暂时不可用，请稍后重试")
+            return go_data
 
         interface_view = normalize_interface_view(interface_view)
         limit = max(1, min(300, int(limit or 120)))
@@ -4071,6 +4188,7 @@ class TrafficCollector:
     def persist_minute(self, interfaces: dict, timestamp: float) -> None:
         rows = []
         current_totals = {}
+        instance = (getattr(self, "last_go_sample", None) or {}).get("instanceId") if self.go_collector_available else None
         for iface, item in interfaces.items():
             for scope, counter in item.get("scopes", {}).items():
                 current_totals.setdefault(iface, {})[scope] = counter
@@ -4080,11 +4198,14 @@ class TrafficCollector:
 
         if self.last_persist_totals is None:
             self.last_persist_totals = current_totals
+            self.last_persist_instance = instance
             return
 
         for iface, scopes in current_totals.items():
             for scope, counter in scopes.items():
                 prev = self.last_persist_totals.get(iface, {}).get(scope, {})
+                if instance != getattr(self, "last_persist_instance", None) or any(counter.get(key, 0) < prev.get(key, 0) for key in ("rxBytes", "txBytes", "rxPackets", "txPackets")):
+                    prev = {}
                 rx_delta = max(0, counter.get("rxBytes", 0) - prev.get("rxBytes", 0))
                 tx_delta = max(0, counter.get("txBytes", 0) - prev.get("txBytes", 0))
                 rxp_delta = max(0, counter.get("rxPackets", 0) - prev.get("rxPackets", 0))
@@ -4101,26 +4222,35 @@ class TrafficCollector:
                         }
                     )
 
-        self.last_persist_totals = current_totals
         self.db.add_minute(int(timestamp // 60) * 60, rows)
+        self.last_persist_totals = current_totals
+        self.last_persist_instance = instance
 
     def persist_process_minute(self, timestamp: float) -> None:
-        with self.lock:
-            current_totals = {
-                key: counter.snapshot()
-                for key, counter in self.process_totals.items()
-            }
+        instance = None
+        if self.go_collector_available:
+            data = go_process_totals()
+            if data is None or not isinstance(data.get("totals"), dict):
+                return
+            current_totals = data["totals"]
+            instance = data.get("instanceId")
+        else:
+            with self.lock:
+                current_totals = {key: counter.snapshot() for key, counter in self.process_totals.items()}
 
         if not current_totals:
             return
 
         if self.last_process_persist_totals is None:
             self.last_process_persist_totals = current_totals
+            self.last_process_instance = instance
             return
 
         rows = []
         for key, counter in current_totals.items():
             prev = self.last_process_persist_totals.get(key, {})
+            if instance != getattr(self, "last_process_instance", None) or counter.get("firstSeen") != prev.get("firstSeen"):
+                prev = {}
             rx_delta = max(0, counter.get("rxBytes", 0) - prev.get("rxBytes", 0))
             tx_delta = max(0, counter.get("txBytes", 0) - prev.get("txBytes", 0))
             rxp_delta = max(0, counter.get("rxPackets", 0) - prev.get("rxPackets", 0))
@@ -4136,8 +4266,9 @@ class TrafficCollector:
                     }
                 )
 
-        self.last_process_persist_totals = current_totals
         self.db.add_process_minute(int(timestamp // 60) * 60, rows)
+        self.last_process_persist_totals = current_totals
+        self.last_process_instance = instance
 
     def trim_counter_store(self, store: dict, max_items: int) -> None:
         if max_items <= 0 or len(store) <= max_items:
@@ -4178,9 +4309,15 @@ class TrafficCollector:
         ]
         if stage_rules and self.stage_started_at:
             stage_tx = 0
-            with self.lock:
-                for scopes in self.stage_totals.values():
-                    stage_tx += scopes.get("wan", Counter()).tx_bytes
+            if self.go_collector_available:
+                stage = (getattr(self, "last_go_sample", None) or {}).get("stage") or {}
+                if not stage.get("active"):
+                    return
+                stage_tx = sum((scopes.get("wan") or {}).get("txBytes", 0) for scopes in (stage.get("interfaces") or {}).values())
+            else:
+                with self.lock:
+                    for scopes in self.stage_totals.values():
+                        stage_tx += scopes.get("wan", Counter()).tx_bytes
             self.evaluate_monitor_rule("stage_wan_tx_bytes", stage_tx, timestamp)
 
     def evaluate_daily_alert(self, timestamp: float) -> None:
@@ -4224,14 +4361,15 @@ class TrafficCollector:
 
     def wan_connection_evidence(self, limit: int = 20) -> dict:
         safe_limit = max(1, min(50, int(limit or 20)))
-        with self.lock:
-            values = list(self.conn_totals.items())
-        rows, _summary, _total = self.connection_rows(
-            values,
-            set(),
-            limit=safe_limit,
-            filters={"scope": "wan", "direction": "tx"},
-        )
+        if self.go_collector_available:
+            data = go_connections(scope="wan", direction="tx", limit=300)
+            rows = sorted((data or {}).get("connections") or [], key=lambda row: row.get("txBytes") or 0, reverse=True)
+        else:
+            with self.lock:
+                values = list(self.conn_totals.items())
+            rows, _summary, _total = self.connection_rows(
+                values, set(), limit=safe_limit, filters={"scope": "wan", "direction": "tx"},
+            )
         process_totals: Dict[str, dict] = {}
         connections = []
         for row in rows:
@@ -4470,6 +4608,17 @@ class TrafficCollector:
 
     def history_summary(self, period: str) -> dict:
         return self.db.query_history(period)
+
+    def clear_traffic_history(self) -> dict:
+        with self.history_lock:
+            self.db.clear_traffic_history()
+            self.last_persist_totals = None
+            self.last_process_persist_totals = None
+        return {"ok": True}
+
+    def mutate_settings(self, method, *args):
+        with self.settings_lock, self.protection_lock:
+            return method(*args)
 
     def alert_history(self, start: Optional[int] = None, end: Optional[int] = None, limit: int = 100) -> dict:
         safe_end = int(end or (now() + 1))
@@ -4772,7 +4921,9 @@ class TrafficCollector:
             raise ValueError("Docker 配置格式无效")
         existing = (self.docker_overrides or {}).get("containers") or {}
         result = {"containers": {}}
-        for raw_key, raw_item in list(value.items())[:500]:
+        if len(value) > 500:
+            raise ValueError("单次最多修改 500 个 Docker 容器配置")
+        for raw_key, raw_item in value.items():
             if not isinstance(raw_item, dict):
                 raise ValueError("Docker 容器配置格式无效")
             container_id = str(raw_item.get("containerId") or "")[:12]
@@ -4790,6 +4941,8 @@ class TrafficCollector:
             port_rows = raw_item.get("ports", base.get("ports", []))
             if not isinstance(port_rows, list):
                 raise ValueError("Docker 端口配置格式无效")
+            if len(port_rows) > 100:
+                raise ValueError("单个容器最多修改 100 个端口")
             try:
                 payload = DockerContainerPortsPayload(
                     containerId=container_id,
@@ -4798,6 +4951,8 @@ class TrafficCollector:
                     ports=[DockerPortPayload(**item) for item in port_rows[:100]],
                 )
                 cleaned = sanitize_docker_overrides(payload)
+                if raw_key in existing and raw_key != cleaned["key"]:
+                    raise ValueError("容器标识不能直接更改；请新增配置并明确删除旧项")
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"Docker 端口配置无效：{exc}") from None
             if icon_key:
@@ -4807,12 +4962,21 @@ class TrafficCollector:
 
     def _apply_ai_configuration_changes(self, changes: list[dict], current: dict) -> dict:
         next_snapshot = copy.deepcopy(current)
+        collections = {
+            "monitor.rules": self.monitor_rules,
+            "notifications.channels": self.notification_channels,
+            "containerProtection.rules": self.container_protection_rules,
+            "docker.containers": (self.docker_overrides or {}).get("containers", {}),
+        }
         for change in changes:
             parts = change["path"].split(".")
             target = next_snapshot
             for part in parts[:-1]:
                 target = target.setdefault(part, {})
-            target[parts[-1]] = copy.deepcopy(change["newValue"])
+            target[parts[-1]] = (
+                merge_configuration_collection(collections[change["path"]], change["newValue"], change.get("removeIds", []))
+                if change["path"] in collections else copy.deepcopy(change["newValue"])
+            )
 
         runtime_settings = None
         monitor_rows = None
@@ -4848,7 +5012,11 @@ class TrafficCollector:
                     ai_payload[change["path"].split(".", 1)[1]] = change["newValue"]
             ai_settings = normalize_ai_settings(ai_payload, existing=self.ai_settings)
         if "docker.containers" in changed_paths:
-            docker_overrides = self._sanitize_ai_docker_overrides(next_snapshot["docker"]["containers"])
+            change = next(item for item in changes if item["path"] == "docker.containers")
+            updates = self._sanitize_ai_docker_overrides(change["newValue"])["containers"]
+            docker_overrides = {"containers": merge_configuration_collection(
+                collections["docker.containers"], updates, change.get("removeIds", []),
+            )}
 
         settings_to_save = {}
         if runtime_settings is not None:
@@ -4911,6 +5079,10 @@ class TrafficCollector:
         return {"ok": True}
 
     def get_settings(self) -> dict:
+        with self.settings_lock, self.protection_lock:
+            return self._get_settings()
+
+    def _get_settings(self) -> dict:
         self.sync_legacy_settings()
         ai_settings = normalize_ai_settings(getattr(self, "ai_settings", None))
         return {
@@ -4929,6 +5101,7 @@ class TrafficCollector:
                 "rules": self.monitor_rules,
                 "channels": self.notification_channels,
                 "containerRules": self.container_protection_rules,
+                "containerStates": copy.deepcopy(self.container_protection_states),
             },
             "runtime": {
                 "appPort": APP_PORT,
@@ -5075,6 +5248,12 @@ class TrafficCollector:
 
     def docker_container_stats(self, container_id: str, refresh: bool = False) -> dict:
         selected = str(container_id or "").strip().lstrip("/")[:12]
+        requested_at = now()
+        with self.docker_stats_locks[hash(selected) % len(self.docker_stats_locks)]:
+            return self._docker_container_stats(selected, refresh, requested_at)
+
+    def _docker_container_stats(self, container_id: str, refresh: bool, requested_at: float) -> dict:
+        selected = str(container_id or "").strip().lstrip("/")[:12]
         if not selected:
             return {"ok": False, "detail": "missing container id"}
         self.refresh_container_ports()
@@ -5085,8 +5264,8 @@ class TrafficCollector:
         current_time = now()
         with self.lock:
             cached = self.docker_stats_cache.get(selected)
-            if cached and not refresh and current_time - float(cached.get("cachedAt") or 0) < max(1.0, DOCKER_STATS_CACHE_SECONDS):
-                return {"ok": True, "cached": True, "stats": cached.get("stats") or {}}
+            if cached and (not refresh or cached.get("cachedAt", 0) >= requested_at) and current_time - float(cached.get("cachedAt") or 0) < max(1.0, DOCKER_STATS_CACHE_SECONDS):
+                return {"ok": bool(cached.get("stats")), "cached": True, "stats": cached.get("stats") or {}, "cachedAt": cached.get("cachedAt")}
         stats = docker_container_stats(selected)
         cached = {"cachedAt": now(), "stats": stats}
         with self.lock:
@@ -5152,8 +5331,10 @@ class TrafficCollector:
         return self.get_settings()
 
     def update_container_protection_rules(self, payload: ContainerProtectionRulesPayload) -> dict:
-        self.container_protection_rules = [sanitize_container_protection_rule(rule) for rule in payload.rules]
-        self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
+        rows = [sanitize_container_protection_rule(rule) for rule in payload.rules]
+        with self.protection_lock:
+            self.db.set_setting("container_protection_rules", {"rules": rows})
+            self.container_protection_rules = rows
         return self.get_settings()
 
     def update_runtime_settings(self, payload: RuntimeSettingsPayload) -> dict:
@@ -5782,6 +5963,13 @@ LOGIN_HTML = """
 
 
 collector = TrafficCollector()
+api_io_slots = asyncio.Semaphore(8)
+
+
+async def run_blocking(method, *args):
+    async with api_io_slots:
+        return await asyncio.to_thread(method, *args)
+
 login_failures: Dict[str, deque] = defaultdict(lambda: deque(maxlen=LOGIN_MAX_ATTEMPTS))
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -5873,17 +6061,17 @@ async def auth_logout() -> JSONResponse:
 
 @app.get("/api/snapshot")
 async def snapshot(interfaces: str = "physical") -> dict:
-    return collector.api_snapshot(interfaces)
+    return await run_blocking(collector.api_snapshot, interfaces)
 
 
 @app.get("/api/overview")
 async def overview(interfaces: str = "physical") -> dict:
-    return collector.api_overview(interfaces)
+    return await run_blocking(collector.api_overview, interfaces)
 
 
 @app.get("/api/processes")
 async def processes(period: str = "30s", limit: int = 30, start: Optional[int] = None, end: Optional[int] = None) -> dict:
-    return collector.process_rank(period, limit, start, end)
+    return await run_blocking(collector.process_rank, period, limit, start, end)
 
 
 @app.get("/api/connections")
@@ -5902,7 +6090,7 @@ async def connections(
     limit: int = 120,
     offset: int = 0,
 ) -> dict:
-    return collector.connection_detail(
+    return await run_blocking(collector.connection_detail,
         mode,
         interfaces,
         iface,
@@ -5921,42 +6109,52 @@ async def connections(
 
 @app.get("/api/history")
 async def history(period: str = "day") -> dict:
-    return collector.history_summary(period)
+    return await run_blocking(collector.history_summary, period)
+
+
+@app.post("/api/history/clear")
+async def clear_traffic_history() -> dict:
+    return await run_blocking(collector.clear_traffic_history)
 
 
 @app.get("/api/settings")
 async def settings() -> dict:
-    return collector.get_settings()
+    return await run_blocking(collector.get_settings)
 
 
 @app.post("/api/settings/alerts")
 async def update_alerts(settings_payload: AlertSettings) -> dict:
-    return collector.update_alert_settings(settings_payload)
+    return await run_blocking(collector.mutate_settings, collector.update_alert_settings, settings_payload)
 
 
 @app.post("/api/settings/notify")
 async def update_notify(settings_payload: NotifySettings) -> dict:
-    return collector.update_notify_settings(settings_payload)
+    return await run_blocking(collector.mutate_settings, collector.update_notify_settings, settings_payload)
 
 
 @app.post("/api/settings/monitor")
 async def update_monitor(payload: MonitorRulesPayload) -> dict:
-    return collector.update_monitor_rules(payload)
+    return await run_blocking(collector.mutate_settings, collector.update_monitor_rules, payload)
 
 
 @app.post("/api/settings/channels")
 async def update_channels(payload: NotificationChannelsPayload) -> dict:
-    return collector.update_notification_channels(payload)
+    return await run_blocking(collector.mutate_settings, collector.update_notification_channels, payload)
 
 
 @app.post("/api/settings/container-protection")
 async def update_container_protection(payload: ContainerProtectionRulesPayload) -> dict:
-    return collector.update_container_protection_rules(payload)
+    return await run_blocking(collector.mutate_settings, collector.update_container_protection_rules, payload)
+
+
+@app.post("/api/settings/container-protection/{rule_id}/reset")
+async def reset_container_protection(rule_id: str) -> dict:
+    return await run_blocking(collector.mutate_settings, collector.reset_container_protection, rule_id)
 
 
 @app.post("/api/settings/runtime")
 async def update_runtime(payload: RuntimeSettingsPayload) -> dict:
-    return collector.update_runtime_settings(payload)
+    return await run_blocking(collector.mutate_settings, collector.update_runtime_settings, payload)
 
 
 @app.get("/api/settings/ai")
@@ -5966,7 +6164,7 @@ async def ai_settings() -> dict:
 
 @app.post("/api/settings/ai")
 async def update_ai_settings(payload: AISettingsPayload) -> dict:
-    return collector.update_ai_settings(payload)
+    return await run_blocking(collector.mutate_settings, collector.update_ai_settings, payload)
 
 
 @app.get("/api/ai/history")
@@ -6068,17 +6266,17 @@ async def ai_configure(payload: AIConfigurePayload) -> dict:
 
 @app.post("/api/ai/configure/apply")
 async def ai_configure_apply(payload: AIConfigureApplyPayload) -> dict:
-    return await asyncio.to_thread(collector.apply_ai_configuration_proposal, payload.proposalId)
+    return await run_blocking(collector.mutate_settings, collector.apply_ai_configuration_proposal, payload.proposalId)
 
 
 @app.post("/api/notifications/test")
 async def test_notification(payload: NotificationTestPayload) -> dict:
-    return collector.test_notification_channel(payload.channelId)
+    return await run_blocking(collector.test_notification_channel, payload.channelId)
 
 
 @app.post("/api/labels")
 async def set_label(payload: LabelPayload) -> dict:
-    return collector.set_label(payload.key, payload.label)
+    return await run_blocking(collector.set_label, payload.key, payload.label)
 
 
 @app.get("/api/alerts")
@@ -6088,7 +6286,7 @@ async def alerts(start: Optional[int] = None, end: Optional[int] = None, limit: 
 
 @app.post("/api/alerts/clear")
 async def clear_alerts() -> dict:
-    return collector.clear_alerts()
+    return await run_blocking(collector.clear_alerts)
 
 
 @app.get("/api/logs")
@@ -6103,37 +6301,37 @@ async def docker_icons() -> dict:
 
 @app.get("/api/docker/containers")
 async def docker_containers() -> dict:
-    return collector.docker_containers()
+    return await run_blocking(collector.docker_containers)
 
 
 @app.get("/api/docker/containers/{container_id}")
 async def docker_container_detail_api(container_id: str) -> dict:
-    return collector.docker_container_detail(container_id)
+    return await run_blocking(collector.docker_container_detail, container_id)
 
 
 @app.get("/api/docker/containers/{container_id}/stats")
 async def docker_container_stats_api(container_id: str, refresh: bool = False) -> dict:
-    return collector.docker_container_stats(container_id, refresh)
+    return await run_blocking(collector.docker_container_stats, container_id, refresh)
 
 
 @app.post("/api/docker/containers/ports")
 async def update_docker_ports(payload: DockerContainerPortsPayload) -> dict:
-    return collector.update_docker_container_ports(payload)
+    return await run_blocking(collector.mutate_settings, collector.update_docker_container_ports, payload)
 
 
 @app.post("/api/docker/ports/probe")
 async def probe_docker_port(payload: DockerPortProbePayload) -> dict:
-    return collector.docker_port_probe(payload)
+    return await run_blocking(collector.docker_port_probe, payload)
 
 
 @app.get("/api/system")
 async def system() -> dict:
-    return system_status()
+    return await run_blocking(system_status)
 
 
 @app.get("/api/health")
 async def health() -> dict:
-    diagnostics = collector.diagnostics()
+    diagnostics = await run_blocking(collector.diagnostics)
     return {
         "ok": True,
         "version": APP_VERSION,
@@ -6148,7 +6346,7 @@ async def health() -> dict:
 
 @app.get("/api/diagnostics")
 async def diagnostics() -> dict:
-    return collector.diagnostics()
+    return await run_blocking(collector.diagnostics)
 
 
 @app.get("/api/diagnostics/upload")
@@ -6161,22 +6359,22 @@ async def upload_diagnostics(date: str) -> dict:
 
 @app.post("/api/stage/start")
 async def stage_start(interfaces: str = "physical") -> dict:
-    return collector.start_stage(interfaces)
+    return await run_blocking(collector.start_stage, interfaces)
 
 
 @app.post("/api/stage/stop")
 async def stage_stop(interfaces: str = "physical") -> dict:
-    return collector.stop_stage(interfaces)
+    return await run_blocking(collector.stop_stage, interfaces)
 
 
 @app.post("/api/stage/resume")
 async def stage_resume(interfaces: str = "physical") -> dict:
-    return collector.resume_stage(interfaces)
+    return await run_blocking(collector.resume_stage, interfaces)
 
 
 @app.post("/api/stage/reset")
 async def stage_reset(interfaces: str = "physical") -> dict:
-    return collector.reset_stage(interfaces)
+    return await run_blocking(collector.reset_stage, interfaces)
 
 
 if FRONTEND_DIR.exists():

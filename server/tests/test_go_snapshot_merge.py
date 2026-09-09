@@ -1,6 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -11,6 +11,9 @@ import server.main as main
 def make_collector():
     collector = main.TrafficCollector.__new__(main.TrafficCollector)
     collector.lock = main.threading.RLock()
+    collector.protection_lock = main.threading.RLock()
+    collector.db = Mock()
+    collector.db.set_setting.return_value = {"ok": True}
     collector.capture_interfaces = ["eth0"]
     collector.go_collector_available = False
     collector.conntrack_summary = {"available": False, "source": "capture", "total": 0, "wan": 0, "lan": 0, "rawTotal": 0, "mode": "active"}
@@ -165,7 +168,7 @@ def test_go_snapshot_uses_socket_summary_when_go_conntrack_is_unavailable():
     assert result["connectionSummary"]["lan"] == 1
 
 
-def test_go_processes_empty_list_falls_back_to_local_rank():
+def test_go_processes_empty_list_does_not_resurrect_local_rank():
     collector = make_collector()
     collector.go_collector_available = True
     bucket = int(main.now())
@@ -174,12 +177,10 @@ def test_go_processes_empty_list_falls_back_to_local_rank():
     with patch.object(main, "go_processes", return_value={"period": "30s", "processes": []}):
         result = collector.process_rank("30s", 10)
 
-    assert result["source"] == "memory"
-    assert len(result["processes"]) == 1
-    assert result["processes"][0]["name"] == "qbittorrent"
+    assert result["processes"] == []
 
 
-def test_go_connections_empty_list_falls_back_to_local_connections():
+def test_go_connections_empty_list_does_not_resurrect_local_connections():
     collector = make_collector()
     collector.go_collector_available = True
     collector.conn_totals = {
@@ -211,9 +212,8 @@ def test_go_connections_empty_list_falls_back_to_local_connections():
         with patch.object(collector, "snapshot_interfaces", return_value=local_interfaces):
             result = collector.connection_detail(mode="capture", interface_view="physical")
 
-    assert result["source"] == "capture"
-    assert len(result["connections"]) == 1
-    assert result["summary"]["total"] == 1
+    assert result["connections"] == []
+    assert result["summary"]["total"] == 0
 
 
 def test_history_persist_prefers_go_snapshot_when_available_and_ignores_empty_local_snapshot():

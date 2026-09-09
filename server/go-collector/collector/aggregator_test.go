@@ -5,6 +5,16 @@ import (
 	"time"
 )
 
+func TestProcessTotalsSnapshotIsDetached(t *testing.T) {
+	a := NewAggregator()
+	a.ProcessTotals["demo"] = &Counter{TxBytes: 100, FirstSeen: 1}
+	data := a.ProcessTotalsSnapshot()
+	a.ProcessTotals["demo"].Add("tx", 50, 1)
+	if data["demo"].TxBytes != 100 || a.ProcessTotalsSnapshot()["demo"].TxBytes != 150 {
+		t.Fatal("export must snapshot every counter without sharing mutable values")
+	}
+}
+
 func TestConnectionEntriesFiltersSortsAndPaginates(t *testing.T) {
 	agg := NewAggregator()
 	nowMs := nowUnixMillis()

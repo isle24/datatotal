@@ -155,6 +155,16 @@ func (a *Aggregator) PacketWeight(maxEPS, baseRate, maxRate int, dynamic bool) i
 	return sampleRate
 }
 
+func (a *Aggregator) ProcessTotalsSnapshot() map[string]CounterData {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result := make(map[string]CounterData, len(a.ProcessTotals))
+	for key, counter := range a.ProcessTotals {
+		result[key] = counter.Snapshot()
+	}
+	return result
+}
+
 func (a *Aggregator) StartStage() {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -44,6 +44,7 @@ _FIELDS = (
 )
 
 CONFIGURATION_SCHEMA = {item["path"]: dict(item) for item in _FIELDS}
+COLLECTION_PATHS = {"monitor.rules", "notifications.channels", "containerProtection.rules", "docker.containers"}
 _SENSITIVE_PARTS = {
     "apikey",
     "api_key",
@@ -71,6 +72,7 @@ def configuration_schema() -> dict:
             "Only return paths listed in fields.",
             "Never request, read, replace or remove passwords, API keys, tokens, sockets, paths, SQL or commands.",
             "Return JSON only with a changes array.",
+            "Collection values are upserts by id (Docker uses object keys). Omitted entries are preserved. Only removeIds explicitly deletes entries.",
         ],
     }
 
@@ -186,16 +188,43 @@ def validate_configuration_changes(changes: list[dict], current: dict) -> list[d
             raise ValueError(f"设置路径重复：{path}")
         seen.add(path)
         value = item.get("value", item.get("newValue"))
+        remove_ids = item.get("removeIds", [])
+        if not isinstance(remove_ids, list) or len(remove_ids) > 100 or any(not isinstance(key, str) for key in remove_ids):
+            raise ValueError("removeIds 必须为最多 100 项的 ID 列表")
+        old_value = _path_value(current, path)
+        if path in COLLECTION_PATHS:
+            old_ids = set(old_value) if isinstance(old_value, dict) else {row.get("id") for row in old_value or [] if isinstance(row, dict)}
+            new_ids = list(value) if isinstance(value, dict) else [row.get("id") for row in value or [] if isinstance(row, dict)]
+            if not isinstance(value, (list, dict)) or (isinstance(value, list) and len(new_ids) != len(value)) or any(not isinstance(key, str) or not key.strip() for key in new_ids) or len(new_ids) != len(set(new_ids)):
+                raise ValueError("配置条目必须有唯一 ID")
+            if any(key not in old_ids for key in remove_ids) or set(remove_ids) & set(new_ids):
+                raise ValueError("删除 ID 不存在或同时出现在修改列表中")
+        elif remove_ids:
+            raise ValueError("只有配置列表支持 removeIds")
         validated.append(
             {
                 "path": path,
-                "oldValue": _path_value(current, path),
+                "oldValue": old_value,
                 "newValue": _validate_value(field, value),
+                "removeIds": remove_ids,
                 "summary": str(item.get("summary") or field["label"]).strip()[:240],
-                "risk": str(item.get("risk") or "低").strip()[:40],
+                "risk": "高" if remove_ids or path.startswith("containerProtection.") or path == "ai.baseUrl" else "低",
             }
         )
     return validated
+
+
+def merge_configuration_collection(current, updates, remove_ids):
+    removed = set(remove_ids)
+    if isinstance(current, dict):
+        result = copy.deepcopy({key: value for key, value in current.items() if key not in removed})
+        for key, value in updates.items():
+            result[key] = {**result.get(key, {}), **copy.deepcopy(value)}
+        return result
+    result = {row["id"]: copy.deepcopy(row) for row in current if row["id"] not in removed}
+    for row in updates:
+        result[row["id"]] = {**result.get(row["id"], {}), **copy.deepcopy(row)}
+    return list(result.values())
 
 
 class ProposalStore:

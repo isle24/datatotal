@@ -461,6 +461,7 @@ def test_record_alert_captures_active_wan_process_and_missing_channel_result():
         collector.lock = main.threading.RLock()
         collector.alerts = deque(maxlen=20)
         collector.notification_channels = []
+        collector.go_collector_available = False
         process_key = main.process_key_for({
             "pid": 88,
             "name": "xunlei",

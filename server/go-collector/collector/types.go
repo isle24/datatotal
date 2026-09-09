@@ -308,6 +308,7 @@ type StageResponse struct {
 
 // SnapshotResponse is the full snapshot payload.
 type SnapshotResponse struct {
+	InstanceID        string                    `json:"instanceId"`
 	Timestamp         float64                   `json:"timestamp"`
 	Interfaces        map[string]InterfaceState `json:"interfaces"`
 	Rates             map[string]InterfaceRate  `json:"rates"`

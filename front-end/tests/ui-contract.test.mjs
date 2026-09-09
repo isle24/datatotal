@@ -36,7 +36,7 @@ test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(source, /\/api\/ai\/history/);
   assert.match(source, /清空记录/);
   assert.match(source, /if \(activeView\.value === "settings"\) refreshDockerContainerOptions\(\)/);
-  assert.match(source, /if \(activeView\.value === "ai"\) refreshAiSettings\(\)/);
+  assert.match(source, /if \(activeView\.value === "ai"\) await refreshAiSettings\(\)/);
   assert.match(source, /setView\("ai"\)/);
   assert.match(source, /manualOnly/);
   assert.match(source, /function dockerNetworkLabel/);

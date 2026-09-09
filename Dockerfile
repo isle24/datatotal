@@ -52,6 +52,6 @@ COPY VERSION /app/VERSION
 
 RUN chmod +x /app/bin/go-collector /app/server/entrypoint.sh
 
-EXPOSE 8088 18088
+EXPOSE 8088
 
 CMD ["/app/server/entrypoint.sh"]
