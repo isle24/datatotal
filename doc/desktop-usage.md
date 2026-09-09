@@ -84,7 +84,7 @@ Tauri 配置版本与 Rust workspace 版本均为桌面 `0.2.0`，两者需同�
 
 流水线在 Windows 原生 runner 上安装依赖，运行 Rust 核心与前端回归测试，构建 NAS Web 确保兼容，再构建桌面安装器并保存 30 天 Artifact。工作流只需要仓库读取权限，不需要 DockerHub 凭据、NAS 密码或发行证书。
 
-0.1.0 的主分支验证构建为 [Actions run 34314618578](https://github.com/isle24/datatotal/actions/runs/34314618578)，源码提交 `6187873`，Windows 安装包保存在该运行的 `Traffic-Lens-Windows-x64-2` Artifact。后续重新构建请使用工作流页面，以免下载已过期的 Artifact。
+0.2.0 的主分支构建为 [Actions run 34319823942](https://github.com/isle24/datatotal/actions/runs/34319823942)，源码提交 `fdd6d06`，Windows 安装包保存在该运行的 `Traffic-Lens-Windows-x64-3` Artifact。GitHub Release 中的 EXE 使用便于下载校验的名称 `Traffic-Lens-0.2.0-Windows-x64-setup.exe`，与 Actions 安装器内容一致。后续重新构建请使用工作流页面，以免下载已过期的 Artifact。
 
 ## 验收边界
 
