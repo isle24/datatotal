@@ -1107,7 +1107,7 @@ label.check input, label.switch input { width: auto; min-height: auto; }
 }
 
 @media (max-width: 1020px) {
-  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .app-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   .sidebar {
     position: static;
     width: 100%;

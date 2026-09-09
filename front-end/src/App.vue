@@ -1,6 +1,6 @@
 <template>
-  <div class="app-shell">
-    <aside class="sidebar">
+  <div class="app-shell" :class="{ 'nas-native-content': native }">
+    <aside v-if="!native" class="sidebar">
       <div class="brand">
         <div class="brand-mark"><Activity :size="22" /></div>
         <div>
@@ -17,7 +17,7 @@
     </aside>
 
     <main class="main">
-      <header class="topbar">
+      <header v-if="!native" class="topbar">
         <div>
           <p class="eyebrow">{{ subtitle }}</p>
           <h2>{{ currentTitle }}</h2>
@@ -39,7 +39,9 @@
       </header>
       <div v-if="requestError" class="request-error" role="alert"><CircleAlert :size="18" /><span>{{ requestError }}</span><button type="button" @click="refreshActive"><RefreshCw :size="15" />重试</button></div>
 
+      <NavigationView v-if="activeView === 'navigation'" :repository="bookmarks" :scope="targetName || '此 NAS'" />
       <section v-if="activeView === 'overview'" class="view">
+        <slot name="overview" :summary="summary" :overview="overview" :connections="connectionSummary" :connection-source="connectionSourceLabel" :fresh="overviewIsFresh" :updated="lastUpdated" :open-connections="openConnections" :navigate="setView" :analyze="() => analyzeWithAi('overview')">
         <section class="dashboard-board">
           <div class="dashboard-board-header">
             <div class="dashboard-board-title">
@@ -136,6 +138,7 @@
             </div>
           </section>
         </div>
+        </slot>
       </section>
 
       <section v-if="activeView === 'interfaces'" class="view">
@@ -339,6 +342,7 @@
                   </div>
                   <span :class="['pill', port.accessMode === 'web' ? 'ok' : '']">{{ port.accessMode === "web" ? "Web" : "非 Web" }}</span>
                   <button v-if="port.accessMode === 'web'" type="button" title="打开 Web 端口" @click.stop="openContainerPort(port)"><ExternalLink :size="15" />打开</button>
+                  <button v-if="port.accessMode === 'web'" type="button" title="加入服务导航" @click.stop="addDockerNavigation(container, port)"><Compass :size="15" />加入导航</button>
                   <button v-else-if="port.accessMode !== 'hidden'" type="button" title="复制连接地址" @click.stop="copyContainerPort(port)"><Copy :size="15" />复制</button>
                   <button v-if="port.accessMode !== 'web' && port.accessMode !== 'hidden' && port.proto === 'tcp'" type="button" title="探测是否为 Web 服务" @click.stop="probeContainerPort(container, port)"><ExternalLink :size="15" />探测</button>
                   <span v-if="port.accessMode === 'hidden'" class="muted">已隐藏</span>
@@ -906,6 +910,7 @@ import {
   CircleOff,
   CircleAlert,
   Copy,
+  Compass,
   Cpu,
   Database,
   ExternalLink,
@@ -964,6 +969,7 @@ const InfoItem = defineComponent({
 });
 
 const navItems = [
+  { key: "navigation", label: "导航", icon: Compass },
   { key: "overview", label: "概览", icon: Activity },
   { key: "interfaces", label: "网卡", icon: Network },
   { key: "history", label: "历史", icon: History },
@@ -1047,8 +1053,18 @@ const historyPeriods = [
   { key: "year", label: "今年" },
 ];
 
-const activeView = ref("overview");
+const props = defineProps({ native: Boolean, view: String, targetName: String, themeMode: String });
+const emit = defineEmits(['view', 'toast']);
+const activeView = ref(props.view || "overview");
+watch(() => props.view, view => { if (view && view !== activeView.value) setView(view); });
+watch(() => props.native, () => nextTick(handleResize));
+defineExpose({ refresh: refreshActive });
+import NavigationView from './components/NavigationView.vue';
+import { navigationRepository } from './api/navigation.js';
+import { dockerBookmark, navigationIcon, serviceUrl } from './utils/navigation.js';
+const bookmarks = navigationRepository(api, transport);
 const toast = ref("");
+watch(toast, value => emit('toast', value));
 const requestError = ref("");
 let requestErrorUrl = "";
 const theme = ref(localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
@@ -1417,27 +1433,8 @@ function channelTypeLabel(type) {
 function rateOf(name, scope, key) {
   return snapshot.value?.rates?.[name]?.scopes?.[scope]?.[key] || 0;
 }
-async function readJson(response) {
-  if (response.status === 401) {
-    transport.authenticationRequired();
-    throw new Error("authentication required");
-  }
-  const text = await response.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch (error) {
-    if (!response.ok) throw new Error(text || response.statusText || "请求失败");
-    throw error;
-  }
-  if (!response.ok) {
-    const error = new Error(Array.isArray(data?.detail) ? "请求参数无效" : (data?.detail || text || response.statusText || "请求失败"));
-    error.detail = data?.detail;
-    error.status = response.status;
-    throw error;
-  }
-  return data;
-}
+import { readApiJson } from './api/json.js';
+const readJson = response => readApiJson(response, () => transport.authenticationRequired());
 async function api(url, options) {
   if (disposed) throw new DOMException("页面已关闭", "AbortError");
   const controller = new AbortController();
@@ -1451,7 +1448,7 @@ async function api(url, options) {
     if (view === activeView.value && requestErrorUrl === url) requestError.value = "";
     return value;
   } catch (error) {
-    if (!options?.signal?.aborted && view === activeView.value) {
+    if (!options?.localError && !options?.signal?.aborted && view === activeView.value) {
       requestErrorUrl = url;
       requestError.value = error.name === "AbortError" ? "请求超时，显示上次成功的数据" : `请求失败：${error.message}`;
     }
@@ -1965,6 +1962,7 @@ function setView(view) {
   }
   if (view !== "docker") stopDockerTimer();
   activeView.value = view;
+  emit('view', view);
   refreshActive();
   startViewTimer();
   if (view === "docker") startDockerTimer();
@@ -2286,11 +2284,15 @@ async function editLabel(key, current) {
   refreshConnections();
 }
 function openContainerPort(port) {
-  const protocol = port.scheme === "https" ? "https:" : "http:";
-  const host = transport.hostname();
-  const path = port.path || "/";
-  const url = `${protocol}//${host}:${port.hostPort}${path.startsWith("/") ? path : `/${path}`}`;
-  transport.open(url);
+  transport.open(serviceUrl(port, transport.hostname()));
+}
+async function addDockerNavigation(container, port) {
+  try {
+    const entry = dockerBookmark(container, port, transport.hostname());
+    entry.icon = await navigationIcon(entry.icon);
+    await bookmarks.save(entry);
+    showToast('已加入导航');
+  } catch (error) { showToast(error.message || String(error)); }
 }
 function containerPortAddress(port) {
   return `${transport.hostname()}:${port.hostPort}`;
@@ -2388,9 +2390,11 @@ watch(theme, (value) => {
   localStorage.setItem("ntl-theme", value);
   nextTick(renderHistoryChart);
 }, { immediate: true });
+watch(() => props.themeMode, value => { if (value === 'dark' || value === 'light') theme.value = value; });
 
 onMounted(async () => {
   await refreshOverview();
+  if (!disposed && activeView.value !== 'overview') await refreshActive();
   if (disposed) return;
   startViewTimer();
   document.addEventListener("visibilitychange", handleVisibility);

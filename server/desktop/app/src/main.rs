@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod controllers;
+mod navigation;
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -31,6 +32,8 @@ fn main() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -92,6 +95,10 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            navigation::local_navigation,
+            navigation::save_navigation,
+            navigation::delete_navigation,
+            navigation::set_nas_layout,
             controllers::local_snapshot,
             controllers::local_history,
             controllers::desktop_config,

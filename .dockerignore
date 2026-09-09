@@ -6,6 +6,10 @@ __pycache__
 node_modules
 front-end/node_modules
 front-end/dist
+front-end/dist-desktop
+server/desktop
+artifacts
+nas-traffic-lens-*.tar
 npm-debug.log
 data
 logs

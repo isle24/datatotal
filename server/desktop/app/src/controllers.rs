@@ -35,14 +35,20 @@ pub async fn local_history(
 #[tauri::command]
 pub fn desktop_config(state: State<AppState>) -> Result<Value> {
     let db = state.monitor.store.lock().unwrap();
+    let layouts: serde_json::Map<String, Value> = db
+        .profiles()?
+        .into_iter()
+        .map(|p| Ok((p.id.clone(), json!(db.nas_layout(&p.id)?))))
+        .collect::<Result<_>>()?;
+    let check_updates = db.setting("checkUpdates")?.unwrap_or(json!(true));
     Ok(
-        json!({"version":env!("CARGO_PKG_VERSION"),"profiles":db.profiles()?,"connected":state.nas.connected(),"closeToTray":db.setting("closeToTray")?.unwrap_or(json!(true)),"retentionDays":db.setting("retentionDays")?.unwrap_or(json!(30)),"interface":db.setting("interface")?.unwrap_or(json!(""))}),
+        json!({"version":env!("CARGO_PKG_VERSION"),"profiles":db.profiles()?,"layouts":layouts,"checkUpdates":check_updates,"connected":state.nas.connected(),"closeToTray":db.setting("closeToTray")?.unwrap_or(json!(true)),"retentionDays":db.setting("retentionDays")?.unwrap_or(json!(30)),"interface":db.setting("interface")?.unwrap_or(json!(""))}),
     )
 }
 #[tauri::command]
 pub fn set_preference(state: State<AppState>, key: String, value: Value) -> Result<()> {
     let valid = match key.as_str() {
-        "closeToTray" => value.is_boolean(),
+        "closeToTray" | "checkUpdates" => value.is_boolean(),
         "retentionDays" => value.as_u64().is_some_and(|v| (1..=365).contains(&v)),
         "interface" => value.as_str().is_some_and(|v| v.len() <= 256),
         _ => false,

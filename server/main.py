@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from scapy.all import IP, TCP, UDP, IPv6, AsyncSniffer, conf
+from server.controllers.navigation import navigation_router
 
 from server.services.notifications import (
     DEFAULT_NOTIFY_BODY_TEMPLATE,
@@ -5972,6 +5973,7 @@ async def run_blocking(method, *args):
 
 login_failures: Dict[str, deque] = defaultdict(lambda: deque(maxlen=LOGIN_MAX_ATTEMPTS))
 app = FastAPI(title=APP_NAME)
+app.include_router(navigation_router(collector.db, run_blocking))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
@@ -6383,6 +6385,8 @@ if FRONTEND_DIR.exists():
 
 @app.get("/{path:path}")
 async def frontend(path: str):
+    if path == 'api' or path.startswith('api/'):
+        raise HTTPException(404, 'API endpoint not available in this server version')
     index = FRONTEND_DIR / "index.html"
     if index.exists():
         return FileResponse(index)

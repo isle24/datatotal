@@ -1,0 +1,407 @@
+.dn-workspace {
+  display: grid;
+  grid-template-columns: 202px minmax(0, 1fr);
+  min-height: calc(100vh - 104px);
+  background: var(--ds-bg);
+}
+.dn-sidebar {
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--ds-line);
+  background: var(--ds-surface);
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 104px);
+}
+.dn-sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px 26px;
+}
+.dn-sidebar-title > svg {
+  color: var(--ds-accent);
+  flex-shrink: 0;
+}
+.dn-sidebar-title div {
+  min-width: 0;
+}
+.dn-sidebar-title strong {
+  display: block;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.dn-sidebar-title small {
+  color: var(--ds-muted);
+  font-size: 11px;
+}
+.dn-sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.dn-sidebar nav button {
+  border: 0;
+  justify-content: flex-start;
+  padding: 0 12px;
+  height: 42px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--ds-muted);
+  gap: 11px;
+}
+.dn-sidebar nav button span {
+  flex: 1;
+  text-align: left;
+}
+.dn-sidebar nav button.active {
+  background: color-mix(in srgb, var(--ds-accent) 10%, transparent);
+  color: var(--ds-accent);
+}
+.dn-sidebar .dn-web-open {
+  margin-top: auto;
+  padding: 18px 0 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--ds-muted);
+}
+.dn-main {
+  min-width: 0;
+}
+.dn-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 28px;
+  border-bottom: 1px solid var(--ds-line);
+  min-height: 64px;
+}
+.dn-header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dn-header span {
+  font-size: 12px;
+  color: var(--ds-muted);
+}
+.dn-header strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.nas-native-content.app-shell {
+  display: block;
+  min-height: 0;
+  --bg: var(--ds-bg);
+  --panel: var(--ds-surface);
+  --panel-soft: var(--ds-bg);
+  --text: var(--ds-text);
+  --muted: var(--ds-muted);
+  --line: var(--ds-line);
+  --blue: var(--ds-accent);
+  --shadow: 0 2px 4px #00000004;
+  background: var(--ds-bg);
+}
+.nas-native-content > .main {
+  margin: 0;
+  padding: 28px;
+  max-width: 1600px;
+  min-width: 0;
+}
+.nas-native-content .card {
+  box-shadow: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 28px;
+  border-radius: 0;
+}
+.nas-native-content .card-head {
+  padding: 0 0 18px;
+  border: 0;
+  margin-bottom: 0;
+}
+.nas-native-content .card-head h3 {
+  font-size: 17px;
+}
+.nas-native-content .docker-card,
+.nas-native-content .monitor-status-card,
+.nas-native-content .accordion-card {
+  background: var(--ds-surface);
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  box-shadow: 0 2px 5px #00000004;
+  margin-bottom: 12px;
+}
+.nas-native-content .docker-card-trigger {
+  padding: 20px;
+  min-height: 94px;
+}
+.nas-native-content .docker-card-trigger strong {
+  font-size: 16px;
+}
+.nas-native-content .docker-card-trigger p {
+  margin-top: 8px;
+}
+.nas-native-content .docker-icon {
+  width: 48px;
+  height: 48px;
+  background: var(--ds-bg);
+  border-radius: 8px;
+}
+.nas-native-content .docker-card-body {
+  padding: 20px;
+  border-top: 1px solid var(--ds-line);
+}
+.nas-native-content .port-row {
+  padding: 13px 0;
+}
+.nas-native-content .monitor-card-trigger {
+  padding: 20px;
+}
+.nas-native-content .monitor-card-body {
+  padding: 20px;
+  border-top: 1px solid var(--ds-line);
+}
+.nas-native-content .table-wrap {
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  background: var(--ds-surface);
+}
+.nas-native-content table th {
+  background: var(--ds-bg);
+  padding: 12px;
+  font-size: 12px;
+}
+.nas-native-content table td {
+  padding: 14px 12px;
+}
+.nas-native-content .temperature-card,
+.nas-native-content .fan-card {
+  padding: 20px;
+  background: var(--ds-surface);
+  border-radius: 8px;
+}
+.nas-native-content .monitor-hero {
+  background: transparent;
+  color: var(--ds-text);
+  border: 0;
+  box-shadow: none;
+  padding: 0 0 28px;
+}
+.nas-native-content .monitor-stat {
+  background: var(--ds-surface);
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  padding: 20px;
+}
+.nas-native-content .settings-toolbar {
+  background: var(--ds-surface);
+}
+.nas-native-content .modal {
+  border-radius: 8px;
+}
+.nas-native-content .ai-workspace {
+  min-height: 500px;
+}
+.nas-native-content button {
+  font-weight: 500;
+}
+.dn-overview-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+.dn-overview-title h2 {
+  font-size: 25px;
+  line-height: 1.3;
+  margin: 6px 0 8px;
+}
+.dn-overview-title p {
+  font-size: 12px;
+  color: var(--ds-muted);
+  margin: 0;
+}
+.dn-caption {
+  font-size: 12px;
+  color: var(--ds-accent);
+}
+.dn-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.dn-stat-grid .dn-stat {
+  padding: 22px;
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  background: var(--ds-surface);
+  border: 1px solid var(--ds-line);
+  box-shadow: 0 2px 4px #00000003;
+  border-radius: 8px;
+  min-width: 0;
+  text-align: left;
+  min-height: 154px;
+}
+.dn-stat > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ds-muted);
+  font-size: 12px;
+}
+.dn-stat strong {
+  font-size: 26px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+.dn-stat small {
+  font-size: 11px;
+  color: var(--ds-muted);
+  font-weight: 400;
+}
+.dn-stat strong small {
+  margin-left: 4px;
+}
+.dn-rx {
+  color: #208cbd;
+}
+.dn-tx {
+  color: #db637f;
+}
+.dn-chart-section {
+  margin-top: 30px;
+}
+.dn-section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.dn-section-title h3 {
+  font-size: 15px;
+  margin: 0;
+}
+.dn-live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--ds-muted);
+}
+.dn-live i {
+  height: 6px;
+  width: 6px;
+  border-radius: 50%;
+  background: #24a67a;
+}
+.dn-live.stale i {
+  background: #df9c36;
+}
+.dn-bottom-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  margin-top: 26px;
+  border-top: 1px solid var(--ds-line);
+  padding-top: 20px;
+}
+.dn-bottom-grid > section {
+  min-width: 0;
+}
+.dn-network-row {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  padding: 14px 0;
+}
+.dn-network-row > svg {
+  color: var(--ds-accent);
+}
+.dn-network-row p {
+  font-size: 12px;
+  color: var(--ds-muted);
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}
+.dn-lan {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 12px;
+  color: var(--ds-muted);
+  padding-top: 12px;
+}
+.dn-lan b {
+  font-weight: 500;
+  margin-left: 6px;
+}
+.dn-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.dn-alert > svg {
+  flex-shrink: 0;
+  color: #dc9661;
+}
+.dn-no-alert {
+  color: var(--ds-muted);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 26px 0;
+  font-size: 13px;
+}
+@media (max-width: 1150px) {
+  .dn-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dn-stat-grid .dn-stat {
+    min-height: 138px;
+  }
+  .nas-native-content > .main {
+    padding: 22px;
+  }
+  .dn-workspace {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+}
+@media (max-width: 850px) {
+  .dn-workspace {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+  .dn-sidebar {
+    padding: 18px 8px;
+  }
+  .dn-sidebar-title {
+    padding: 0 12px 22px;
+  }
+  .dn-sidebar-title div,
+  .dn-sidebar nav button span,
+  .dn-sidebar nav button > svg:last-child:not(:first-child),
+  .dn-web-open {
+    display: none !important;
+  }
+  .dn-sidebar nav button {
+    justify-content: center;
+    padding: 0;
+  }
+  .dn-header {
+    padding: 12px 20px;
+  }
+  .dn-bottom-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}

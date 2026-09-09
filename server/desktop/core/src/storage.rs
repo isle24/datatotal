@@ -46,7 +46,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS ai_messages(id INTEGER PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES ai_chats(id) ON DELETE CASCADE, role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, model TEXT NOT NULL, created INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS ai_messages_chat ON ai_messages(chat_id,id);
             UPDATE ai_messages SET status='interrupted' WHERE status='streaming';
-            PRAGMA user_version=2;").map_err(|e| e.to_string())?;
+            CREATE TABLE IF NOT EXISTS navigation(id TEXT PRIMARY KEY, source_key TEXT, payload TEXT NOT NULL);
+            CREATE UNIQUE INDEX IF NOT EXISTS navigation_source ON navigation(source_key) WHERE source_key IS NOT NULL;
+            PRAGMA user_version=3;").map_err(|e| e.to_string())?;
         Ok(Self { conn })
     }
     pub fn save_profile(&mut self, id: Option<&str>, name: &str, address: &str) -> Result<Profile> {

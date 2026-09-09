@@ -1,9 +1,9 @@
 .desktop-shell {
-  --ds-bg: #f5f8f7;
+  --ds-bg: #f6f7f9;
   --ds-surface: #fff;
-  --ds-text: #193a30;
-  --ds-muted: #6c7b76;
-  --ds-line: #e2eae6;
+  --ds-text: #242a32;
+  --ds-muted: #777e89;
+  --ds-line: #e3e6ea;
   --ds-accent: #0b8068;
   background: var(--ds-bg);
   color: var(--ds-text);
@@ -16,17 +16,20 @@
   letter-spacing: 0;
 }
 [data-theme="dark"] .desktop-shell {
-  --ds-bg: #111b17;
-  --ds-surface: #1a2821;
-  --ds-text: #e4efe8;
-  --ds-muted: #9bb0a3;
-  --ds-line: #304338;
+  --ds-bg: #17191e;
+  --ds-surface: #20232a;
+  --ds-text: #e8eaef;
+  --ds-muted: #989fac;
+  --ds-line: #333740;
   --ds-accent: #52cbb0;
 }
 .desktop-shell * {
   box-sizing: border-box;
   letter-spacing: 0;
 }
+.ds-layout-switch { display:flex; margin-left:auto; border:1px solid var(--ds-line); padding:2px; border-radius:6px; gap:2px; flex-shrink:0; }
+.ds-layout-switch button { border:0; min-height:28px; padding:0 10px; font-size:12px; background:transparent; color:var(--ds-muted); font-weight:500; }
+.ds-layout-switch button.active { color:var(--ds-accent); background:var(--ds-surface); box-shadow:0 1px 3px #0001; }
 .desktop-shell textarea {
   font: inherit;
   color: var(--ds-text);

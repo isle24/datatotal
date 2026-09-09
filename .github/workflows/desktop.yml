@@ -43,7 +43,7 @@ jobs:
           npm --prefix front-end test
           npm --prefix front-end run build
       - name: Build desktop installer
-        run: npm --prefix front-end run desktop:build -- --bundles nsis
+        run: npm --prefix front-end run desktop:build -- --bundles nsis --config tauri.ci.conf.json
       - uses: actions/upload-artifact@v4
         with:
           name: Traffic-Lens-Windows-x64-${{ github.run_number }}

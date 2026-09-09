@@ -1,0 +1,116 @@
+name: Signed desktop release
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing desktop-vX.Y.Z tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            updater: darwin-aarch64
+            bundle: app
+            folder: macos
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            updater: darwin-x86_64
+            bundle: app
+            folder: macos
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            updater: windows-x86_64
+            bundle: nsis
+            folder: nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server/desktop
+      - run: npm --prefix front-end ci
+      - name: Validate version and tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: node -e 'const c=require("./server/desktop/app/tauri.conf.json"); if (process.env.RELEASE_TAG !== "desktop-v"+c.version) throw Error("Tag and desktop version differ");'
+      - run: cargo test --locked --manifest-path server/desktop/Cargo.toml -p traffic-lens-core
+      - run: npm --prefix front-end test
+      - name: Build signed updater package
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm --prefix front-end run desktop:build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+      - name: Package Mac DMG
+        if: runner.os == 'macOS'
+        run: node scripts/package-macos.mjs "server/desktop/target/${{ matrix.target }}/release/bundle/macos/Traffic Lens.app"
+      - name: Collect portable filenames
+        run: node scripts/desktop-artifacts.mjs collect "server/desktop/target/${{ matrix.target }}/release/bundle/${{ matrix.folder }}" ${{ matrix.updater }}
+      - name: Verify updater signature
+        shell: bash
+        run: |
+          for signature in artifacts/release/*.sig; do
+            cargo run --locked --manifest-path server/desktop/Cargo.toml -p traffic-lens-core --example verify_update -- server/desktop/app/tauri.conf.json "${signature%.sig}" "$signature"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.updater }}
+          path: artifacts/release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: artifacts/release
+          merge-multiple: true
+      - run: node scripts/desktop-artifacts.mjs manifest artifacts/release
+      - name: Publish version, then update desktop channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --draft --prerelease --title "Traffic Lens ${RELEASE_TAG#desktop-v}" --notes-file doc/desktop-release-notes.md
+          gh release upload "$RELEASE_TAG" artifacts/release/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --notes-file doc/desktop-release-notes.md
+          gh release view desktop-update >/dev/null 2>&1 || gh release create desktop-update --target "$GITHUB_SHA" --prerelease --title "Desktop update channel" --notes "Signed desktop update manifest. Download installers from a desktop-v release."
+          gh release upload desktop-update artifacts/release/latest.json --clobber

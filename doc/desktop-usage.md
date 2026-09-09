@@ -1,6 +1,6 @@
 # Traffic Lens 桌面预览版
 
-桌面版本与 NAS Docker 版本独立。桌面代码修改不更新根目录 `VERSION`，不发布 Docker `latest`。
+桌面版本与 NAS Docker 版本独立。只修改桌面代码时不更新根目录 `VERSION`；涉及 NAS 接口和网页时同时发布配套 Docker 版本。本次桌面为 0.3.1，NAS 为 2026.09.09-2。
 
 ## 安装与使用
 
@@ -9,7 +9,8 @@
 - 测试包没有公开发行证书或 Apple 公证。macOS 使用临时签名；Windows 安装器未签名。请从本仓库构建记录下载，并遵循系统对未知开发者应用的操作提示。
 - 首次启动进入本机概览。顶部选择数据来源；右上角设置可添加、编辑或删除 NAS 地址，并配置后台监控、开机启动和历史保留时间。
 - 添加 NAS 时输入完整服务地址，例如 `http://192.168.1.10:8088`，不包含 API 路径。切换到此 NAS 后输入其访问密码；未开启认证时可留空。
-- macOS 首次访问局域网需要系统授权。macOS 27 测试机的 GUI 请求遇到 `No route to host`，同时系统日志记录本地网络阻止和临时签名缺少 Team ID，没有出现应用授权条目；相同 Rust 核心在开发命令行成功登录、读取、退出 NAS。签名与系统授权仍需进一步验证，不能据此认定所有 Mac 的局域网访问都必须购买开发者会员。应用不绕过系统保护。
+- 每台 NAS 可分别选择客户端或网页布局。导航、Docker 一键导入与签名更新的完整说明见 [服务导航与客户端更新](navigation-and-updates.md)。
+- macOS 首次访问局域网需要系统授权。测试机早期曾遇到 `No route to host`；本次打包 GUI 已连接实际 NAS 并显示概览和 Docker 数据。遇到同类问题请检查路由、系统“本地网络”权限与签名状态，不能据此认定所有 Mac 访问局域网都必须购买开发者会员。应用不绕过系统保护。
 - 默认不保存密码。只有勾选“保存到系统凭据库”后才写入 macOS Keychain / Windows Credential Manager。之后可使用“使用已保存的密码”。取消保存后重新登录会删除旧凭据；修改或删除连接也会移除原凭据。
 - 最多保存 20 台 NAS。每台可以设置不同名称、地址和密码。顶部切换数据源；切换会取消旧页面请求，同时保留该 NAS 在本次应用运行中的独立登录会话。设置里的断开按钮退出指定 NAS；重启应用后重新认证。每台 NAS 的 AI、历史、规则和操作都留在对应服务器，不能跨 NAS 混用。
 - 默认关闭窗口后继续本机采集。托盘菜单可重新打开应用，或“退出并停止本机监控”。应用采用单实例；重复启动打开已有窗口。开机启动默认关闭。
@@ -56,11 +57,12 @@ cargo test --locked --manifest-path server/desktop/Cargo.toml -p traffic-lens-co
 npm --prefix front-end test
 npm --prefix front-end run build
 
-# macOS：本机架构 .app 和 .dmg
-npm --prefix front-end run desktop:mac
+# macOS：开发测试 .app 和 .dmg，不生成发布用更新签名
+npm --prefix front-end run desktop:build -- --bundles app --config tauri.ci.conf.json
+node scripts/package-macos.mjs
 
 # Windows：在 Windows 上生成 x64 NSIS 安装程序
-npm --prefix front-end run desktop:build -- --bundles nsis
+npm --prefix front-end run desktop:build -- --bundles nsis --config tauri.ci.conf.json
 
 # 桌面开发模式
 npm --prefix front-end run desktop:dev
@@ -72,11 +74,11 @@ npm --prefix front-end run desktop:dev
 
 ```sh
 rustup target add x86_64-apple-darwin
-npm --prefix front-end run desktop:build -- --target x86_64-apple-darwin --bundles app
+npm --prefix front-end run desktop:build -- --target x86_64-apple-darwin --bundles app --config tauri.ci.conf.json
 node scripts/package-macos.mjs 'server/desktop/target/x86_64-apple-darwin/release/bundle/macos/Traffic Lens.app'
 ```
 
-Tauri 配置版本与 Rust workspace 版本均为桌面 `0.2.0`，两者需同步修改；顶部版本由 Rust 编译时的包版本返回。前端 NAS 版本仍取 NAS API。
+Tauri 配置版本与 Rust workspace 版本需同步修改；顶部版本由 Rust 编译时的包版本返回。前端 NAS 版本仍取 NAS API。
 
 ## GitHub Actions
 
@@ -88,7 +90,7 @@ Tauri 配置版本与 Rust workspace 版本均为桌面 `0.2.0`，两者需同�
 
 ## 验收边界
 
-自动化覆盖首个采样、计数重置、休眠间隔、SQLite 清理隔离、持久化恢复、历史时区对齐、NAS 地址限制、认证失败、cookie 隔离、重定向拒绝、响应上限和请求取消。Mac 已打开原生应用检查实时数据、进程搜索、历史切换、深浅色模式、数据恢复、关闭后继续采集及退出；GUI 的真实 NAS 登录受上述签名限制。Windows Actions 通过仅证明 Windows 编译与自动化测试成功，不代表在用户 Windows 硬件上实测。短时测试不等同于多日内存稳定性测试。
+自动化覆盖首个采样、计数重置、休眠间隔、SQLite 清理隔离、持久化恢复、历史时区对齐、NAS 地址限制、认证失败、cookie 隔离、重定向拒绝、响应上限和请求取消。Mac 已检查本机实时数据、进程搜索、历史、主题、数据恢复、托盘行为，以及真实 NAS 的概览、Docker 和布局切换。Windows Actions 通过仅证明 Windows 编译与自动化测试成功，不代表在用户 Windows 硬件上实测。短时测试不等同于多日内存稳定性测试。
 
 更完整的本机公网分类、按进程网络归属、硬件传感器和本机告警属于后续阶段。当前预览版不安装抓包驱动、提权助手或系统扩展。
 
@@ -113,4 +115,4 @@ AI 默认关闭、无后台请求。最多 1 路本机聊天，额外的模型�
 - 在会员账号生成 **Developer ID Application** 证书（含对应私钥），用于签名 `.app`，再通过 Apple notary service 公证并 stapler。`.dmg` 中直接放 `.app` 不要求 Developer ID Installer 证书；只有另外发布签名 `.pkg` 才涉及 Installer 证书。不需要上架 Mac App Store，也不需要 Enterprise Program。
 - 本地测试的 Apple Development 签名和用于外部分发的 Developer ID 不相同。可在 [Apple Developer ID 说明](https://developer.apple.com/developer-id/) 和 [会员比较](https://developer.apple.com/support/compare-memberships/) 核对要求。
 - Windows 在 GitHub 分发 EXE 无需 Microsoft 开发者账号。正式发行可配置 Authenticode 代码签名以减少未知发布者提示；即使有签名，也不能保证 SmartScreen 从不提示。
-- 0.2.0 仍为未公证的预览包：Mac 临时签名，Windows 未签名。当前构建机没有 Developer ID 证书，因此本次不能标记为已正式签名/公证。证书和私钥应留在本机钥匙串或 GitHub Actions Secrets，绝不提交仓库或贴在聊天中。
+- 当前仍为未公证的预览包：Mac 临时签名，Windows 未做 Authenticode 签名。更新包另有 Minisign 签名，不等于平台发行证书或公证。证书和私钥留在本机私有目录、钥匙串或 GitHub Actions Secrets，绝不提交仓库或贴在聊天中。

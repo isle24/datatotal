@@ -10,6 +10,7 @@
         ><span class="ds-version">DESKTOP {{ config.version }}</span>
       </div>
       <div class="ds-source-controls">
+        <button v-if="updateState.phase === 'available'" class="ds-icon" title="有客户端更新" aria-label="有客户端更新" @click="settingsOpen = true"><Download :size="18" /></button>
         <Monitor :size="17" />
         <select
           aria-label="数据来源"
@@ -185,6 +186,7 @@
         </button>
       </section>
       <AiSettings />
+      <UpdateSettings :version="config.version" :automatic="config.checkUpdates" @automatic="preference('checkUpdates', $event)" />
     </main>
     <template v-else-if="source === 'local'">
       <nav class="ds-tabs" aria-label="本机页面">
@@ -221,6 +223,7 @@
           </div>
         </div>
         <div v-if="snapshot.error" class="ds-error">{{ snapshot.error }}</div>
+        <LocalNavigation v-if="view === 'navigation'" />
         <LocalAiView
           v-if="view === 'ai'"
           :interfaces="snapshot.interfaces"
@@ -547,13 +550,15 @@
       <div class="ds-target">
         <Server :size="15" /><strong>{{ currentProfile?.name }}</strong
         ><span>{{ currentProfile?.url }}</span
-        ><span class="ds-muted">数据与操作均来自此 NAS</span>
+        ><div class="ds-layout-switch" role="group" aria-label="NAS 界面模式"><button :aria-pressed="nasLayout === 'native'" :class="{ active: nasLayout === 'native' }" @click="setNasLayout('native')"><Monitor :size="14" />客户端</button><button :aria-pressed="nasLayout === 'web'" :class="{ active: nasLayout === 'web' }" @click="setNasLayout('web')"><Globe :size="14" />网页</button></div>
       </div>
       <NasView
         v-if="authenticated && currentProfile"
         :key="sessionKey"
         :profile="currentProfile"
         :prompt="promptText"
+        :native="nasLayout === 'native'"
+        :theme="dark ? 'dark' : 'light'"
         @expired="expireSession"
         @theme="dark = $event === 'dark'"
       />
@@ -671,15 +676,23 @@ import {
   History,
   LayoutDashboard,
   Sparkles,
+  Compass,
+  Globe,
+  Download,
 } from "@lucide/vue";
 import TrafficChart from "./TrafficChart.vue";
 const AiSettings = defineAsyncComponent(() => import("./AiSettings.vue"));
 const LocalAiView = defineAsyncComponent(() => import("./LocalAiView.vue"));
 const NasView = defineAsyncComponent(() => import("./NasView.vue"));
+const LocalNavigation = defineAsyncComponent(() => import('./LocalNavigation.vue'));
+import UpdateSettings from './UpdateSettings.vue';
+import { updates, updateState } from './updater.js';
 const config = reactive({
   version: "",
   profiles: [],
   connected: [],
+  layouts: {},
+  checkUpdates: true,
   closeToTray: true,
   retentionDays: 30,
 });
@@ -710,6 +723,7 @@ const period = ref("today"),
   historyRange = ref({}),
   historyBusy = ref(false);
 const tabs = [
+  { id: "navigation", name: "导航", icon: Compass },
   { id: "overview", name: "实时概览", icon: LayoutDashboard },
   { id: "interfaces", name: "网卡", icon: Network },
   { id: "processes", name: "进程", icon: Cpu },
@@ -726,6 +740,14 @@ const periods = [
 const currentProfile = computed(() =>
   config.profiles.find((p) => p.id === source.value),
 );
+const nasLayout = computed(() => config.layouts?.[source.value] || 'native');
+async function setNasLayout(layout) {
+  await run(async () => {
+    const id = source.value;
+    await invoke('set_nas_layout', { id, layout });
+    config.layouts[id] = layout;
+  });
+}
 const activeInterface = computed(
   () => snapshot.value.interfaces.find((n) => n.name === selected.value) || {},
 );
@@ -971,7 +993,7 @@ async function poll() {
     isPageHidden() ||
     source.value !== "local" ||
     settingsOpen.value ||
-    (view.value === "ai" && snapshot.value.interfaces.length > 0)
+    (['ai', 'navigation'].includes(view.value) && snapshot.value.interfaces.length > 0)
   )
     return;
   polling = true;
@@ -1062,6 +1084,7 @@ onMounted(async () => {
     autostart.value = await isEnabled();
   });
   await poll();
+  if (config.checkUpdates) updates.check();
   timer = setInterval(poll, 2000);
   document.addEventListener("visibilitychange", visibility);
 });
