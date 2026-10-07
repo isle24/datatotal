@@ -659,9 +659,36 @@
             <button v-if="!(aiForm.enabled && aiForm.keyConfigured)" type="button" @click="setView('settings')"><Settings :size="15" />去设置</button>
           </div>
         </section>
-        <section class="card agent-panel">
-          <CardHead title="运维助手" :meta="agentEnabled ? `只读 · ${agentTools.length} 个查询工具` : '需要先在设置里启用 AI'" />
-          <div class="agent-body">
+        <section class="ai-chat card">
+          <div class="ai-chat-toolbar">
+            <div>
+              <div class="ai-mode-tabs" role="tablist" aria-label="AI 工作模式">
+                <button type="button" :class="{ active: aiMode === 'agent' }" @click="aiMode = 'agent'"><Sparkles :size="14" />运维助手</button>
+                <button type="button" :class="{ active: aiMode === 'analysis' }" @click="aiMode = 'analysis'"><Activity :size="14" />数据分析</button>
+                <button type="button" :class="{ active: aiMode === 'configure' }" @click="aiMode = 'configure'"><Settings :size="14" />设置助手</button>
+              </div>
+              <strong>{{ aiModeTitle }}</strong>
+              <span>{{ aiModeSubtitle }}</span>
+            </div>
+            <div v-if="aiMode === 'analysis'" class="card-actions">
+              <button type="button" :disabled="aiLoading" @click="analyzeWithAi('all')"><Sparkles :size="15" />快速分析全部数据</button>
+              <button type="button" class="subtle-button" :disabled="aiLoading || !aiMessages.length" @click="clearAiHistory"><Trash2 :size="15" />清空记录</button>
+            </div>
+            <div v-else-if="aiMode === 'agent'" class="card-actions">
+              <button type="button" class="subtle-button" :disabled="agentLoading || (!agentAnswer && !agentError)" @click="resetAgent"><Trash2 :size="15" />清空结果</button>
+            </div>
+          </div>
+          <div v-if="aiMode === 'agent'" class="agent-body">
+            <div v-if="agentLoading" class="agent-thinking" role="status" aria-live="polite">
+              <span class="agent-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <div class="agent-thinking-copy">
+                <strong>{{ AGENT_STAGES[agentThinkingStage] }}…</strong>
+                <small>已用 {{ agentThinkingElapsed.toFixed(1) }} 秒 · 只读查询，最多 2 次模型调用</small>
+              </div>
+              <ol class="agent-thinking-steps">
+                <li v-for="(stage, index) in AGENT_STAGES" :key="stage" :class="{ done: index < agentThinkingStage, active: index === agentThinkingStage }">{{ stage }}</li>
+              </ol>
+            </div>
             <form class="agent-ask" @submit.prevent="askAgent()">
               <input
                 v-model="agentQuestion"
@@ -730,23 +757,6 @@
               · 只读工具不会修改任何配置或容器
             </p>
           </div>
-        </section>
-
-        <section class="ai-chat card">
-          <div class="ai-chat-toolbar">
-            <div>
-              <div class="ai-mode-tabs" role="tablist" aria-label="AI 工作模式">
-                <button type="button" :class="{ active: aiMode === 'analysis' }" @click="aiMode = 'analysis'"><Sparkles :size="14" />数据分析</button>
-                <button type="button" :class="{ active: aiMode === 'configure' }" @click="aiMode = 'configure'"><Settings :size="14" />设置助手</button>
-              </div>
-              <strong>{{ aiMode === "configure" ? "设置助手" : "数据对话" }}</strong>
-              <span>{{ aiMode === "configure" ? "用一句话描述目标，AI 生成预览后一次确认应用" : "上下文为聚合摘要，不发送完整连接原始表" }}</span>
-            </div>
-            <div v-if="aiMode === 'analysis'" class="card-actions">
-              <button type="button" :disabled="aiLoading" @click="analyzeWithAi('all')"><Sparkles :size="15" />快速分析全部数据</button>
-              <button type="button" class="subtle-button" :disabled="aiLoading || !aiMessages.length" @click="clearAiHistory"><Trash2 :size="15" />清空记录</button>
-            </div>
-          </div>
           <div v-if="aiMode === 'analysis'" class="ai-messages" aria-live="polite">
             <div v-if="!aiMessages.length" class="ai-empty"><Sparkles :size="24" /><strong>从一个问题开始</strong><span>例如：最近公网上传是否异常？哪个进程最值得关注？</span></div>
             <div v-for="(message, index) in aiMessages" :key="`${message.role}-${index}`" :class="['ai-message', message.role === 'user' ? 'user' : 'assistant']">
@@ -761,7 +771,7 @@
             <textarea v-model="aiInput" rows="2" maxlength="2000" placeholder="输入你想分析的问题，例如：按公网上传排序，给出前 3 个风险来源" @keydown="handleAiComposerKeydown"></textarea>
             <button type="submit" :disabled="aiLoading || !aiInput.trim()"><Send :size="16" />发送</button>
           </form>
-          <div v-else class="ai-configure-panel">
+          <div v-else-if="aiMode === 'configure'" class="ai-configure-panel">
             <form class="ai-configure-form" @submit.prevent="requestAiConfiguration">
               <label class="textarea-label">告诉 AI 你想怎么设置<textarea v-model="aiConfigureInput" rows="4" maxlength="2000" placeholder="例如：把采样间隔改为 2 秒，并开启 Docker 自动发现"></textarea></label>
               <div class="ai-configure-actions">
@@ -1453,7 +1463,7 @@ const aiForm = reactive({
 const aiModels = ref([]);
 const aiModelsLoading = ref(false);
 const aiModelsError = ref("");
-const aiMode = ref("analysis");
+const aiMode = ref('agent');
 const aiConfigureInput = ref("");
 const aiConfigureProposal = ref(null);
 const aiConfigureError = ref("");
@@ -2183,6 +2193,40 @@ const agentLoading = ref(false);
 const agentTools = ref([]);
 const agentUsage = ref(null);
 const agentEnabled = ref(false);
+const AGENT_STAGES = ["正在理解问题", "正在调用只读工具", "正在整理结论"];
+const agentThinkingStage = ref(0);
+const agentThinkingElapsed = ref(0);
+let agentStageTimer = null;
+let agentElapsedTimer = null;
+
+function startAgentThinking() {
+  agentThinkingStage.value = 0;
+  agentThinkingElapsed.value = 0;
+  const startedAt = Date.now();
+  stopAgentThinking({ keepStage: true });
+  agentStageTimer = window.setInterval(() => {
+    agentThinkingStage.value = Math.min(AGENT_STAGES.length - 1, agentThinkingStage.value + 1);
+  }, 1400);
+  agentElapsedTimer = window.setInterval(() => {
+    agentThinkingElapsed.value = (Date.now() - startedAt) / 1000;
+  }, 200);
+}
+function stopAgentThinking(options = {}) {
+  window.clearInterval(agentStageTimer);
+  window.clearInterval(agentElapsedTimer);
+  agentStageTimer = null;
+  agentElapsedTimer = null;
+  if (!options.keepStage) agentThinkingElapsed.value = 0;
+}
+function resetAgent() {
+  agentAnswer.value = null;
+  agentError.value = "";
+}
+const aiModeTitle = computed(() => ({ agent: "运维助手", configure: "设置助手" }[aiMode.value] || "数据对话"));
+const aiModeSubtitle = computed(() => ({
+  agent: "只读查询：一句话问流量、进程、容器与系统状态",
+  configure: "用一句话描述目标，AI 生成预览后一次确认应用",
+}[aiMode.value] || "上下文为聚合摘要，不发送完整连接原始表"));
 const agentSuggestions = [
   "今天公网上传了多少流量",
   "最近哪个进程上传最多",
@@ -2208,6 +2252,7 @@ async function askAgent(question) {
   agentLoading.value = true;
   agentError.value = "";
   agentAnswer.value = null;
+  startAgentThinking();
   try {
     const data = await api("/api/agent/query", {
       localError: true,
@@ -3077,6 +3122,7 @@ onUnmounted(() => {
   [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
   document.removeEventListener("visibilitychange", handleVisibility);
   window.removeEventListener("keydown", handleMenuKeydown);
+  stopAgentThinking();
   window.clearTimeout(showToast.timer);
   if (connectionDebounce) clearTimeout(connectionDebounce);
   window.removeEventListener("resize", handleResize);
