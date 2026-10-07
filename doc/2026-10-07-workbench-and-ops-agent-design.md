@@ -2,7 +2,7 @@
 
 > 状态：设计稿，未实现。本文只给方案与默认值，代码改动需确认后再动。
 >
-> **已确认（2026-10-07）**：② 镜像加 docker CLI + compose 插件：需要；③ compose 根目录由用户在设置里自选；④ 权限档位默认"只读 + 设置提案"，Docker 写操作显式开启；⑤ 所有写操作人工确认；⑥ 禁止操作自身容器；⑦ 极空间"应用列表"不保证收录：可接受；⑧ 镜像来源限制、审计 90 天、回滚范围：确认。
+> **已确认（2026-10-07）**：① 菜单采用**全站抽屉式**（方案 B）；② 镜像加 docker CLI + compose 插件：需要；③ compose 根目录由用户在设置里自选；④ 权限档位默认"只读 + 设置提案"，Docker 写操作显式开启；⑤ 所有写操作人工确认；⑥ 禁止操作自身容器；⑦ 极空间"应用列表"不保证收录：可接受；⑧ 镜像来源限制、审计 90 天、回滚范围：确认。
 > 关联现状：`front-end/src/App.vue`（导航与视图）、`server/main.py`（`docker_api_request`、容器保护动作、设置 API、AI 提案链路）、`server/services/ai.py`、`docker-compose.nas.yml`。
 
 ## 1. 需求与目标
@@ -39,8 +39,8 @@
 
 | 方案 | 行为 | 优点 | 缺点 |
 | --- | --- | --- | --- |
-| **A. 仅工作台隐藏（推荐）** | 首页无侧边栏；点任意磁贴/进入其他页面后，侧边栏恢复常驻 | 实现简单、行为可预期；用户"点其他页面才显示菜单"的原话就是这个 | 从其他页面回首页时菜单会收起 |
-| B. 全站抽屉 | **所有页面**都不再有常驻侧边栏，菜单变成一块从左侧滑出的浮层：点左上角按钮（或按 `m`）滑出，选中某个页面后自动收起，内容区始终占满整宽；可在设置里"固定菜单"变回常驻 | 内容区最宽、视觉最干净；手机与桌面行为一致 | 每次切页面要多点一下（或靠快捷键）；习惯了常驻侧边栏会觉得别扭 |
+| ~~A. 仅工作台隐藏~~ | 首页无侧边栏；点任意磁贴/进入其他页面后，侧边栏恢复常驻 | 实现简单、行为可预期；用户"点其他页面才显示菜单"的原话就是这个 | 从其他页面回首页时菜单会收起 |
+| **B. 全站抽屉（已选用）** | **所有页面**都不再有常驻侧边栏，菜单变成一块从左侧滑出的浮层：点左上角按钮（或按 `m`）滑出，选中某个页面后自动收起，内容区始终占满整宽；可在设置里"固定菜单"变回常驻 | 内容区最宽、视觉最干净；手机与桌面行为一致 | 每次切页面要多点一下（或靠快捷键）；习惯了常驻侧边栏会觉得别扭 |
 
 实现要点（两种方案共用）：
 
@@ -192,10 +192,9 @@
 
 仍需拍板：
 
-1. **菜单策略**：A 只工作台隐藏（推荐）还是 B 全站抽屉式？（两种行为见 §3.2）
-2. **绿联 4300plus 的 Docker 权限**：当前 `isle` 既不在 `docker` 组、`sudo` 又需要密码，我只能读到硬件信息，无法查看/部署容器。请二选一：把 `isle` 加入 docker 组（`sudo usermod -aG docker isle`，重新登录生效），或给我一个可用的 sudo/root 凭据。
-3. **绿联 compose 项目目录**：`/volume2/@docker` 当前不可读。UGOS 的 compose 应用实际放在哪个子目录（如 `/volume2/@docker/compose/<项目>/`）？拿到权限后我会自行确认，但如果你知道可以直接告诉我。
-4. **飞牛 OS**：你手上有机器可测吗？没有的话我按通用 Linux + 官方文档做"尽力兼容"，并在文档里标注未经实测。
+1. **绿联 4300plus 的 Docker 权限**：当前 `isle` 既不在 `docker` 组、`sudo` 又需要密码，我只能读到硬件信息，无法查看/部署容器。请二选一：把 `isle` 加入 docker 组（`sudo usermod -aG docker isle`，重新登录生效），或给我一个可用的 sudo/root 凭据。
+2. **绿联 compose 项目目录**（已通过 UGOS 界面截图确认）：UGOS 的「项目」在创建时由用户自选**存放路径**，项目名 + 存放路径共同决定 compose 目录；`/volume2/@docker` 是 Docker 数据根（`drwx--x--- root:root`，容器内 privileged 可读），不是项目目录。因此本项目的 `composeRoot` 候选在绿联上取 `/volume1`、`/volume2`、`/volume3` 下的用户目录，并保留自由输入。
+3. **飞牛 OS**：无测试机，按通用 Linux + 官方文档做"尽力兼容"，文档标注未经实测（后续可用虚拟机补测）。
 
 ## 8. 多 NAS 适配（极空间 / 绿联云 / 飞牛 OS / 通用 Linux）
 
@@ -212,7 +211,8 @@
 | 风扇 | `acpi_ec_z425_fans`（3 路） | 未在 hwmon 暴露 | 视机型 |
 | 磁盘位 | `/sys/class/block` | `/sys/ugreen/disk1..disk4` | 视机型 |
 | Docker | 29.x，compose v2.29.7，用户在 docker 组 | 29.6.2，compose **v5.1.3**（UGOS 自带），`isle` 无 docker 权限 | 视安装 |
-| 应用目录 | `<zfs>/data/docker/<应用>/` | 待确认（`/volume2/@docker` 权限受限） | fnOS 常见 `/vol1/@appdata/...` |
+| 应用目录 | `<zfs>/data/docker/<应用>/` | 创建项目时由用户自选「存放路径」，Docker 数据根为 `/volume2/@docker`（root:root 750） | fnOS 常见 `/vol1/@appdata/...` |
+| 权限约定 | 容器跑 root（privileged） | UGOS 示例给的是 `PUID=1000 PGID=10`，本项目容器为 root，模板里会说明两者差异 | 视安装 |
 
 ### 8.2 平台探测（新增 `server/services/nas_platform.py`）
 
@@ -244,8 +244,8 @@ detect_platform() -> {
 
 ### 8.4 绿联部署前置条件
 
-1. Docker 权限：`sudo usermod -aG docker isle`（重新登录）或提供 sudo 凭据 —— 否则无法查看/部署容器，也验证不了 privileged + host 网络是否被 UGOS 允许。
-2. 确认 UGOS 的 compose 项目目录约定，作为 `composeRoot` 默认候选。
+1. Docker 权限：`sudo usermod -aG docker isle`（重新登录）或提供 sudo 凭据 —— 否则无法查看/部署容器，也验证不了 privileged + host 网络是否被 UGOS 允许。实测该机 `sudo` 需要密码，`sudo -n` 不可用。
+2. compose 项目目录：由用户在 UGOS 界面自选，本项目 `composeRoot` 提供 `/volume1`、`/volume2`、`/volume3` 下的候选并允许自定义。
 3. 部署后需要复测：host 网络、`pid: host`、`privileged`、docker.sock 挂载、ZFS/btrfs 路径、`/proc` 挂载限制（UGOS 是否与极空间同样拒绝）。
 4. ARM 侧镜像已具备：Docker Hub 的 `linux/arm64` 变体现成可用。
 
