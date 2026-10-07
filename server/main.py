@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 import traceback
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -49,7 +50,8 @@ from server.services.ai import (
     public_ai_settings,
 )
 from server.services.system_status import system_status
-from server.services.protection_state import durable_states, restore_states
+from server.services.protection_state import durable_states, release_legacy_restart_limits, restore_states
+from server.services.container_targets import new_state, prepare_group_states, row_protection_state, rule_matches_row, state_for_target, target_state_key
 from server.services.docker_icons import get_docker_icon, list_docker_icons, match_docker_icon
 from server.services.config_assistant import (
     ProposalStore,
@@ -650,6 +652,7 @@ class MonitorRule(BaseModel):
     window: str = "realtime"
     enabled: bool = True
     channelIds: List[str] = Field(default_factory=list)
+    channelMode: Literal["auto", "all", "selected", "none"] = "auto"
 
 
 class MonitorRulesPayload(BaseModel):
@@ -663,15 +666,22 @@ class ContainerProtectionCondition(BaseModel):
     durationSeconds: int = 0
 
 
-class ContainerProtectionRule(BaseModel):
-    id: str
-    name: str
+class ContainerProtectionTarget(BaseModel):
     containerId: str = ""
     containerName: str = ""
     composeProject: str = ""
     composeService: str = ""
+    composeContainerNumber: str = ""
+
+
+class ContainerProtectionRule(ContainerProtectionTarget):
+    id: str
+    name: str
+    targetMode: Literal["single", "selected", "all"] = "single"
+    containers: List[ContainerProtectionTarget] = Field(default_factory=list)
     enabled: bool = True
     channelIds: List[str] = Field(default_factory=list)
+    channelMode: Literal["auto", "all", "selected", "none"] = "auto"
     logic: str = "and"
     action: str = "restart"
     maxActions: int = 3
@@ -1035,11 +1045,12 @@ class TrafficDB:
                 "channelName": str(result.get("channelName") or "")[:80],
                 "channelType": str(result.get("channelType") or "")[:32],
                 "ok": bool(result.get("ok")),
+                "skipped": bool(result.get("skipped")),
                 "status": int(result.get("status") or 0),
                 "detail": str(result.get("detail") or "")[:500],
                 "timestamp": int(result.get("timestamp") or now()),
             }
-            notifications = [*notifications[-19:], cleaned]
+            notifications = [*notifications, cleaned]
             self.conn.execute(
                 """
                 INSERT INTO alert_evidence (alert_id, evidence, notifications, updated_at)
@@ -1643,6 +1654,10 @@ def default_container_protection_rules() -> List[dict]:
     return []
 
 
+def notification_rule_mode(mode: str, channel_ids: list) -> str:
+    return mode if mode in {"all", "selected", "none"} else ("selected" if channel_ids else "all")
+
+
 def sanitize_monitor_rule(rule: MonitorRule) -> dict:
     cleaned = MonitorRule(
         id=(rule.id or f"rule-{int(now())}").strip()[:64],
@@ -1656,6 +1671,7 @@ def sanitize_monitor_rule(rule: MonitorRule) -> dict:
         window=(rule.window or "realtime").strip(),
         enabled=bool(rule.enabled),
         channelIds=[str(item).strip()[:64] for item in (rule.channelIds or []) if str(item).strip()],
+        channelMode=notification_rule_mode(rule.channelMode, rule.channelIds),
     )
     if cleaned.operator not in {"gte", "lte"}:
         cleaned.operator = "gte"
@@ -1663,6 +1679,7 @@ def sanitize_monitor_rule(rule: MonitorRule) -> dict:
         cleaned.scope = "wan"
     if cleaned.direction not in {"rx", "tx", "both"}:
         cleaned.direction = "tx"
+    cleaned.window = "day" if cleaned.metric == "daily_wan_tx_bytes" else "stage" if cleaned.metric == "stage_wan_tx_bytes" else "realtime"
     return cleaned.model_dump()
 
 
@@ -1706,6 +1723,15 @@ def sanitize_container_protection_condition(condition: ContainerProtectionCondit
 
 
 def sanitize_container_protection_rule(rule: ContainerProtectionRule) -> dict:
+    targets = []
+    for target in rule.containers:
+        row = {"containerId": target.containerId.strip().lstrip("/")[:64],
+               "containerName": target.containerName.strip().lstrip("/")[:120],
+               "composeProject": target.composeProject.strip()[:120],
+               "composeService": target.composeService.strip()[:120]}
+        row["composeContainerNumber"] = target.composeContainerNumber.strip()[:32]
+        if (row["containerId"] or row["containerName"] or (row["composeProject"] and row["composeService"])) and row not in targets:
+            targets.append(row)
     cleaned = ContainerProtectionRule(
         id=(rule.id or f"protection-{int(now())}").strip()[:64],
         name=(rule.name or "容器保护").strip()[:80],
@@ -1713,8 +1739,12 @@ def sanitize_container_protection_rule(rule: ContainerProtectionRule) -> dict:
         containerName=(rule.containerName or "").strip()[:120],
         composeProject=(rule.composeProject or "").strip()[:120],
         composeService=(rule.composeService or "").strip()[:120],
+        composeContainerNumber=rule.composeContainerNumber.strip()[:32],
+        targetMode=rule.targetMode,
+        containers=targets,
         enabled=bool(rule.enabled),
         channelIds=[str(item).strip()[:64] for item in (rule.channelIds or []) if str(item).strip()],
+        channelMode=notification_rule_mode(rule.channelMode, rule.channelIds),
         logic=(rule.logic or "and").strip().lower(),
         action=(rule.action or "restart").strip().lower(),
         maxActions=max(1, int(rule.maxActions or 1)),
@@ -1755,7 +1785,7 @@ def _saved_bool(value, fallback: bool = False) -> bool:
 def _saved_string_list(value) -> list[str]:
     if not isinstance(value, list):
         return []
-    return [str(item).strip()[:64] for item in value if str(item).strip()][:50]
+    return [str(item).strip()[:64] for item in value if str(item).strip()]
 
 
 def load_saved_monitor_rules(value) -> tuple[Optional[list], int]:
@@ -1782,6 +1812,7 @@ def load_saved_monitor_rules(value) -> tuple[Optional[list], int]:
             "window": _saved_text(base.get("window"), "realtime", 16),
             "enabled": _saved_bool(base.get("enabled"), True),
             "channelIds": _saved_string_list(base.get("channelIds")),
+            "channelMode": base.get("channelMode") if base.get("channelMode") in {"all", "selected", "none"} else "auto",
         }
         try:
             loaded.append(sanitize_monitor_rule(MonitorRule(**candidate)))
@@ -1854,8 +1885,14 @@ def load_saved_container_protection_rules(value) -> tuple[Optional[list], int]:
             "containerName": _saved_text(raw.get("containerName"), "", 120),
             "composeProject": _saved_text(raw.get("composeProject"), "", 120),
             "composeService": _saved_text(raw.get("composeService"), "", 120),
+            "composeContainerNumber": _saved_text(raw.get("composeContainerNumber"), "", 32),
+            "targetMode": raw.get("targetMode") if raw.get("targetMode") in {"single", "selected", "all"} else "single",
+            "containers": [{key: _saved_text(target.get(key), "", 64 if key == "containerId" else 120)
+                            for key in ("containerId", "containerName", "composeProject", "composeService", "composeContainerNumber")}
+                           for target in raw.get("containers", []) if isinstance(target, dict)] if isinstance(raw.get("containers"), list) else [],
             "enabled": _saved_bool(raw.get("enabled"), True),
             "channelIds": _saved_string_list(raw.get("channelIds")),
+            "channelMode": raw.get("channelMode") if raw.get("channelMode") in {"all", "selected", "none"} else "auto",
             "logic": _saved_text(raw.get("logic"), "and", 8).lower(),
             "action": _saved_text(raw.get("action"), "restart", 8).lower(),
             "maxActions": max(1, _saved_int(raw.get("maxActions"), 3)),
@@ -1886,19 +1923,7 @@ def docker_compose_identity(labels: dict) -> Tuple[str, str]:
 def container_rule_matches_row(rule: dict, row: dict) -> bool:
     if not isinstance(rule, dict) or not isinstance(row, dict):
         return False
-    rule_id = str(rule.get("containerId") or "").strip().lstrip("/")[:12]
-    row_id = str(row.get("id") or "").strip().lstrip("/")[:12]
-    if rule_id and row_id and rule_id == row_id:
-        return True
-    rule_project = str(rule.get("composeProject") or "").strip()
-    rule_service = str(rule.get("composeService") or "").strip()
-    row_project = str(row.get("composeProject") or "").strip()
-    row_service = str(row.get("composeService") or "").strip()
-    if rule_project and rule_service and rule_project == row_project and rule_service == row_service:
-        return True
-    rule_name = str(rule.get("containerName") or "").strip().lstrip("/")
-    row_name = str(row.get("name") or "").strip().lstrip("/")
-    return bool(rule_name and row_name and rule_name == row_name)
+    return rule_matches_row(rule, row)
 
 
 def normalize_docker_scheme(value: str) -> str:
@@ -1994,7 +2019,7 @@ def docker_container_stats(container_id: str) -> dict:
     if not selected:
         return {}
     stats = docker_api_get(f"/containers/{selected}/stats?stream=false")
-    if not isinstance(stats, dict):
+    if not isinstance(stats, dict) or not any(isinstance(stats.get(key), dict) and stats[key] for key in ("cpu_stats", "memory_stats")):
         return {}
 
     cpu_stats = stats.get("cpu_stats") if isinstance(stats.get("cpu_stats"), dict) else {}
@@ -2003,7 +2028,7 @@ def docker_container_stats(container_id: str) -> dict:
     precpu_usage = precpu_stats.get("cpu_usage") if isinstance(precpu_stats.get("cpu_usage"), dict) else {}
     cpu_delta = max(0, int(cpu_usage.get("total_usage") or 0) - int(precpu_usage.get("total_usage") or 0))
     system_delta = max(0, int(cpu_stats.get("system_cpu_usage") or 0) - int(precpu_stats.get("system_cpu_usage") or 0))
-    cpu_count = len(cpu_usage.get("percpu_usage") or []) or int(stats.get("online_cpus") or 1)
+    cpu_count = int(cpu_stats.get("online_cpus") or 0) or len(cpu_usage.get("percpu_usage") or []) or 1
     cpu_percent = round((cpu_delta / system_delta) * cpu_count * 100.0, 2) if cpu_delta and system_delta else 0.0
 
     memory_stats = stats.get("memory_stats") if isinstance(stats.get("memory_stats"), dict) else {}
@@ -2398,6 +2423,7 @@ def discover_containers(
             image = str(container.get("Image") or "")
             container_labels = container.get("Labels") if isinstance(container.get("Labels"), dict) else {}
             compose_project, compose_service = docker_compose_identity(container_labels)
+            compose_number = str(container_labels.get("com.docker.compose.container-number") or "").strip()[:32]
             state = str(container.get("State") or "")
             status = str(container.get("Status") or "")
             created = int(container.get("Created") or 0)
@@ -2439,11 +2465,13 @@ def discover_containers(
                 "name": name,
                 "composeProject": compose_project,
                 "composeService": compose_service,
+                "composeContainerNumber": compose_number,
+                "state": state,
             }
             protection_rule_rows = [rule for rule in protection_rules if container_rule_matches_row(rule, row_identity)]
             protection_state = next(
                 (
-                    protection_states.get(str(rule.get("id") or ""))
+                    row_protection_state(rule, protection_states, row_identity)
                     for rule in protection_rule_rows
                     if protection_states.get(str(rule.get("id") or ""))
                 ),
@@ -2456,6 +2484,7 @@ def discover_containers(
                     "image": image,
                     "composeProject": compose_project,
                     "composeService": compose_service,
+                    "composeContainerNumber": compose_number,
                     "state": state,
                     "status": status,
                     "created": created,
@@ -2529,7 +2558,7 @@ def docker_api_request(method: str, path: str, body: bytes = b"", timeout: float
 
 
 def docker_api_get(path: str):
-    result = docker_api_request("GET", path)
+    result = docker_api_request("GET", path, timeout=5.0 if "/stats?" in path else 2.0)
     if not result.get("ok"):
         return []
     return result.get("json") if result.get("json") is not None else []
@@ -2864,7 +2893,7 @@ class TrafficCollector:
         self.stage_alert_active = False
         self.stage_paused_at: Optional[float] = None
         self.stage_accumulated_seconds = 0.0
-        self.daily_alert_date = ""
+        self.daily_alert_dates: Dict[str, str] = {}
         self.rule_states: Dict[str, dict] = {}
         self.container_protection_states: Dict[str, dict] = {}
         self.settings_recovery: List[dict] = []
@@ -3067,6 +3096,10 @@ class TrafficCollector:
             self.db.get_setting("container_protection_states"),
             {rule["id"] for rule in self.container_protection_rules},
         )
+        if release_legacy_restart_limits(self.container_protection_states, self.container_protection_rules):
+            self.save_protection_states()
+        saved_daily_dates = self.db.get_setting("monitor_daily_alert_dates")
+        self.daily_alert_dates = saved_daily_dates if isinstance(saved_daily_dates, dict) else {}
 
     def sync_legacy_settings(self) -> None:
         self.alert_settings = AlertSettings(**alert_settings_from_rules(self.monitor_rules))
@@ -3154,10 +3187,13 @@ class TrafficCollector:
             return {"ok": False, "detail": "missing container id"}
         if selected_action not in {"restart", "stop"}:
             return {"ok": False, "detail": "unsupported action"}
-        result = docker_api_request("POST", f"/containers/{selected}/{selected_action}")
+        result = docker_api_request("POST", f"/containers/{selected}/{selected_action}?t=10", timeout=30.0)
         if not result.get("ok"):
             detail = result.get("detail") or result.get("body") or f"docker {selected_action} failed"
             return {"ok": False, "detail": detail, "status": result.get("status")}
+        with self.lock:
+            self.docker_stats_cache.pop(selected, None)
+            self.last_container_refresh = 0.0
         return {"ok": True, "action": selected_action, "status": result.get("status")}
 
     def resolve_container_protection_target(self, rule: dict) -> Optional[dict]:
@@ -3184,12 +3220,52 @@ class TrafficCollector:
             }
         return {"id": selected, "name": str(rule.get("containerName") or selected), "composeProject": "", "composeService": ""} if selected else None
 
-    def match_container_protection(self, rule: dict, stats: dict, timestamp: float) -> Tuple[bool, float, List[dict], List[dict], bool]:
+    def resolve_container_protection_targets(self, rule: dict) -> List[dict]:
+        if rule.get("targetMode", "single") == "single":
+            target = self.resolve_container_protection_target(rule)
+            return [target] if target else []
+        self.refresh_container_ports()
+        with self.lock:
+            rows = list(self.container_rows)
+        rows = [row for row in rows if row.get("state", "running") == "running"]
+        targets = []
+        if rule.get("targetMode") == "selected":
+            changed = False
+            for target in rule.get("containers") or []:
+                cid = str(target.get("containerId") or "")[:12]
+                row = next((row for row in rows if cid and cid == str(row.get("id") or "")[:12]), None)
+                row = row or next((row for row in rows if target.get("containerName") and target["containerName"] == row.get("name")), None)
+                if row is None:
+                    compose_rows = [row for row in rows if target.get("composeProject") and target.get("composeService")
+                                    and target["composeProject"] == row.get("composeProject") and target["composeService"] == row.get("composeService")]
+                    if target.get("composeContainerNumber"):
+                        compose_rows = [row for row in compose_rows if target["composeContainerNumber"] == row.get("composeContainerNumber")]
+                    elif target.get("containerId") or target.get("containerName"):
+                        compose_rows = []
+                    row = compose_rows[0] if len(compose_rows) == 1 else None
+                state_key = target_state_key({"id": target.get("containerId"), "name": target.get("containerName"),
+                                               "composeProject": target.get("composeProject"), "composeService": target.get("composeService"),
+                                               "composeContainerNumber": target.get("composeContainerNumber")})
+                if row:
+                    if not any(item.get("id") == row.get("id") for item in targets):
+                        targets.append({**{key: row.get(key) or "" for key in ("id", "name", "composeProject", "composeService", "composeContainerNumber")}, "stateKey": state_key})
+                    if cid != str(row.get("id") or "")[:12]:
+                        target["containerId"] = str(row.get("id") or "")[:12]
+                        changed = True
+                else:
+                    targets.append({"id": target.get("containerId") or "", "name": target.get("containerName") or "",
+                                    "composeProject": target.get("composeProject") or "",
+                                    "composeService": target.get("composeService") or "", "stateKey": state_key, "missing": True})
+            if changed:
+                self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
+        else:
+            targets = [{key: row.get(key) or "" for key in ("id", "name", "composeProject", "composeService", "composeContainerNumber")} for row in rows]
+        return targets
+
+    def match_container_protection(self, rule: dict, stats: dict, timestamp: float, state: Optional[dict] = None) -> Tuple[bool, float, List[dict], List[dict], bool]:
         rule_id = str(rule.get("id") or "").strip()
-        state = self.container_protection_states.setdefault(
-            rule_id,
-            {"count": 0, "lastActionAt": None, "lastAction": "", "reason": "", "active": False, "locked": False, "metrics": {}},
-        )
+        if state is None:
+            state = self.container_protection_states.setdefault(rule_id, new_state())
         conditions = [condition for condition in (rule.get("conditions") or []) if isinstance(condition, dict)]
         logic = str(rule.get("logic") or "and").lower()
         ready = []
@@ -3261,116 +3337,178 @@ class TrafficCollector:
         return self.get_settings()
 
     def _evaluate_container_protection(self, timestamp: float) -> List[dict]:
-        actions = []
+        work = []
+        groups = []
+        single_groups = []
         for rule in list(self.container_protection_rules):
             if not rule.get("enabled"):
                 continue
-            target = self.resolve_container_protection_target(rule)
-            if not target or not target.get("id"):
-                continue
-            container_id = str(target.get("id") or "").strip()[:12]
-            if rule.get("containerId") != container_id:
-                rule["containerId"] = container_id
-                db = getattr(self, "db", None)
-                if db:
-                    db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
-            state = self.container_protection_states.setdefault(
-                str(rule.get("id") or container_id),
-                {"count": 0, "lastActionAt": None, "lastAction": "", "reason": "", "active": False, "locked": False, "metrics": {}},
-            )
-            state["containerId"] = container_id
-            state["containerName"] = str(target.get("name") or rule.get("containerName") or container_id)
-            if target.get("composeProject"):
-                state["composeProject"] = target.get("composeProject")
-            if target.get("composeService"):
-                state["composeService"] = target.get("composeService")
-            if state.get("locked"):
-                continue
-            stats_result = self.docker_container_stats(container_id)
-            if not isinstance(stats_result, dict) or not stats_result.get("ok"):
-                state["metrics"] = {}
-                continue
-            sample_at = float(stats_result.get("cachedAt") or timestamp)
-            if timestamp - sample_at > max(10.0, DOCKER_STATS_CACHE_SECONDS * 2):
-                state["metrics"] = {}
-                continue
-            if stats_result.get("cachedAt"):
-                previous_sample = state.get("lastStatsAt")
-                if previous_sample is not None and sample_at <= previous_sample:
+            targets = self.resolve_container_protection_targets(rule)
+            group = self.container_protection_states.setdefault(rule["id"], new_state())
+            multiple = rule.get("targetMode", "single") != "single"
+            if multiple:
+                prepare_group_states(group)
+                groups.append((group, targets))
+            if not targets:
+                group.update(metrics={}, active=False, monitorStatus="missing", monitorReason="未找到运行中的目标容器")
+            for target in targets:
+                state = state_for_target(group, target, multiple)
+                if not multiple and state is not group:
+                    single_groups.append((group, state))
+                cid = str(target.get("id") or "")[:12]
+                if not multiple and cid and rule.get("containerId") != cid:
+                    rule["containerId"] = cid
+                    self.db.set_setting("container_protection_rules", {"rules": self.container_protection_rules})
+                if state.get("containerId") != cid:
+                    state.update(metrics={}, active=False)
+                    state.pop("lastStatsAt", None)
+                state.update(containerId=cid, containerName=target.get("name") or cid,
+                             composeProject=target.get("composeProject") or "", composeService=target.get("composeService") or "")
+                if target.get("missing") or not cid:
+                    state.update(metrics={}, active=False, monitorStatus="missing", monitorReason="目标容器未运行或暂时不可见")
                     continue
-                if previous_sample is not None and sample_at - previous_sample > max(15.0, DOCKER_STATS_CACHE_SECONDS * 3):
-                    state["metrics"] = {}
-                state["lastStatsAt"] = sample_at
-            stats = self.normalize_container_stats(stats_result.get("stats") or {})
-            matched, value, ready_metrics, details, hot = self.match_container_protection(rule, stats, sample_at)
-            if not hot:
-                state["active"] = False
-                continue
-            state["active"] = bool(matched)
-            cooldown = max(0, int(rule.get("cooldownSeconds") or 0))
-            if state.get("actionFailed"):
-                cooldown = max(60, cooldown)
-            last_action_at = float(state.get("lastActionAt") or 0)
-            if cooldown and last_action_at and timestamp - last_action_at < cooldown:
-                continue
-            if not matched:
-                continue
-            desired_action = str(rule.get("action") or "restart").strip().lower()
-            max_actions = max(1, int(rule.get("maxActions") or 1))
-            if int(state.get("count") or 0) >= max_actions:
-                desired_action = "stop"
-            previous_state = copy.deepcopy(state)
-            if desired_action == "restart":
-                state["count"] = int(state.get("count") or 0) + 1
-            else:
-                state["stopAttempts"] = int(state.get("stopAttempts") or 0) + 1
-            state["lastActionAt"] = timestamp
-            state["lastAction"] = desired_action
-            state["pending"] = True
+                if state.get("locked"):
+                    state.update(monitorStatus="locked", monitorReason=state.get("reason") or "等待手动重置")
+                    continue
+                work.append((rule, target, state))
+        ids = list(dict.fromkeys(target["id"] for _, target, _ in work))
+        # The monitoring cycle includes stats requests and graceful Docker actions.
+        self.protection_sample_gap = max(15.0, DOCKER_STATS_CACHE_SECONDS * 3,
+                                         (len(ids) + 3) // 4 * 5.0 + 5.0,
+                                         getattr(self, "last_protection_cycle_seconds", 0) + 10.0)
+        started = time.monotonic()
+        def read_stats(cid, refresh=False):
             try:
-                self.save_protection_states()
-            except Exception:
-                state.clear()
-                state.update(previous_state, reason="action skipped: could not persist protection state")
-                continue
-            try:
-                action_result = self.docker_container_action(container_id, desired_action)
+                result = self.docker_container_stats(cid, refresh=True) if refresh else self.docker_container_stats(cid)
+                if isinstance(result, dict) and result.get("ok") and not result.get("cachedAt"):
+                    result = {**result, "sampledAt": timestamp + (max(0.0, time.monotonic() - started) if refresh else 0)}
+                return result
             except Exception as exc:
-                action_result = {"ok": False, "detail": type(exc).__name__}
-            state["pending"] = False
-            state["metrics"] = {}
-            state["actionFailed"] = not action_result.get("ok")
-            state["reason"] = f"{desired_action} {'failed' if state['actionFailed'] else 'completed'}: " + ", ".join(
-                f"{item['metric']}={item['value']} threshold={item['threshold']} duration={item['durationSeconds']}s" for item in details
-            )
-            state["locked"] = desired_action == "stop" and (not state["actionFailed"] or state["stopAttempts"] >= 3)
+                return {"ok": False, "detail": type(exc).__name__}
+        samples = {}
+        if ids:
+            with ThreadPoolExecutor(max_workers=min(4, len(ids)), thread_name_prefix="docker-protection") as pool:
+                samples = dict(zip(ids, pool.map(read_stats, ids)))
+        actions = []
+        acted = set()
+        for rule, target, state in work:
+            cid = target["id"]
+            if cid in acted:
+                state.update(metrics={}, active=False, monitorStatus="waiting", monitorReason="本轮已由其他规则执行动作")
+                continue
             try:
-                self.save_protection_states()
-            except Exception:
-                state.update(locked=True, pending=True, reason="action result could not be saved; manual reset required")
-            alert_rule = {
-                **rule,
-                "containerId": container_id,
-                "containerName": state.get("containerName") or container_id,
-                "composeProject": state.get("composeProject") or rule.get("composeProject") or "",
-                "composeService": state.get("composeService") or rule.get("composeService") or "",
-                "logic": rule.get("logic") or "and",
-                "action": desired_action,
-                "matchedMetrics": ready_metrics,
-                "actionResult": action_result,
-                "metrics": details,
-                "state": dict(state),
-            }
+                evaluation_at = timestamp + max(0.0, time.monotonic() - started)
+                sample = samples[cid]
+                if isinstance(sample, dict) and sample.get("ok") and sample.get("cachedAt") and evaluation_at - sample["cachedAt"] > max(10.0, DOCKER_STATS_CACHE_SECONDS * 2):
+                    sample = read_stats(cid, refresh=True)
+                    samples[cid] = sample
+                    evaluation_at = timestamp + max(0.0, time.monotonic() - started)
+                action = self._evaluate_container_protection_target(rule, target, state, sample, evaluation_at)
+                if action:
+                    actions.append(action)
+                    acted.add(cid)
+            except Exception as exc:
+                state.update(metrics={}, active=False, monitorStatus="unavailable", monitorReason=type(exc).__name__)
+                traceback.print_exc(file=sys.stderr)
+        for group, targets in groups:
+            current = [(group.get("containers") or {}).get(target_state_key(target), {}) for target in targets]
+            for key, state in (group.get("containers") or {}).items():
+                if key not in {target_state_key(target) for target in targets}:
+                    state.update(metrics={}, active=False, monitorStatus="missing", monitorReason="目标容器未运行或暂时不可见")
+            group.update(count=sum(int(state.get("count") or 0) for state in (group.get("containers") or {}).values()),
+                         locked=bool(current) and all(state.get("locked") for state in current),
+                         monitorStatus="monitoring" if current else "missing",
+                         monitorReason=f"{len(current)} 个目标 · {sum(s.get('monitorStatus') in {'missing', 'unavailable', 'stale'} for s in current)} 个采样异常")
+        for group, state in single_groups:
+            group.update(state)
+        self.last_protection_cycle_seconds = time.monotonic() - started
+        return actions
+
+    def _evaluate_container_protection_target(self, rule: dict, target: dict, state: dict,
+                                              stats_result: dict, timestamp: float) -> Optional[dict]:
+        container_id = str(target.get("id") or "")[:12]
+        if not isinstance(stats_result, dict) or not stats_result.get("ok"):
+            state.update(metrics={}, active=False, monitorStatus="unavailable", monitorReason=str((stats_result or {}).get("detail") or "Docker stats unavailable")[:240])
+            return None
+        sample_at = float(stats_result.get("cachedAt") or stats_result.get("sampledAt") or timestamp)
+        if timestamp - sample_at > max(10.0, DOCKER_STATS_CACHE_SECONDS * 2):
+            state.update(metrics={}, active=False, monitorStatus="stale", monitorReason="Docker stats sample expired")
+            return None
+        if stats_result.get("cachedAt"):
+            previous_sample = state.get("lastStatsAt")
+            if previous_sample is not None and sample_at <= previous_sample:
+                return None
+            if previous_sample is not None and sample_at - previous_sample > self.protection_sample_gap:
+                state["metrics"] = {}
+            state["lastStatsAt"] = sample_at
+        stats = self.normalize_container_stats(stats_result.get("stats") or {})
+        matched, value, ready_metrics, details, hot = self.match_container_protection(rule, stats, sample_at, state)
+        state.update(monitorStatus="exceeded" if hot else "healthy", monitorReason="", lastCheckedAt=sample_at, metricDetails=details)
+        if not hot:
+            state["active"] = False
+            return None
+        state["active"] = bool(matched)
+        cooldown = max(0, int(rule.get("cooldownSeconds") or 0))
+        if state.get("actionFailed"):
+            cooldown = max(60, cooldown)
+        last_action_at = float(state.get("lastActionAt") or 0)
+        if cooldown and last_action_at and timestamp - last_action_at < cooldown:
+            return None
+        if not matched:
+            return None
+        desired_action = str(rule.get("action") or "restart").strip().lower()
+        previous_state = copy.deepcopy(state)
+        if desired_action == "restart":
+            state["count"] = int(state.get("count") or 0) + 1
+        else:
+            state["stopAttempts"] = int(state.get("stopAttempts") or 0) + 1
+        state["lastActionAt"] = timestamp
+        state["lastAction"] = desired_action
+        state["pending"] = True
+        try:
+            self.save_protection_states()
+        except Exception:
+            state.clear()
+            state.update(previous_state, reason="action skipped: could not persist protection state")
+            return None
+        try:
+            action_result = self.docker_container_action(container_id, desired_action)
+        except Exception as exc:
+            action_result = {"ok": False, "detail": type(exc).__name__}
+        state["pending"] = False
+        state["metrics"] = {}
+        state["actionFailed"] = not action_result.get("ok")
+        state["reason"] = f"{desired_action} {'failed' if state['actionFailed'] else 'completed'}: " + ", ".join(
+            f"{item['metric']}={item['value']} threshold={item['threshold']} duration={item['durationSeconds']}s" for item in details
+        )
+        state["locked"] = desired_action == "stop" and (not state["actionFailed"] or state["stopAttempts"] >= 3)
+        try:
+            self.save_protection_states()
+        except Exception:
+            state.update(locked=True, pending=True, reason="action result could not be saved; manual reset required")
+        alert_rule = {
+            **rule,
+            "containerId": container_id,
+            "containerName": state.get("containerName") or container_id,
+            "composeProject": state.get("composeProject") or rule.get("composeProject") or "",
+            "composeService": state.get("composeService") or rule.get("composeService") or "",
+            "logic": rule.get("logic") or "and",
+            "action": desired_action,
+            "matchedMetrics": ready_metrics,
+            "actionResult": action_result,
+            "metrics": details,
+            "state": dict(state),
+        }
+        try:
             self.record_alert(
                 "container_protection",
                 "critical" if desired_action == "stop" else "warning",
                 f"{rule.get('name') or '容器保护'}: {desired_action} {state.get('containerName') or container_id}",
-                int(value or 0),
-                int(max((item["threshold"] for item in details), default=0)),
-                alert_rule,
+                int(value or 0), int(max((item["threshold"] for item in details), default=0)), alert_rule,
             )
-            actions.append(alert_rule)
-        return actions
+        except Exception as exc:
+            state["monitorReason"] = f"动作已记录，告警记录失败：{type(exc).__name__}"
+        return alert_rule
 
     def refresh_interface_details(self) -> None:
         details = get_interface_details(set(self.capture_interfaces))
@@ -4329,13 +4467,10 @@ class TrafficCollector:
         ]
         if not daily_rules:
             return
-        day_key = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-        if self.daily_alert_date == day_key:
-            return
         day_start = int(datetime.fromtimestamp(timestamp).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        totals = self.db.total_between(day_start, day_start + 86400, "wan")
-        if self.evaluate_monitor_rule("daily_wan_tx_bytes", totals["txBytes"], timestamp):
-            self.daily_alert_date = day_key
+        day_end = int((datetime.fromtimestamp(timestamp).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).timestamp())
+        totals = self.db.total_between(day_start, day_end, "wan")
+        self.evaluate_monitor_rule("daily_wan_tx_bytes", totals["txBytes"], timestamp)
 
     def evaluate_monitor_rule(self, metric: str, value: float, timestamp: float) -> bool:
         triggered = False
@@ -4347,6 +4482,12 @@ class TrafficCollector:
                 continue
             matched = value >= threshold if rule.get("operator", "gte") == "gte" else value <= threshold
             state = self.rule_states.setdefault(rule["id"], {"active": False, "startedAt": None})
+            day_key = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d") if metric == "daily_wan_tx_bytes" else None
+            if day_key:
+                if self.daily_alert_dates.get(rule["id"]) == day_key:
+                    continue
+                if state.get("date") != day_key:
+                    state.update(date=day_key, active=False, startedAt=None)
             if matched:
                 if state["startedAt"] is None:
                     state["startedAt"] = timestamp
@@ -4355,6 +4496,9 @@ class TrafficCollector:
                     state["active"] = True
                     triggered = True
                     self.record_alert(rule["id"], "warning", rule.get("name") or "监控规则触发", int(value), threshold, rule)
+                    if day_key:
+                        self.daily_alert_dates[rule["id"]] = day_key
+                        self.db.set_setting("monitor_daily_alert_dates", self.daily_alert_dates)
             else:
                 state["active"] = False
                 state["startedAt"] = None
@@ -4477,6 +4621,7 @@ class TrafficCollector:
             "threshold": threshold,
             "ruleId": rule.get("id") if rule else alert_type,
             "channelIds": rule.get("channelIds", []) if rule else [],
+            "channelMode": notification_rule_mode(rule.get("channelMode", "auto"), rule.get("channelIds", [])) if rule else "all",
         }
         evidence = self.build_alert_evidence(alert, rule)
         alert["evidence"] = evidence
@@ -4489,10 +4634,11 @@ class TrafficCollector:
 
     def notify_alert(self, alert: dict) -> None:
         channel_ids = set(alert.get("channelIds") or [])
+        mode = notification_rule_mode(alert.get("channelMode", "auto"), list(channel_ids))
         channels = [
             channel
             for channel in self.notification_channels
-            if channel.get("enabled") and (not channel_ids or channel.get("id") in channel_ids)
+            if channel.get("enabled") and mode != "none" and (mode == "all" or channel.get("id") in channel_ids)
         ]
         if not channels:
             self.save_notification_result(
@@ -4501,8 +4647,9 @@ class TrafficCollector:
                     "channelId": "",
                     "channelName": "",
                     "channelType": "",
-                    "ok": False,
-                    "detail": "no enabled notification channel matched this rule",
+                    "ok": mode == "none",
+                    "skipped": mode == "none",
+                    "detail": "已关闭通知，仅保留告警记录" if mode == "none" else "no enabled notification channel matched this rule",
                     "timestamp": int(now()),
                 },
             )
@@ -4510,7 +4657,7 @@ class TrafficCollector:
         threading.Thread(target=self.deliver_alert_notifications, args=(alert, channels), daemon=True).start()
 
     def deliver_alert_notifications(self, alert: dict, channels: List[dict]) -> None:
-        for channel in channels[:20]:
+        for channel in channels:
             result = dispatch_notification_alert(alert, channel, APP_NAME, APP_VERSION)
             detail = str(result.get("detail") or result.get("body") or "")[:500]
             self.save_notification_result(
@@ -5223,8 +5370,8 @@ class TrafficCollector:
                 },
             }
 
-    def docker_containers(self) -> dict:
-        self.refresh_container_ports()
+    def docker_containers(self, refresh: bool = False) -> dict:
+        self.refresh_container_ports(force=refresh)
         with self.lock:
             return {
                 "enabled": ENABLE_DOCKER_DISCOVERY,
@@ -5334,8 +5481,15 @@ class TrafficCollector:
     def update_container_protection_rules(self, payload: ContainerProtectionRulesPayload) -> dict:
         rows = [sanitize_container_protection_rule(rule) for rule in payload.rules]
         with self.protection_lock:
-            self.db.set_setting("container_protection_rules", {"rules": rows})
+            result = self.db.set_setting("container_protection_rules", {"rules": rows})
+            if not result.get("ok"):
+                raise HTTPException(status_code=500, detail="容器保护规则保存失败")
             self.container_protection_rules = rows
+            self.container_protection_states = restore_states(
+                durable_states(self.container_protection_states, {row["id"] for row in rows}),
+                {row["id"] for row in rows},
+            )
+            release_legacy_restart_limits(self.container_protection_states, rows)
         return self.get_settings()
 
     def update_runtime_settings(self, payload: RuntimeSettingsPayload) -> dict:
@@ -6302,8 +6456,8 @@ async def docker_icons() -> dict:
 
 
 @app.get("/api/docker/containers")
-async def docker_containers() -> dict:
-    return await run_blocking(collector.docker_containers)
+async def docker_containers(refresh: bool = False) -> dict:
+    return await run_blocking(collector.docker_containers, refresh)
 
 
 @app.get("/api/docker/containers/{container_id}")

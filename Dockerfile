@@ -37,7 +37,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN sed -i "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g; s|http://deb.debian.org/debian-security|${DEBIAN_MIRROR}-security|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends libpcap0.8 pciutils \
+    && apt-get install -y --no-install-recommends libpcap0.8 pciutils tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

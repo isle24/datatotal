@@ -27,18 +27,19 @@ class ProtectionTests(unittest.TestCase):
         c.evaluate_container_protection(400)
         c.docker_container_action.assert_called_once_with("demo", "stop")
 
-    def test_recovery_does_not_clear_restart_limit(self):
+    def test_recovery_preserves_history_without_limiting_restarts(self):
         c = self.make_collector()
         for timestamp, cpu in enumerate([95, 0, 95, 0, 95], 100):
             c.docker_container_stats.return_value = {"ok": True, "stats": {"cpuPercent": cpu}}
             c.evaluate_container_protection(timestamp)
-        self.assertEqual([call.args[1] for call in c.docker_container_action.call_args_list], ["restart", "restart", "stop"])
+        self.assertEqual([call.args[1] for call in c.docker_container_action.call_args_list], ["restart", "restart", "restart"])
+        self.assertEqual(c.container_protection_states["r"]["count"], 3)
 
-    def test_stop_lock_and_counts_survive_application_restart(self):
-        c = self.make_collector()
+    def test_explicit_stop_lock_survives_application_restart(self):
+        c = self.make_collector("stop")
         for timestamp in (100, 101, 102):
             c.evaluate_container_protection(timestamp)
-        restored = self.make_collector(db=c.db)
+        restored = self.make_collector("stop", db=c.db)
         restored.load_saved_settings()
         restored.evaluate_container_protection(300)
         restored.docker_container_action.assert_not_called()

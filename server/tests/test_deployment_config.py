@@ -326,7 +326,7 @@ def test_legacy_byte_threshold_is_formatted_as_readable_gibibytes():
 
 
 def test_zero_duration_monitor_rule_triggers_immediately():
-    collector = main.TrafficCollector.__new__(main.TrafficCollector)
+    collector = main.TrafficCollector()
     collector.monitor_rules = [{
         "id": "daily",
         "name": "daily upload",

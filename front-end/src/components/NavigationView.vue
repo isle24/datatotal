@@ -55,7 +55,11 @@
     <div v-else-if="!error && !filtered.length" class="nav-empty">
       <Compass :size="40" />
       <h3>{{ query || group ? "没有匹配的服务" : "暂无服务" }}</h3>
-      <button v-if="!query && !group" @click="edit()">
+      <p>{{ query || group ? "试试其他关键词，或清除筛选查看全部服务。" : "添加常用服务地址，也可以从 Docker 页面加入 Web 端口。" }}</p>
+      <button v-if="query || group" type="button" @click="resetFilters">
+        <X :size="17" />清除筛选
+      </button>
+      <button v-else type="button" @click="edit()">
         <Plus :size="17" />添加服务
       </button>
     </div>
@@ -100,25 +104,27 @@
         </article>
       </div>
     </section>
-    <div
-      v-if="editor"
+    <dialog
+      ref="editorDialog"
       class="nav-backdrop"
-      @click.self="closeEditor"
-      @keydown.esc="closeEditor"
+      aria-labelledby="navigation-editor-title"
+      @click="dismissBackdrop"
+      @cancel.prevent="cancelEditor"
     >
-      <form class="nav-editor" @submit.prevent="save">
+      <form v-if="editor" class="nav-editor" @submit.prevent="save">
         <div class="nav-editor-title">
-          <h3>{{ editor.id ? "编辑服务" : "添加服务" }}</h3>
+          <h3 id="navigation-editor-title">{{ editor.id ? "编辑服务" : "添加服务" }}</h3>
           <button
             type="button"
             title="关闭"
             aria-label="关闭编辑"
-            :disabled="saving"
+            :disabled="saving || iconBusy || discardPrompt"
             @click="closeEditor"
           >
             <X :size="18" />
           </button>
         </div>
+        <fieldset class="nav-editor-fields" :disabled="saving || discardPrompt">
         <div class="nav-icon-editor">
           <span class="nav-logo"
             ><img v-if="editor.icon" :src="editor.icon" alt="服务图标" /><Globe
@@ -176,32 +182,40 @@
               max="10000"
           /></label>
         </div>
+        </fieldset>
         <p v-if="editorError" class="nav-error" role="alert">
           {{ editorError }}
         </p>
-        <div class="nav-editor-actions">
+        <section v-if="discardPrompt" class="nav-discard-prompt" role="alert">
+          <p><strong>放弃尚未保存的修改？</strong><br />继续编辑可保留当前填写的内容。</p>
+          <div class="nav-discard-actions">
+            <button ref="discardContinueButton" type="button" class="nav-primary" @click="continueEditing">继续编辑</button>
+            <button type="button" class="nav-delete" @click="discardEditor">放弃修改并关闭</button>
+          </div>
+        </section>
+        <div v-else class="nav-editor-actions">
           <button
             v-if="editor.id"
             type="button"
             class="nav-delete"
-            :disabled="saving"
+            :disabled="saving || iconBusy"
             @click="remove"
           >
-            <Trash2 :size="16" />删除</button
-          ><span></span
-          ><button type="button" :disabled="saving" @click="closeEditor">
-            取消</button
-          ><button class="nav-primary" :disabled="saving || iconBusy">
+            <Trash2 :size="16" />删除
+          </button>
+          <span class="nav-draft-state" role="status">{{ editorDirty ? "尚未保存" : "" }}</span>
+          <button type="button" :disabled="saving || iconBusy" @click="closeEditor">取消</button>
+          <button class="nav-primary" :disabled="saving || iconBusy">
             <Save :size="16" />{{ saving ? "保存中…" : "保存" }}
           </button>
         </div>
       </form>
-    </div>
+    </dialog>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import {
   Compass,
   Search,
@@ -230,10 +244,15 @@ const entries = ref([]),
   error = ref("");
 const unavailable = ref(false);
 const editor = ref(null),
+  editorDialog = ref(null),
+  editorBaseline = ref(""),
   editorError = ref(""),
+  discardPrompt = ref(false),
+  discardContinueButton = ref(null),
   saving = ref(false),
   iconBusy = ref(false);
-let disposed = false;
+const editorDirty = computed(() => Boolean(editor.value) && JSON.stringify(editor.value) !== editorBaseline.value);
+let disposed = false, editorFocusTarget = null;
 const groups = computed(() =>
   [...new Set(entries.value.map((e) => e.group || "常用"))].sort(),
 );
@@ -267,7 +286,10 @@ async function load() {
   unavailable.value = false;
   try {
     const data = await props.repository.list();
-    if (!disposed) entries.value = data;
+    if (!disposed) {
+      entries.value = data;
+      if (group.value && !groups.value.includes(group.value)) group.value = "";
+    }
   } catch (e) {
     if (!disposed) {
       error.value = e.message || String(e);
@@ -277,8 +299,13 @@ async function load() {
     busy.value = false;
   }
 }
-function edit(entry) {
+function resetFilters() {
+  query.value = "";
+  group.value = "";
+}
+async function edit(entry) {
   editorError.value = "";
+  discardPrompt.value = false;
   editor.value = entry
     ? { ...entry }
     : {
@@ -290,9 +317,46 @@ function edit(entry) {
         sortOrder: 0,
         sourceKey: "",
       };
+  editorBaseline.value = JSON.stringify(editor.value);
+  await nextTick();
+  if (!disposed && editor.value && !editorDialog.value?.open) editorDialog.value?.showModal();
 }
-function closeEditor() {
-  if (!saving.value) editor.value = null;
+function finishEditor() {
+  editorDialog.value?.close();
+  editor.value = null;
+  editorBaseline.value = "";
+  discardPrompt.value = false;
+  editorFocusTarget = null;
+}
+async function closeEditor() {
+  if (!editor.value || saving.value || iconBusy.value || discardPrompt.value) return;
+  if (editorDirty.value) {
+    editorFocusTarget = globalThis.document?.activeElement;
+    discardPrompt.value = true;
+    await nextTick();
+    discardContinueButton.value?.focus();
+    return;
+  }
+  finishEditor();
+}
+async function continueEditing() {
+  if (!discardPrompt.value || saving.value || iconBusy.value) return;
+  discardPrompt.value = false;
+  await nextTick();
+  if (editorFocusTarget?.isConnected && editorDialog.value?.contains(editorFocusTarget)) editorFocusTarget.focus();
+  else editorDialog.value?.querySelector?.("[autofocus]")?.focus();
+  editorFocusTarget = null;
+}
+function discardEditor() {
+  if (discardPrompt.value && !saving.value && !iconBusy.value) finishEditor();
+}
+function cancelEditor() {
+  return discardPrompt.value ? continueEditing() : closeEditor();
+}
+function dismissBackdrop(event) {
+  if (event.target !== event.currentTarget) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return closeEditor();
 }
 async function open(entry) {
   const url = safeNavigationUrl(entry.url);
@@ -322,7 +386,7 @@ async function upload(event) {
   }
 }
 async function save() {
-  if (saving.value) return;
+  if (!editor.value || saving.value || iconBusy.value || discardPrompt.value) return;
   const url = safeNavigationUrl(editor.value.url);
   if (!url) {
     editorError.value = "请输入不含账号密码的 HTTP/HTTPS 地址";
@@ -332,7 +396,7 @@ async function save() {
   editorError.value = "";
   try {
     await props.repository.save({ ...editor.value, url });
-    editor.value = null;
+    finishEditor();
     await load();
   } catch (e) {
     editorError.value = e.message || String(e);
@@ -341,12 +405,14 @@ async function save() {
   }
 }
 async function remove() {
-  if (!(await props.repository.confirm(`删除导航服务“${editor.value.name}”？`)))
-    return;
+  if (!editor.value || saving.value || iconBusy.value || discardPrompt.value) return;
+  const target = editor.value;
   saving.value = true;
+  editorError.value = "";
   try {
-    await props.repository.remove(editor.value.id);
-    editor.value = null;
+    if (!(await props.repository.confirm(`删除导航服务“${target.name}”？`))) return;
+    await props.repository.remove(target.id);
+    finishEditor();
     await load();
   } catch (e) {
     editorError.value = e.message || String(e);
@@ -587,6 +653,13 @@ onUnmounted(() => {
   margin: 0;
   font-size: 17px;
 }
+.nav-empty p {
+  margin: 0;
+  max-width: 48ch;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+}
 .nav-error {
   color: #d44646;
   font-size: 13px;
@@ -594,23 +667,35 @@ onUnmounted(() => {
   overflow-wrap: anywhere;
 }
 .nav-backdrop {
-  position: fixed;
-  inset: 0;
+  width: min(560px, calc(100% - 48px));
+  max-width: none;
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nav-text);
+  overflow: visible;
+}
+.nav-backdrop::backdrop {
   background: #0006;
-  z-index: 110;
-  display: grid;
-  place-items: center;
-  padding: 24px;
 }
 .nav-editor {
-  width: min(560px, 100%);
-  max-height: 90vh;
+  width: 100%;
+  box-sizing: border-box;
+  max-height: min(90dvh, calc(100dvh - 48px));
   overflow-y: auto;
   background: var(--nav-panel);
   border: 1px solid var(--nav-line);
   border-radius: 8px;
   padding: 24px;
   box-shadow: 0 24px 100px #0003;
+}
+.nav-editor-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 .nav-editor-title {
   justify-content: space-between;
@@ -669,6 +754,29 @@ onUnmounted(() => {
 .nav-editor-actions > span {
   flex: 1;
 }
+.nav-draft-state {
+  color: var(--nav-muted);
+  font-size: 12px;
+}
+.nav-discard-prompt {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--nav-line);
+}
+.nav-discard-prompt p {
+  margin: 0 0 14px;
+  color: var(--nav-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.nav-discard-prompt strong {
+  color: var(--nav-text);
+}
+.nav-discard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 .nav-hub .nav-delete {
   color: #d44646;
   border-color: transparent;
@@ -693,10 +801,12 @@ onUnmounted(() => {
     max-width: 120px;
   }
   .nav-backdrop {
-    padding: 12px;
+    width: calc(100% - 24px);
+    max-height: calc(100dvh - 24px);
   }
   .nav-editor {
     padding: 18px;
+    max-height: calc(100dvh - 24px);
   }
   .nav-grid {
     gap: 12px;

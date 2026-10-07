@@ -14,16 +14,17 @@
           <span>{{ item.label }}</span>
         </button>
       </nav>
+      <label class="mobile-page-select">切换页面<select :value="activeView" @change="setView($event.target.value)"><option v-for="item in navItems" :key="item.key" :value="item.key">{{ item.label }}</option></select></label>
     </aside>
 
     <main class="main">
       <header v-if="!native" class="topbar">
         <div>
-          <p class="eyebrow">{{ subtitle }}</p>
+          <p class="topbar-description">{{ subtitle }}</p>
           <h2>{{ currentTitle }}</h2>
         </div>
         <div class="top-actions">
-          <span v-if="toast" class="toast">{{ toast }}</span>
+          <span v-if="toast" class="toast" role="status" aria-live="polite">{{ toast }}</span>
           <button class="icon-button" type="button" :title="theme === 'dark' ? '切换浅色模式' : '切换暗黑模式'" @click="toggleTheme">
             <Sun v-if="theme === 'dark'" :size="18" />
             <Moon v-else :size="18" />
@@ -124,7 +125,7 @@
           </section>
           <section class="card">
             <CardHead title="告警" meta="最近 8 条">
-              <button type="button" @click="clearAlerts">清空</button>
+              <button type="button" @click="setView('monitor')">查看告警记录</button>
             </CardHead>
             <div class="alert-list">
               <div v-for="alert in overview?.alerts || []" :key="alert.id" class="alert-row">
@@ -179,6 +180,7 @@
                   <td>↓ {{ formatRate(snapshot?.rates?.[name]?.systemRxBps) }}<br />↑ {{ formatRate(snapshot?.rates?.[name]?.systemTxBps) }}</td>
                   <td>↓ {{ formatBytes(item.system?.rxBytes) }}<br />↑ {{ formatBytes(item.system?.txBytes) }}</td>
                 </tr>
+                <tr v-if="!filteredInterfaces.length"><td colspan="9" class="empty">{{ interfacesLoading ? '正在读取网卡数据…' : ifaceFilter !== 'all' ? '当前筛选没有网卡，请选择全部网卡' : '当前尚未读取到网卡数据，可点击刷新重试' }}</td></tr>
               </tbody>
             </table>
           </div>
@@ -208,14 +210,19 @@
         <section class="card">
           <CardHead title="进程占用" meta="默认显示排行卡片">
             <div class="controls">
-              <select v-model="processPeriod" @change="refreshProcesses">
+              <label>统计范围<select v-model="processPeriod" @change="processPeriod === 'custom' ? processRangeError = '' : refreshProcesses()">
                 <option value="30s">30 秒</option><option value="today">当天</option><option value="1d">1 天</option><option value="3d">3 天</option><option value="7d">7 天</option><option value="30d">30 天</option><option value="custom">自定义</option>
-              </select>
-              <input v-if="processPeriod === 'custom'" v-model="processStart" type="datetime-local" @change="refreshProcesses" />
-              <input v-if="processPeriod === 'custom'" v-model="processEnd" type="datetime-local" @change="refreshProcesses" />
-              <input v-model="processSearch" type="search" placeholder="筛选进程" />
+              </select></label>
+              <label v-if="processPeriod === 'custom'">开始时间<input v-model="processStart" type="datetime-local" /></label>
+              <label v-if="processPeriod === 'custom'">结束时间<input v-model="processEnd" type="datetime-local" /></label>
+              <button v-if="processPeriod === 'custom'" type="button" @click="applyProcessRange">应用时间范围</button>
+              <label>筛选当前排行<input v-model="processSearch" type="search" placeholder="进程名称 / PID" /></label>
             </div>
           </CardHead>
+          <p v-if="processRangeError" class="settings-feedback error" role="alert">{{ processRangeError }}</p>
+          <p v-if="processPeriod === 'custom' && (processStart !== appliedProcessRange.start || processEnd !== appliedProcessRange.end)" class="field-hint">修改的时间范围尚未应用，请点击“应用时间范围”。</p>
+          <p class="field-hint">显示前 30 名进程，输入框仅筛选当前排行。</p>
+          <div v-if="processLoading" class="empty" role="status">正在读取进程排行…</div>
           <div class="process-grid">
             <button v-for="item in filteredProcesses" :key="`${item.pid}-${item.name}`" class="process-card" type="button" @click="openConnections({ owner: item.name })">
               <span class="avatar">{{ (item.name || '?').slice(0, 1).toUpperCase() }}</span>
@@ -228,6 +235,7 @@
               <small>↓ {{ formatBytes(item.rxBytes) }} · ↑ {{ formatBytes(item.txBytes) }}</small>
             </button>
           </div>
+          <div v-if="!processLoading && !filteredProcesses.length" class="empty" role="status"><span>{{ processSearch ? '当前排行中没有匹配的进程' : processPeriod === 'custom' && !appliedProcessRange.start ? '请选择完整的时间范围并应用' : '当前时间范围还没有可见的进程流量' }}</span><button v-if="processSearch" type="button" @click="processSearch = ''">清空筛选</button></div>
         </section>
       </section>
 
@@ -296,7 +304,7 @@
         <section class="card">
           <CardHead title="Docker 容器" :meta="dockerStatusText">
             <input v-model="dockerSearch" class="search-input" type="search" placeholder="搜索容器、镜像、端口、备注" />
-            <button type="button" @click="refreshDocker"><RefreshCw :size="16" />刷新</button>
+            <button type="button" @click="refreshDocker(true)"><RefreshCw :size="16" />刷新</button>
           </CardHead>
           <div class="docker-stack">
             <article v-for="container in dockerContainers" :key="container.id || container.name" :class="['docker-card', 'accordion-card', { expanded: isDockerCardExpanded(container) }]">
@@ -356,7 +364,11 @@
                 </div>
               </div>
             </article>
-            <div v-if="!dockerContainers.length" class="empty">暂无 Docker 容器数据；确认已映射 Docker socket 并启用 ENABLE_DOCKER_DISCOVERY，或先保存手动端口配置</div>
+            <div v-if="!dockerContainers.length" class="empty" role="status">
+              <template v-if="dockerListLoading">正在读取 Docker 容器…</template>
+              <template v-else-if="(dockerData.containers || []).length"><strong>没有匹配的容器</strong><button type="button" @click="dockerSearch = ''">清空搜索</button></template>
+              <template v-else><strong>尚未发现 Docker 容器</strong><span>在常用设置中开启 Docker 自动发现；已开启时可重新获取列表。</span><button type="button" @click="setView('settings'); settingsSection = 'runtime'">查看 Docker 自动发现</button><button type="button" @click="refreshDocker(true)">重新获取</button></template>
+            </div>
           </div>
         </section>
       </section>
@@ -375,9 +387,9 @@
           </div>
         </section>
         <div class="monitor-stat-grid">
-          <div class="monitor-stat"><span>流量规则</span><strong>{{ monitorRules.filter((item) => item.enabled).length }}<small>/{{ monitorRules.length }}</small></strong><p>启用规则</p></div>
-          <div class="monitor-stat"><span>容器保护</span><strong>{{ containerRules.filter((item) => item.enabled).length }}<small>/{{ containerRules.length }}</small></strong><p>监控中</p></div>
-          <div class="monitor-stat"><span>通知渠道</span><strong>{{ channels.filter((item) => item.enabled).length }}<small>/{{ channels.length }}</small></strong><p>可用渠道</p></div>
+          <div class="monitor-stat"><span>流量规则</span><strong>{{ statusRules.filter((item) => item.enabled).length }}<small>/{{ statusRules.length }}</small></strong><p>启用规则</p></div>
+          <div class="monitor-stat"><span>容器保护</span><strong>{{ statusContainerRules.filter((item) => item.enabled).length }}<small>/{{ statusContainerRules.length }}</small></strong><p>监控中</p></div>
+          <div class="monitor-stat"><span>通知渠道</span><strong>{{ statusChannels.filter((item) => item.enabled).length }}<small>/{{ statusChannels.length }}</small></strong><p>可用渠道</p></div>
           <div class="monitor-stat"><span>最近告警</span><strong>{{ overview?.alerts?.length || 0 }}</strong><p>当前缓存</p></div>
         </div>
         <section class="card monitor-section">
@@ -385,7 +397,7 @@
             <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
           </CardHead>
           <div class="accordion-stack monitor-stack">
-            <article v-for="rule in monitorRules" :key="`status-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-traffic', rule.id) }]">
+            <article v-for="rule in statusRules" :key="`status-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-traffic', rule.id) }]">
               <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-traffic', rule.id)">
                 <span class="monitor-card-icon"><Bell :size="17" /></span>
                 <span class="monitor-card-copy"><strong>{{ rule.name || "未命名规则" }}</strong><small>{{ monitorRuleSummary(rule) }}</small></span>
@@ -393,10 +405,10 @@
                 <component :is="isMonitorCardExpanded('status-traffic', rule.id) ? ChevronUp : ChevronDown" :size="18" />
               </button>
               <div v-if="isMonitorCardExpanded('status-traffic', rule.id)" class="monitor-card-body">
-                <span>指标：{{ metricLabels[rule.metric] || rule.metric }}</span><span>阈值：{{ formatMonitorThreshold(rule) }}</span><span>持续：{{ rule.durationSeconds || 0 }} 秒</span><span>渠道：{{ (rule.channelIds || []).length || "未选择" }}</span>
+                <span>指标：{{ metricLabels[rule.metric] || rule.metric }}</span><span>阈值：{{ formatMonitorThreshold(rule) }}</span><span>持续：{{ rule.durationSeconds || 0 }} 秒</span><span>渠道：{{ ruleNotificationSummary(rule) }}</span>
               </div>
             </article>
-            <div v-if="!monitorRules.length" class="empty card-empty">暂无流量监控规则</div>
+            <div v-if="!statusRules.length" class="empty card-empty">暂无流量监控规则</div>
           </div>
         </section>
         <section class="card monitor-section">
@@ -404,16 +416,16 @@
             <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
           </CardHead>
           <div class="accordion-stack monitor-stack">
-            <article v-for="rule in containerRules" :key="`status-container-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-container', rule.id) }]">
+            <article v-for="rule in statusContainerRules" :key="`status-container-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-container', rule.id) }]">
               <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-container', rule.id)">
                 <span class="monitor-card-icon protection"><ShieldCheck :size="17" /></span>
                 <span class="monitor-card-copy"><strong>{{ rule.name || "未命名容器保护" }}</strong><small>{{ containerProtectionSummary(rule) }}</small></span>
                 <span :class="['rule-state', rule.enabled ? 'enabled' : 'disabled']"><component :is="rule.enabled ? ShieldCheck : CircleOff" :size="14" />{{ rule.enabled ? "监控中" : "停用" }}</span>
                 <component :is="isMonitorCardExpanded('status-container', rule.id) ? ChevronUp : ChevronDown" :size="18" />
               </button>
-              <div v-if="isMonitorCardExpanded('status-container', rule.id)" class="monitor-card-body"><span>条件：{{ rule.conditions?.length || 0 }} 条 / {{ rule.logic === "or" ? "任一条件" : "全部条件" }}</span><span>动作：{{ containerProtectionActions.find((item) => item.value === rule.action)?.label || rule.action }}</span><span>最大次数：{{ rule.maxActions || 1 }}</span><span>通知：{{ (rule.channelIds || []).length || "未选择" }}</span></div>
+              <div v-if="isMonitorCardExpanded('status-container', rule.id)" class="monitor-card-body"><span>条件：{{ rule.conditions?.length || 0 }} 条 / {{ rule.logic === "or" ? "任一条件" : "全部条件" }}</span><span>动作：{{ containerProtectionActions.find((item) => item.value === rule.action)?.label || rule.action }}</span><span v-if="rule.action === 'restart'">次数不限</span><span>通知：{{ ruleNotificationSummary(rule) }}</span></div>
             </article>
-            <div v-if="!containerRules.length" class="empty card-empty">暂无容器保护规则</div>
+            <div v-if="!statusContainerRules.length" class="empty card-empty">暂无容器保护规则</div>
           </div>
         </section>
         <section class="card monitor-section">
@@ -421,16 +433,16 @@
             <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
           </CardHead>
           <div class="accordion-stack monitor-stack">
-            <article v-for="channel in channels" :key="`status-channel-${channel.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-channel', channel.id) }]">
+            <article v-for="channel in statusChannels" :key="`status-channel-${channel.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-channel', channel.id) }]">
               <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-channel', channel.id)">
                 <span class="monitor-card-icon channel"><Send :size="17" /></span>
-                <span class="monitor-card-copy"><strong>{{ channel.name || "未命名渠道" }}</strong><small>{{ channelTypeLabel(channel.type) }} · {{ channel.url || "服务商默认地址" }}</small></span>
-                <span :class="['rule-state', channel.enabled ? 'enabled' : 'disabled']"><component :is="channel.enabled ? CheckCircle2 : CircleOff" :size="14" />{{ channel.enabled ? "可用" : "停用" }}</span>
+                <span class="monitor-card-copy"><strong>{{ channel.name || "未命名渠道" }}</strong><small>{{ channelTypeLabel(channel.type) }} · {{ channelAddressSummary(channel) }}</small></span>
+                <span :class="['rule-state', channel.enabled ? 'enabled' : 'disabled']"><component :is="channel.enabled ? CheckCircle2 : CircleOff" :size="14" />{{ channel.enabled ? "已启用" : "停用" }}</span>
                 <component :is="isMonitorCardExpanded('status-channel', channel.id) ? ChevronUp : ChevronDown" :size="18" />
               </button>
               <div v-if="isMonitorCardExpanded('status-channel', channel.id)" class="monitor-card-body"><span>类型：{{ channelTypeLabel(channel.type) }}</span><span>超时：{{ channel.timeout || 5 }} 秒</span><span>模板：{{ channel.bodyTemplate ? "已配置" : "默认" }}</span></div>
             </article>
-            <div v-if="!channels.length" class="empty card-empty">暂无通知渠道</div>
+            <div v-if="!statusChannels.length" class="empty card-empty">暂无通知渠道</div>
           </div>
         </section>
 
@@ -467,7 +479,7 @@
             <article v-for="alert in uploadDiagnostic?.alerts || []" :key="alert.id" class="alert-evidence-item">
               <div class="alert-evidence-head"><span><Bell :size="15" /><strong>{{ alert.message }}</strong></span><time>{{ formatDate(alert.timestamp) }}</time></div>
               <p>{{ alert.evidence?.reason || `${formatMonitorMetricValue(alert.value, alert.type)} / 阈值 ${formatMonitorMetricValue(alert.threshold, alert.type)}` }}</p>
-              <div class="notification-results"><span>通知投递</span><b v-for="delivery in alert.notifications || []" :key="`${delivery.channelId}-${delivery.timestamp}`" :class="delivery.ok ? 'delivery-ok' : 'delivery-failed'">{{ delivery.channelName || delivery.channelId || "未匹配渠道" }}：{{ delivery.ok ? "成功" : (delivery.detail || "失败") }}</b><em v-if="!alert.notifications?.length">旧记录无投递回执</em></div>
+              <div class="notification-results"><span>通知投递</span><b v-for="delivery in alert.notifications || []" :key="`${delivery.channelId}-${delivery.timestamp}`" :class="delivery.skipped ? 'delivery-muted' : delivery.ok ? 'delivery-ok' : 'delivery-failed'">{{ delivery.skipped ? '已关闭通知，仅保留记录' : `${delivery.channelName || delivery.channelId || '未匹配渠道'}：${delivery.ok ? '成功' : delivery.detail || '失败'}` }}</b><em v-if="!alert.notifications?.length">旧记录无投递回执</em></div>
             </article>
             <div v-if="uploadDiagnostic && !uploadDiagnostic.alerts?.length" class="empty diagnostic-empty">该日期没有已保存的告警。旧版本不会保存通知回执，因此无法反查当时是否投递失败。</div>
           </div>
@@ -541,25 +553,39 @@
         </section>
       </section>
 
-      <section v-if="activeView === 'settings'" class="view">
-        <section class="card">
+      <section v-if="activeView === 'settings'" class="view settings-workspace" :aria-busy="settingsLoading">
+        <nav class="settings-tabs" aria-label="设置功能分区">
+          <button v-for="section in settingsSections" :key="section.key" type="button" class="settings-tab" :class="{ active: settingsSection === section.key }" :aria-current="settingsSection === section.key ? 'page' : undefined" @click="settingsSection = section.key">
+            {{ section.label }}<span v-if="sectionDirty(section.key)" aria-label="有未保存修改">•</span>
+          </button>
+        </nav>
+        <div v-if="!settings" class="empty" role="status">正在读取当前设置…</div>
+        <div v-else class="settings-toolbar">
+          <p>{{ currentSettingsDescription }}</p>
+          <span v-if="sectionDirty(settingsSection)" class="settings-unsaved" role="status">有未保存的修改</span>
+          <span v-else class="muted">当前设置已同步</span>
+          <button v-if="sectionDirty(settingsSection)" type="button" :disabled="settingsSaving[currentSettingsGroup]" @click="discardSettingsDraft">放弃当前修改</button>
+        </div>
+        <p v-if="settingsErrors[currentSettingsGroup]" class="settings-feedback error" role="alert">{{ settingsErrors[currentSettingsGroup] }}</p>
+        <section v-if="settings && settingsSection === 'maintenance'" class="card">
           <CardHead title="历史数据维护" meta="清理流量历史，保留规则、渠道、图标、AI 对话和告警证据">
             <button type="button" class="danger" @click="clearTrafficHistory"><Trash2 :size="16" />清理流量历史</button>
           </CardHead>
         </section>
-        <div class="grid two">
-          <section class="card">
+        <section v-if="settings && settingsSection === 'maintenance'" class="card">
+          <CardHead title="告警记录维护" meta="清理会删除全部告警、异常证据和通知回执，请先确认不再需要。"><button type="button" class="danger" @click="clearAlerts">清除全部告警记录</button></CardHead>
+        </section>
+        <div v-if="settings && ['runtime', 'maintenance'].includes(settingsSection)" class="grid">
+          <section v-if="settingsSection === 'runtime'" class="card">
+          <fieldset class="settings-fields" :disabled="settingsSaving.runtime" :aria-busy="settingsSaving.runtime">
             <CardHead title="运行参数" meta="可热更新项会写入 SQLite">
-              <button type="button" @click="saveRuntime"><Save :size="16" />保存</button>
+              <button type="button" class="primary-button" :disabled="settingsSaving.runtime" @click="saveRuntime"><Save :size="16" />{{ settingsSaving.runtime ? '保存中…' : '保存常用设置' }}</button>
             </CardHead>
             <div class="form-grid">
-              <label>采样间隔秒<input v-model.number="runtimeForm.sampleSeconds" type="number" min="0.5" step="0.5" /></label>
-              <label>内存保留秒<input v-model.number="runtimeForm.retentionSeconds" type="number" min="60" /></label>
-              <label>持久化间隔秒<input v-model.number="runtimeForm.persistIntervalSeconds" type="number" min="10" /></label>
-              <label>历史保留天<input v-model.number="runtimeForm.historyRetentionDays" type="number" min="1" /></label>
-              <label>活跃连接窗口秒<input v-model.number="runtimeForm.connectionActiveSeconds" type="number" min="10" /></label>
-              <label>连接缓存秒<input v-model.number="runtimeForm.connectionRetentionSeconds" type="number" min="60" /></label>
-              <label>Conntrack 刷新秒<input v-model.number="runtimeForm.conntrackRefreshSeconds" type="number" :min="settings?.runtime?.minConntrackRefreshSeconds || 15" /></label>
+              <label>流量采样间隔（秒）<input v-model.number="runtimeForm.sampleSeconds" type="number" min="0.5" step="0.5" /></label>
+              <label>短期缓存保留（秒）<input v-model.number="runtimeForm.retentionSeconds" type="number" min="60" /></label>
+              <label>统计保存间隔（秒）<input v-model.number="runtimeForm.persistIntervalSeconds" type="number" min="10" /></label>
+              <label>流量历史保留（天）<input v-model.number="runtimeForm.historyRetentionDays" type="number" min="1" /></label>
               <div class="field-block">
                 <span>Docker 自动发现</span>
                 <label class="switch"><input v-model="runtimeForm.dockerDiscovery" type="checkbox" />启用</label>
@@ -569,9 +595,11 @@
                 <label class="switch"><input v-model="runtimeForm.autoStartStage" type="checkbox" />自动启动</label>
               </div>
             </div>
-          </section>
+            <details class="advanced-fields"><summary>连接采集高级设置</summary><div class="form-grid"><label>活跃连接判断窗口（秒）<input v-model.number="runtimeForm.connectionActiveSeconds" type="number" min="10" /></label><label>连接记录保留（秒）<input v-model.number="runtimeForm.connectionRetentionSeconds" type="number" min="60" /></label><label>宿主连接表刷新间隔（秒）<input v-model.number="runtimeForm.conntrackRefreshSeconds" type="number" :min="settings?.runtime?.minConntrackRefreshSeconds || 15" /></label></div></details>
+                    </fieldset>
+</section>
 
-          <section class="card">
+          <section v-if="settingsSection === 'maintenance'" class="card">
             <CardHead title="启动期参数" meta="修改后需重启容器" />
             <div class="info-grid">
               <InfoItem label="端口" :value="settings?.runtime?.appPort" />
@@ -591,38 +619,38 @@
           </section>
         </div>
 
-        <section class="card settings-ai-card">
+        <section v-if="settings && settingsSection === 'ai'" class="card settings-ai-card">
+          <fieldset class="settings-fields" :disabled="settingsSaving.ai" :aria-busy="settingsSaving.ai">
           <CardHead title="AI 分析配置" meta="只在点击分析或发送对话时请求，不参与后台采集">
             <span :class="['rule-state', aiForm.enabled && aiForm.keyConfigured ? 'enabled' : 'disabled']"><component :is="aiForm.enabled && aiForm.keyConfigured ? CheckCircle2 : CircleOff" :size="14" />{{ aiForm.enabled && aiForm.keyConfigured ? "可用" : "未配置" }}</span>
-            <button type="button" @click="saveAiSettings"><Save :size="16" />保存</button>
+            <button type="button" class="primary-button" :disabled="settingsSaving.ai" @click="saveAiSettings"><Save :size="16" />{{ settingsSaving.ai ? '保存中…' : '保存AI 配置' }}</button>
           </CardHead>
           <div class="form-grid ai-form-grid">
             <div class="field-block"><span>启用 AI 分析</span><label class="switch"><input v-model="aiForm.enabled" type="checkbox" />允许按需请求</label></div>
             <label>AI 厂商<select v-model="aiForm.provider" @change="applyAiProviderPreset"><option v-for="provider in providerPresets" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></label>
             <label>Base URL<input v-model="aiForm.baseUrl" type="url" placeholder="https://api.openai.com/v1" /></label>
             <label>API Key<input v-model="aiForm.apiKey" type="password" autocomplete="off" :placeholder="aiForm.keyConfigured ? aiForm.apiKeyMasked : '填写后保存，前端只显示掩码'" /></label>
-            <label>模型
-              <div class="inline-field">
-                <select v-if="aiModels.length" v-model="aiForm.model" aria-label="从模型列表选择">
-                  <option v-for="model in aiModels" :key="model.id" :value="model.id">{{ model.name || model.id }}</option>
-                </select>
-                <input v-model="aiForm.model" list="ai-model-options" placeholder="gpt-4o-mini / qwen-plus / deepseek-v4-flash" />
-                <button type="button" class="subtle-button" :disabled="aiModelsLoading" @click="readAiModels"><RefreshCw :size="15" />{{ aiModelsLoading ? "读取中" : "读取模型" }}</button>
-              </div>
-              <datalist id="ai-model-options"><option v-for="model in aiModels" :key="`list-${model.id}`" :value="model.id">{{ model.name }}</option></datalist>
-            </label>
+            <div class="field-block">
+              <span>模型</span>
+              <select v-if="aiModels.length" v-model="aiModelChoice" aria-label="选择 AI 模型"><option v-for="model in aiModels" :key="model.id" :value="model.id">{{ model.name || model.id }}</option><option value="__manual__">手动填写其他型号</option></select>
+              <input v-if="aiModelChoice === '__manual__'" v-model="aiForm.model" aria-label="手动填写 AI 模型" placeholder="输入服务提供方给出的模型名称" />
+              <button type="button" class="subtle-button" :disabled="aiModelsLoading || settingsSaving.ai" @click="readAiModels"><RefreshCw :size="15" />{{ aiModelsLoading ? "读取中…" : "读取模型列表" }}</button>
+              <p class="field-hint">读取列表不会修改已选型号；列表不可用时可手动填写。</p>
+            </div>
             <label>请求超时秒<input v-model.number="aiForm.timeoutSeconds" type="number" min="5" max="180" /></label>
             <label>最大输出 Token<input v-model.number="aiForm.maxTokens" type="number" min="128" max="393216" /></label>
             <label class="textarea-label wide">系统提示词<textarea v-model="aiForm.systemPrompt" rows="3" placeholder="定义 AI 分析时的角色和关注点"></textarea></label>
           </div>
           <p v-if="aiModelsError" class="settings-security-note"><CircleAlert :size="15" />{{ aiModelsError }}，仍可手动填写模型。</p>
           <p class="settings-security-note"><ShieldCheck :size="15" /> API Key 只保存在 SQLite，不会回显到页面，也不会写入日志；Base URL 仅允许 HTTP/HTTPS。</p>
-        </section>
+                  </fieldset>
+</section>
 
-        <section class="card">
+        <section v-if="settings && settingsSection === 'monitor'" class="card">
+          <fieldset class="settings-fields" :disabled="settingsSaving.monitor" :aria-busy="settingsSaving.monitor">
           <CardHead title="监控规则" :meta="`${monitorRules.length} 条 · 支持多规则多渠道`">
             <button type="button" @click="addRule"><Plus :size="16" />新增</button>
-            <button type="button" @click="saveRules"><Save :size="16" />保存</button>
+            <button type="button" class="primary-button" :disabled="settingsSaving.monitor" @click="saveRules"><Save :size="16" />{{ settingsSaving.monitor ? '保存中…' : '保存流量告警' }}</button>
           </CardHead>
           <div class="rule-grid accordion-stack">
             <div v-for="rule in monitorRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('traffic', rule.id) }]">
@@ -645,16 +673,15 @@
                   <label>规则名称<input v-model="rule.name" /></label>
                   <div class="field-block"><span>状态</span><label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label></div>
                   <label>指标<select v-model="rule.metric" @change="resetThresholdUnit(rule)"><option v-for="(label, key) in metricLabels" :key="key" :value="key">{{ label }}</option></select></label>
+                  <label>触发条件<select v-model="rule.operator"><option value="gte">达到或高于阈值</option><option value="lte">达到或低于阈值</option></select></label>
                   <label>阈值<span class="threshold-control"><input v-model.number="rule.thresholdValue" type="number" min="0" step="0.01" /><select v-if="thresholdUnitOptions(rule.metric).length > 1" v-model="rule.thresholdUnit"><option v-for="unit in thresholdUnitOptions(rule.metric)" :key="unit" :value="unit">{{ unit }}</option></select><em v-else>{{ rule.thresholdUnit || "次" }}</em></span></label>
-                  <label>持续秒<input v-model.number="rule.durationSeconds" type="number" min="0" /></label>
+                  <label>持续时间（秒）<input v-model.number="rule.durationSeconds" type="number" min="0" /></label>
+                  <p class="field-hint wide">{{ rule.metric === 'daily_wan_tx_bytes' ? '按服务器时区当天 00:00 起的公网上传量判断，每条规则每天最多报警一次；次日重新计算。' : rule.metric === 'stage_wan_tx_bytes' ? '按手动开始的阶段累计上传量判断，阶段不会在午夜自动清零。' : '按实时速率或连接数判断。' }}</p>
                   <div class="field-block wide">
-                    <span>通知渠道</span>
-                    <div class="channel-checks">
-                      <label v-for="channel in channels" :key="channel.id" class="check-chip">
-                        <input :checked="rule.channelIds?.includes(channel.id)" type="checkbox" @change="toggleRuleChannel(rule, channel.id)" />
-                        {{ channel.name }}
-                      </label>
-                      <span v-if="!channels.length" class="field-hint">请先添加通知渠道</span>
+                    <label>通知方式<select v-model="rule.channelMode"><option value="all">全部启用的渠道</option><option value="selected">指定通知渠道</option><option value="none">不发送通知，仅记录告警</option></select></label>
+                    <div v-if="rule.channelMode === 'selected'" class="channel-checks">
+                      <label v-for="channel in channels" :key="channel.id" class="check-chip"><input :checked="rule.channelIds?.includes(channel.id)" type="checkbox" @change="toggleRuleChannel(rule, channel.id)" />{{ channel.name }}{{ channel.enabled ? '' : '（未启用）' }}</label>
+                      <span v-if="!channels.length" class="field-hint">还没有通知渠道，请先到“通知渠道”添加。</span>
                     </div>
                   </div>
                 </div>
@@ -663,12 +690,14 @@
             </div>
             <div v-if="!monitorRules.length" class="empty card-empty">暂无流量监控规则</div>
           </div>
-        </section>
+                  </fieldset>
+</section>
 
-        <section class="card">
+        <section v-if="settings && settingsSection === 'protection'" class="card">
+          <fieldset class="settings-fields" :disabled="settingsSaving.protection" :aria-busy="settingsSaving.protection">
           <CardHead title="容器保护" :meta="`${containerRules.length} 条 · 监控触发后可复用现有告警渠道`">
             <button type="button" @click="addContainerRule"><Plus :size="16" />新增</button>
-            <button type="button" @click="saveContainerRules"><Save :size="16" />保存</button>
+            <button type="button" class="primary-button" :disabled="settingsSaving.protection" @click="saveContainerRules"><Save :size="16" />{{ settingsSaving.protection ? '保存中…' : '保存容器保护' }}</button>
           </CardHead>
           <div class="rule-grid accordion-stack">
             <div v-for="rule in containerRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('container', rule.id) }]">
@@ -682,7 +711,7 @@
                 </button>
                 <div class="summary-actions">
                   <span :class="['rule-state', rule.enabled && !protectionState(rule).locked ? 'enabled' : 'disabled']">
-                    <component :is="protectionState(rule).locked ? CircleAlert : rule.enabled ? ShieldCheck : CircleOff" :size="14" />{{ protectionState(rule).locked ? "已锁定" : rule.enabled ? "监控中" : "停用" }}
+                    <component :is="protectionState(rule).locked ? CircleAlert : rule.enabled ? ShieldCheck : CircleOff" :size="14" />{{ protectionRuleStatus(rule) }}
                   </span>
                 </div>
               </div>
@@ -690,50 +719,45 @@
                 <div class="form-grid mini">
                 <label>规则名称<input v-model="rule.name" placeholder="规则名称" /></label>
                 <div class="field-block"><span>状态</span><label class="switch"><input v-model="rule.enabled" type="checkbox" />启用</label></div>
-                <div class="field-block wide">
-                  <span>选择容器</span>
-                  <input
-                    v-model="rule.containerSearch"
-                    :list="`container-options-${rule.id}`"
-                    placeholder="搜索容器名 / Compose 服务 / 镜像 / ID"
-                    @change="selectContainerForRule(rule)"
-                  />
-                  <datalist :id="`container-options-${rule.id}`">
-                    <option v-for="container in dockerContainerOptions" :key="container.optionValue" :value="container.optionValue">
-                      {{ container.optionLabel }}
-                    </option>
-                  </datalist>
-                  <p class="field-hint">
-                    {{ containerRuleTargetText(rule) }}
-                  </p>
+                <label>保护范围<select :value="rule.targetMode" @change="switchProtectionScope(rule, $event.target.value)"><option value="single">单个容器</option><option value="selected">选择多个容器</option><option value="all">全部运行中容器</option></select></label>
+                <div v-if="rule.targetMode !== 'all'" class="field-block wide">
+                  <span>选择保护容器</span>
+                  <ContainerPicker :model-value="selectionForRule(rule)" :containers="dockerData.containers || []"
+                    :multiple="rule.targetMode === 'selected'" :loading="containerOptionsLoading" :error="containerOptionsError"
+                    @update:model-value="applyContainerSelection(rule, $event)" @refresh="refreshDockerContainerOptions(true)" />
                 </div>
-                <label>容器名<input v-model="rule.containerName" placeholder="容器名称，更新后优先匹配" /></label>
-                <label>逻辑<select v-model="rule.logic"><option v-for="item in containerProtectionLogicOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-                <label>动作<select v-model="rule.action"><option v-for="item in containerProtectionActions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-                <label>最大次数<input v-model.number="rule.maxActions" type="number" min="1" /></label>
-                <label>冷却秒<input v-model.number="rule.cooldownSeconds" type="number" min="0" /></label>
+                <p v-else class="field-hint wide">自动保护所有运行中的容器，后续新增容器也会纳入。每个容器独立判断阈值。</p>
+                <label>触发方式<select v-model="rule.logic"><option v-for="item in containerProtectionLogicOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+                <label>达到条件后<select v-model="rule.action"><option v-for="item in containerProtectionActions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+                <label>动作后等待（秒）<input v-model.number="rule.cooldownSeconds" type="number" min="0" /></label>
+                <p v-if="rule.action === 'restart'" class="field-hint wide">重启次数不限。每次达到占用阈值并满足持续时间后重启该容器，冷却结束后继续监控。</p>
                 <div class="field-block wide">
                   <span>保护记录：{{ protectionState(rule).count || 0 }} 次重启尝试 · {{ protectionState(rule).locked ? '已锁定' : rule.enabled ? '监控中' : '停用' }}</span>
-                  <p class="field-hint">{{ protectionState(rule).reason || '次数跨重启保留；达到上限后再次持续超限将停止容器。' }}</p>
+                  <p class="field-hint">{{ protectionState(rule).reason || '累计次数仅作记录，重启次数不限。' }}</p>
+                  <p v-if="protectionState(rule).monitorReason" class="field-hint">{{ protectionState(rule).monitorReason }}</p>
+                  <div v-if="rule.targetMode !== 'single'" class="protection-target-states">
+                    <div v-for="(state, key) in protectionState(rule).containers || {}" :key="key">
+                      <strong>{{ state.containerName || state.containerId }}</strong><span>{{ protectionStatusLabel(state.monitorStatus) }} · {{ state.count || 0 }} 次</span>
+                      <small>{{ state.monitorReason || protectionMetricSummary(state) || state.reason || '等待采样' }}</small>
+                    </div>
+                  </div>
                   <button type="button" @click="resetProtection(rule)"><RotateCcw :size="15" />重置计数并解除锁定</button>
                 </div>
                 <div class="field-block wide">
-                  <span>告警渠道</span>
-                  <div class="channel-checks">
-                    <label v-for="channel in channels" :key="channel.id" class="check-chip">
-                      <input :checked="rule.channelIds?.includes(channel.id)" type="checkbox" @change="toggleContainerRuleChannel(rule, channel.id)" />
-                      {{ channel.name }}
-                    </label>
+                  <label>通知方式<select v-model="rule.channelMode"><option value="all">全部启用的渠道</option><option value="selected">指定通知渠道</option><option value="none">不发送通知，仅记录告警</option></select></label>
+                  <div v-if="rule.channelMode === 'selected'" class="channel-checks">
+                    <label v-for="channel in channels" :key="channel.id" class="check-chip"><input :checked="rule.channelIds?.includes(channel.id)" type="checkbox" @change="toggleContainerRuleChannel(rule, channel.id)" />{{ channel.name }}{{ channel.enabled ? '' : '（未启用）' }}</label>
+                    <span v-if="!channels.length" class="field-hint">还没有通知渠道，请先到“通知渠道”添加。</span>
                   </div>
                 </div>
                 <div class="field-block wide">
                   <span>条件</span>
                   <div class="condition-list">
                     <div v-for="(condition, index) in rule.conditions || []" :key="`${rule.id}-${index}`" class="condition-row">
-                      <label>指标<select v-model="condition.metric"><option v-for="(label, key) in containerProtectionMetricLabels" :key="key" :value="key">{{ label }}</option></select></label>
+                      <label>指标<select v-model="condition.metric" @change="resetProtectionThreshold(condition)"><option v-for="(label, key) in containerProtectionMetricLabels" :key="key" :value="key">{{ label }}</option></select></label>
                       <label>比较<select v-model="condition.operator"><option v-for="item in containerProtectionOperators" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-                      <label>阈值<input v-model.number="condition.threshold" type="number" min="0" /></label>
-                      <label>持续秒<input v-model.number="condition.durationSeconds" type="number" min="0" /></label>
+                      <label>阈值<span class="threshold-control"><input v-model.number="condition.thresholdValue" type="number" min="0" step="0.01" /><select v-if="protectionUnitOptions(condition.metric).length > 1" v-model="condition.thresholdUnit"><option v-for="unit in protectionUnitOptions(condition.metric)" :key="unit" :value="unit">{{ unit }}</option></select><em v-else>%</em></span></label>
+                      <label>持续时间（秒）<input v-model.number="condition.durationSeconds" type="number" min="0" /></label>
                       <button class="danger" type="button" @click="removeContainerCondition(rule, index)"><Trash2 :size="16" />删除</button>
                     </div>
                     <button type="button" class="subtle-button" @click="addContainerCondition(rule)"><Plus :size="16" />添加条件</button>
@@ -745,12 +769,14 @@
             </div>
             <div v-if="!containerRules.length" class="empty card-empty">暂无容器保护规则</div>
           </div>
-        </section>
+                  </fieldset>
+</section>
 
-        <section class="card">
+        <section v-if="settings && settingsSection === 'channels'" class="card">
+          <fieldset class="settings-fields" :disabled="settingsSaving.channels" :aria-busy="settingsSaving.channels">
           <CardHead title="通知渠道" :meta="`${channels.length} 个 · Webhook / IYUU / MeoW`">
             <button type="button" @click="addChannel"><Plus :size="16" />新增</button>
-            <button type="button" @click="saveChannels"><Save :size="16" />保存</button>
+            <button type="button" class="primary-button" :disabled="settingsSaving.channels" @click="saveChannels"><Save :size="16" />{{ settingsSaving.channels ? '保存中…' : '保存通知渠道' }}</button>
           </CardHead>
           <div class="channel-grid accordion-stack">
             <div v-for="channel in channels" :key="channel.id" :class="['edit-card', 'channel-card', 'collapsible-card', { expanded: isMonitorCardExpanded('channel', channel.id) }]">
@@ -773,28 +799,31 @@
                   <label>渠道名称<input v-model="channel.name" /></label>
                   <div class="field-block"><span>状态</span><label class="switch"><input v-model="channel.enabled" type="checkbox" />启用</label></div>
                 <label>类型<select v-model="channel.type"><option value="webhook">Webhook</option><option value="iyuu">IYUU</option><option value="meow">MeoW</option></select></label>
-                <label>URL<input v-model="channel.url" type="url" placeholder="Webhook 可填；IYUU/MeoW 可留空" /></label>
-                <label>Token / 昵称<input v-model="channel.token" placeholder="IYUU token 或 MeoW 昵称" /></label>
-                <label>超时秒<input v-model.number="channel.timeout" type="number" min="1" max="30" /></label>
-                <label>消息类型<select v-model="channel.msgType"><option value="text">text</option><option value="html">html</option></select></label>
-                <label>HTML 高度<input v-model.number="channel.htmlHeight" type="number" min="100" max="1200" /></label>
-                <label>跳转 URL 模板<input v-model="channel.urlTemplate" placeholder="可用 {rule_id} 等变量" /></label>
+                <label>{{ channel.type === 'webhook' ? 'Webhook 通知地址' : '自定义服务地址（可选）' }}<input v-model="channel.url" type="url" :placeholder="channel.type === 'webhook' ? 'https://…' : '留空使用服务商默认地址'" /></label>
+                <label v-if="channel.type !== 'webhook'">{{ channel.type === 'iyuu' ? 'IYUU Token' : 'MeoW 昵称' }}<input v-model="channel.token" :type="channel.type === 'iyuu' ? 'password' : 'text'" autocomplete="off" placeholder="IYUU token 或 MeoW 昵称" /></label>
               </div>
+                <details class="advanced-fields"><summary>消息模板与高级选项</summary>
+                  <label>跳转 URL 模板<input v-model="channel.urlTemplate" placeholder="可用 {rule_id} 等变量" /></label>
+                  <label v-if="channel.msgType === 'html'">HTML 高度（像素）<input v-model.number="channel.htmlHeight" type="number" min="100" max="1200" /></label>
+                  <label>消息类型<select v-model="channel.msgType"><option value="text">普通文本</option><option value="html">HTML 消息</option></select></label>
+                  <label>超时秒<input v-model.number="channel.timeout" type="number" min="1" max="30" /></label>
                 <div class="template-help">
                 <span>可用变量：</span>
                 <code v-for="item in templateVariables" :key="templateKey(item)">{{ templateVar(templateKey(item)) }} · {{ templateLabel(item) }}</code>
                 </div>
                 <label class="textarea-label">标题模板<textarea v-model="channel.titleTemplate" rows="2"></textarea></label>
                 <label class="textarea-label">正文模板<textarea v-model="channel.bodyTemplate" rows="5"></textarea></label>
+                </details>
                 <div class="edit-actions">
-                  <button type="button" @click="testChannel(channel.id)"><Send :size="16" />测试</button>
+                  <button type="button" :disabled="!!testingChannel || settingsSaving.channels" @click="testChannel(channel.id)"><Send :size="16" />{{ testingChannel === channel.id ? '发送中…' : '保存渠道并发送测试通知' }}</button>
                   <button class="danger" type="button" @click="removeChannel(channel.id)"><Trash2 :size="16" />删除</button>
                 </div>
               </div>
             </div>
             <div v-if="!channels.length" class="empty card-empty">暂无通知渠道</div>
           </div>
-        </section>
+                  </fieldset>
+</section>
       </section>
     </main>
 
@@ -805,16 +834,17 @@
           <button type="button" @click="connectionDialog?.close()"><X :size="16" />关闭</button>
         </CardHead>
         <div class="connection-filters">
-          <select v-model="connFilters.mode" @change="refreshConnections(true)"><option value="capture">抓包归因</option><option value="conntrack">路由器口径</option></select>
-          <select v-model="connFilters.iface" @change="refreshConnections(true)"><option value="all">全部网卡</option><option v-for="name in interfaceNames" :key="name" :value="name">{{ name }}</option></select>
-          <select v-model="connFilters.scope" @change="refreshConnections(true)"><option value="all">全部范围</option><option value="wan">公网</option><option value="lan">内网</option></select>
-          <select v-model="connFilters.proto" @change="refreshConnections(true)"><option value="all">全部协议</option><option value="tcp">TCP</option><option value="udp">UDP</option></select>
-          <select v-model="connFilters.direction" @change="refreshConnections(true)"><option value="all">全部方向</option><option value="rx">下行</option><option value="tx">上行</option></select>
-          <input v-model="connFilters.source" placeholder="源 IP/端口" @input="debounceConnections" />
-          <input v-model="connFilters.dest" placeholder="目标 IP/端口" @input="debounceConnections" />
-          <input v-model="connFilters.owner" placeholder="进程/容器" @input="debounceConnections" />
-          <input v-model.number="connFilters.minBytes" type="number" min="0" placeholder="最小 MB" @input="debounceConnections" />
-          <input v-model.number="connFilters.minDuration" type="number" min="0" placeholder="最小秒" @input="debounceConnections" />
+          <label>数据来源<select v-model="connFilters.mode" @change="refreshConnections(true)"><option value="capture">抓包归因</option><option value="conntrack">路由器口径</option></select></label>
+          <label>网卡<select v-model="connFilters.iface" @change="refreshConnections(true)"><option value="all">全部网卡</option><option v-for="name in interfaceNames" :key="name" :value="name">{{ name }}</option></select></label>
+          <label>网络范围<select v-model="connFilters.scope" @change="refreshConnections(true)"><option value="all">全部范围</option><option value="wan">公网</option><option value="lan">内网</option></select></label>
+          <label>连接协议<select v-model="connFilters.proto" @change="refreshConnections(true)"><option value="all">全部协议</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+          <label>流量方向<select v-model="connFilters.direction" @change="refreshConnections(true)"><option value="all">全部方向</option><option value="rx">下行</option><option value="tx">上行</option></select></label>
+          <label>源地址 / 端口<input v-model="connFilters.source" placeholder="源 IP/端口" @input="debounceConnections" /></label>
+          <label>目标地址 / 端口<input v-model="connFilters.dest" placeholder="目标 IP/端口" @input="debounceConnections" /></label>
+          <label>进程或容器名称<input v-model="connFilters.owner" placeholder="进程/容器" @input="debounceConnections" /></label>
+          <label>最小流量（MB）<input v-model.number="connFilters.minBytes" type="number" min="0" placeholder="最小 MB" @input="debounceConnections" /></label>
+          <label>最短连接时间（秒）<input v-model.number="connFilters.minDuration" type="number" min="0" placeholder="最小秒" @input="debounceConnections" /></label>
+          <button type="button" @click="resetConnectionFilters">重置筛选</button>
           <button type="button" @click="refreshConnections(false)"><RefreshCw :size="16" />刷新</button>
         </div>
         <div class="table-wrap modal-table" :aria-busy="connLoading">
@@ -846,12 +876,14 @@
       </div>
     </dialog>
 
-    <dialog ref="dockerEditDialog" class="modal narrow">
+    <dialog ref="dockerEditDialog" class="modal narrow" @cancel.prevent="requestCloseDockerEditor" @click="event => { if (event.target === dockerEditDialog) requestCloseDockerEditor(); }">
       <div class="modal-box">
-        <CardHead title="容器端口与图标" :meta="dockerEditor.name || '-'">
-          <button type="button" @click="dockerEditDialog?.close()"><X :size="16" />关闭</button>
+        <CardHead title="快捷访问与图标" :meta="dockerEditor.name || '-'">
+          <button type="button" :disabled="dockerEditSaving" @click="requestCloseDockerEditor"><X :size="16" />关闭</button>
         </CardHead>
-        <div class="docker-editor">
+        <p class="field-hint">这里维护快捷访问入口，不会修改 Docker 的实际端口映射。</p>
+        <p v-if="dockerEditError" class="settings-feedback error" role="alert">{{ dockerEditError }}</p>
+        <fieldset class="docker-editor" :disabled="dockerEditSaving">
           <div class="icon-editor">
             <div class="docker-icon large">
               <img v-if="dockerEditor.icon || dockerEditor.iconKey" :src="dockerEditor.icon || dockerIconByKey(dockerEditor.iconKey)" alt="" />
@@ -867,29 +899,36 @@
           <div class="port-editor-list">
             <div v-for="(port, index) in dockerEditor.ports" :key="index" class="port-editor">
               <label>协议<select v-model="port.proto"><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
-              <label>宿主端口<input v-model.number="port.hostPort" type="number" min="1" max="65535" /></label>
-              <label>容器端口<input v-model.number="port.containerPort" type="number" min="1" max="65535" /></label>
-              <label>服务类型<input v-model="port.service" placeholder="redis / mysql / web" /></label>
+              <label>NAS 访问端口<input v-model.number="port.hostPort" type="number" min="1" max="65535" /></label>
+              <label>容器内部端口<input v-model.number="port.containerPort" type="number" min="1" max="65535" /></label>
+              <label>服务类型<select v-model="port.service"><option value="">自动识别</option><option value="web">网页服务</option><option value="redis">Redis</option><option value="mysql">MySQL</option><option value="postgresql">PostgreSQL</option><option value="ssh">SSH</option><option value="other">其他服务</option><option v-if="port.service && !['web','redis','mysql','postgresql','ssh','other'].includes(port.service)" :value="port.service">{{ port.service }}</option></select></label>
               <label>访问方式<select v-model="port.accessMode"><option value="copy">复制地址</option><option value="web">Web 打开</option><option value="hidden">隐藏快捷操作</option></select></label>
-              <label>协议<select v-model="port.scheme"><option value="http">http</option><option value="https">https</option></select></label>
-              <label>路径<input v-model="port.path" placeholder="/ 或 /admin" /></label>
+              <label v-if="port.accessMode === 'web'">网页协议<select v-model="port.scheme"><option value="http">http</option><option value="https">https</option></select></label>
+              <label v-if="port.accessMode === 'web'">网页路径<input v-model="port.path" placeholder="/ 或 /admin" /></label>
               <label>备注<input v-model="port.label" placeholder="如 Redis、QB 管理页" /></label>
               <button class="danger" type="button" @click="removeDockerPort(index)"><Trash2 :size="16" />删除</button>
             </div>
           </div>
           <div class="edit-actions">
             <button type="button" @click="addDockerPort"><Plus :size="16" />添加端口</button>
-            <button type="button" @click="saveDockerPorts"><Save :size="16" />保存</button>
+            <button type="button" class="primary-button" @click="saveDockerPorts"><Save :size="16" />{{ dockerEditSaving ? '保存中…' : '保存访问入口' }}</button>
           </div>
-        </div>
+        </fieldset>
       </div>
     </dialog>
+    <ConfirmDialog ref="confirmDialog" />
   </div>
 </template>
 
 <script setup>
 import { computed, defineComponent, h, inject, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { browserTransport } from "./api/transport.js";
+import ContainerPicker from "./components/ContainerPicker.vue";
+import ConfirmDialog from "./components/ConfirmDialog.vue";
+import "./styles/console-theme.css";
+import { selectionForRule, applyContainerSelection, switchProtectionScope } from "./utils/container-selection.js";
+import { createSettingsDrafts, notificationMode, monitorPayload, validateContainerRules,
+  validateMonitorRules, validateChannels, connectionDefaults, validateTimeRange } from "./utils/settings-ux.js";
 const transport = inject("trafficTransport", browserTransport);
 let disposed = false;
 import { createLatestRequest, createPollLoop } from "./utils/requests.js";
@@ -981,17 +1020,19 @@ const navItems = [
   { key: "ai", label: "AI 中心", icon: Sparkles },
 ];
 const metricLabels = {
+  daily_wan_tx_bytes: "每日公网上传总量（默认）",
   wan_tx_bps: "公网上传速率",
   wan_rx_bps: "公网下载速率",
   lan_tx_bps: "内网上传速率",
   lan_rx_bps: "内网下载速率",
   wan_connections: "公网连接数",
   total_connections: "总连接数",
-  stage_wan_tx_bytes: "阶段公网上传总量",
-  daily_wan_tx_bytes: "每日公网上传总量",
+  stage_wan_tx_bytes: "阶段累计公网上传总量",
 };
-const transferUnitBytes = { "MB": 1024 ** 2, "GB": 1024 ** 3, "MB/s": 1024 ** 2, "GB/s": 1024 ** 3 };
+const transferUnitBytes = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, "B/s": 1, "KB/s": 1024, "MB/s": 1024 ** 2, "GB/s": 1024 ** 3 };
 import { providerPresets } from "./utils/ai-providers.js";
+import { normalizeProtectionRule, normalizeProtectionCondition, protectionRulePayload, protectionUnitOptions,
+  hasProtectionTarget, toggleProtectionTarget, newUploadRule, monitorWindow } from "./utils/container-protection.js";
 const templateVariables = [
   ["app", "应用名"],
   ["version", "版本"],
@@ -1017,20 +1058,20 @@ const templateVariables = [
   ["container_metrics", "指标详情"],
 ];
 const containerProtectionMetricLabels = {
-  cpuPercent: "CPU",
-  memoryPercent: "内存%",
+  cpuPercent: "CPU 占用",
+  memoryPercent: "内存占用比例",
   memoryUsedBytes: "内存用量",
-  blkReadBps: "块读速率",
-  blkWriteBps: "块写速率",
-  blkIoBps: "块 I/O",
+  blkReadBps: "磁盘读取速度",
+  blkWriteBps: "磁盘写入速度",
+  blkIoBps: "磁盘总 I/O 速度",
 };
 const containerProtectionOperators = [
   { value: "gte", label: "大于等于" },
   { value: "lte", label: "小于等于" },
 ];
 const containerProtectionLogicOptions = [
-  { value: "and", label: "AND" },
-  { value: "or", label: "OR" },
+  { value: "and", label: "全部条件满足" },
+  { value: "or", label: "任一条件满足" },
 ];
 const containerProtectionActions = [
   { value: "restart", label: "重启" },
@@ -1098,6 +1139,41 @@ const processSearch = ref("");
 const dockerSearch = ref("");
 const monitorRules = ref([]);
 const containerRules = ref([]);
+const containerOptionsLoading = ref(false);
+const containerOptionsError = ref("");
+const settingsLoading = ref(false);
+const settingsSection = ref("runtime");
+const settingsSaving = reactive({ runtime: false, monitor: false, protection: false, channels: false, ai: false });
+const settingsErrors = reactive({});
+const settingsDrafts = createSettingsDrafts();
+const settingsDraftRevision = ref(0);
+const testingChannel = ref("");
+const aiModelManual = ref(false);
+const processRangeError = ref("");
+const appliedProcessRange = ref({ start: "", end: "" });
+const processLoading = ref(false);
+const interfacesLoading = ref(false);
+const dockerListLoading = ref(false);
+const dockerEditSaving = ref(false);
+const dockerEditError = ref("");
+const dockerEditBaseline = ref("");
+const settingsSections = [
+  { key: "runtime", label: "常用设置", description: "调整流量采样、历史保留和 Docker 自动发现。" },
+  { key: "monitor", label: "流量告警", description: "设置上传量、速率或连接数阈值，选择通知方式。" },
+  { key: "protection", label: "容器保护", description: "从列表选择容器，达到条件后自动处理。每个容器独立判断。" },
+  { key: "channels", label: "通知渠道", description: "配置消息发送位置。发送测试通知前会保存此分区。" },
+  { key: "ai", label: "AI 配置", description: "设置服务与模型，仅在主动分析时请求服务。" },
+  { key: "maintenance", label: "维护与高级", description: "查看部署参数及维护流量历史。清理历史不会删除配置。" },
+];
+const currentSettingsGroup = computed(() => settingsSection.value === "maintenance" ? "runtime" : settingsSection.value);
+const currentSettingsDescription = computed(() => settingsSections.find(s => s.key === settingsSection.value)?.description || "");
+const statusRules = computed(() => settings.value?.monitor?.rules || []);
+const statusContainerRules = computed(() => settings.value?.monitor?.containerRules || []);
+const statusChannels = computed(() => settings.value?.monitor?.channels || []);
+const aiModelChoice = computed({
+  get: () => !aiModelManual.value && aiModels.value.some(m => m.id === aiForm.model) ? aiForm.model : "__manual__",
+  set: value => { aiModelManual.value = value === "__manual__"; if (!aiModelManual.value) aiForm.model = value; },
+});
 const channels = ref([]);
 const alertHistory = ref([]);
 const uploadDiagnostic = ref(null);
@@ -1148,7 +1224,7 @@ let systemLoading = false;
 let dockerLoading = false;
 const handleResize = () => historyChart?.resize();
 
-const connFilters = reactive({ mode: "capture", iface: "all", scope: "all", proto: "all", direction: "all", owner: "", source: "", dest: "", minBytes: null, minDuration: null });
+const connFilters = reactive(connectionDefaults());
 
 const currentTitle = computed(() => navItems.find((item) => item.key === activeView.value)?.label || "概览");
 const subtitle = computed(() => (overview.value?.timestamp ? `版本 ${overview.value.version || "-"} · ${formatDate(overview.value.timestamp)}` : "正在连接采集器..."));
@@ -1236,8 +1312,8 @@ function isTransferMetric(metric) {
   return String(metric || "").endsWith("_bps") || String(metric || "").endsWith("_bytes");
 }
 function thresholdUnitOptions(metric) {
-  if (String(metric || "").endsWith("_bps")) return ["MB/s", "GB/s"];
-  if (String(metric || "").endsWith("_bytes")) return ["MB", "GB"];
+  if (String(metric || "").endsWith("_bps")) return ["B/s", "KB/s", "MB/s", "GB/s"];
+  if (String(metric || "").endsWith("_bytes")) return ["B", "KB", "MB", "GB"];
   return [""];
 }
 function thresholdToBytes(value, unit) {
@@ -1248,20 +1324,23 @@ function thresholdFromBytes(value, metric) {
   const bytes = Math.max(0, Number(value || 0));
   if (!isTransferMetric(metric)) return { thresholdValue: bytes, thresholdUnit: "" };
   const suffix = String(metric).endsWith("_bps") ? "/s" : "";
-  const baseUnit = bytes >= 1024 ** 3 ? "GB" : "MB";
+  const baseUnit = bytes >= 1024 ** 3 ? "GB" : bytes >= 1024 ** 2 || !bytes ? "MB" : bytes >= 1024 ? "KB" : "B";
   const unit = `${baseUnit}${suffix}`;
   const numeric = bytes / transferUnitBytes[unit];
-  return { thresholdValue: Number(numeric.toFixed(2)), thresholdUnit: unit };
+  return { thresholdValue: numeric, thresholdUnit: unit };
 }
 function normalizeMonitorRuleForm(rule = {}) {
-  return { ...rule, ...thresholdFromBytes(rule.threshold, rule.metric) };
+  return { ...rule, channelMode: notificationMode(rule), ...thresholdFromBytes(rule.threshold, rule.metric) };
 }
 function resetThresholdUnit(rule) {
-  const units = thresholdUnitOptions(rule.metric);
-  const rawBytes = Math.max(0, Number(rule.threshold || 0));
-  const display = thresholdFromBytes(rawBytes, rule.metric);
-  rule.thresholdUnit = units[0];
-  rule.thresholdValue = display.thresholdValue;
+  rule.window = monitorWindow(rule.metric);
+  if (isTransferMetric(rule.metric) && rule.thresholdUnit) {
+    Object.assign(rule, thresholdFromBytes(thresholdToBytes(rule.thresholdValue, rule.thresholdUnit), rule.metric));
+  } else {
+    const units = thresholdUnitOptions(rule.metric);
+    rule.thresholdUnit = units.includes('MB') ? 'MB' : units.includes('MB/s') ? 'MB/s' : units[0];
+    rule.thresholdValue = 0;
+  }
 }
 function formatMonitorMetricValue(value, metric) {
   if (String(metric || "").endsWith("_bps")) return formatRate(value);
@@ -1420,11 +1499,19 @@ function monitorRuleSummary(rule = {}) {
   const duration = Number(rule.durationSeconds || 0);
   return `${metric} · 阈值 ${formatMonitorThreshold(rule)}${duration ? ` · 持续 ${duration} 秒` : " · 条件满足立即触发"}`;
 }
+function ruleNotificationSummary(rule) {
+  const mode = notificationMode(rule);
+  return mode === 'none' ? '不发送通知' : mode === 'all' ? '全部启用渠道' : `${rule.channelIds?.length || 0} 个指定渠道`;
+}
 function containerProtectionSummary(rule = {}) {
-  const target = rule.containerName || rule.composeService || "未选择容器";
+  const target = rule.targetMode === "all" ? "所有运行中容器" : rule.targetMode === "selected" ? `已选 ${rule.containers?.length || 0} 个容器` : rule.containerName || rule.composeService || "未选择容器";
   const logic = rule.logic === "or" ? "任一条件" : "全部条件";
   const action = containerProtectionActions.find((item) => item.value === rule.action)?.label || "重启";
   return `${target} · ${logic} · ${rule.conditions?.length || 0} 条 · ${action}`;
+}
+function channelAddressSummary(channel) {
+  if (!channel.url) return '服务商默认地址';
+  try { return new URL(channel.url).hostname; } catch { return '自定义通知地址'; }
 }
 function channelTypeLabel(type) {
   const labels = { webhook: "Webhook", iyuu: "IYUU", meow: "MeoW" };
@@ -1543,7 +1630,9 @@ async function refreshOverview() {
   }
 }
 async function refreshInterfaces() {
-  return interfaceRequest.run((signal) => api(`/api/snapshot?interfaces=${encodeURIComponent(interfaceView.value)}`, { signal }), (data) => { snapshot.value = data; });
+  interfacesLoading.value = true;
+  try { return await interfaceRequest.run((signal) => api(`/api/snapshot?interfaces=${encodeURIComponent(interfaceView.value)}`, { signal }), (data) => { snapshot.value = data; }); }
+  finally { interfacesLoading.value = false; }
 }
 async function refreshHistory(period = historyPeriod.value) {
   historyPeriod.value = period;
@@ -1560,22 +1649,77 @@ async function refreshHistory(period = historyPeriod.value) {
   }
 }
 async function refreshProcesses() {
-  const params = new URLSearchParams({ period: processPeriod.value, limit: "30" });
-  if (processPeriod.value === "custom") {
-    if (processStart.value) params.set("start", Math.floor(new Date(processStart.value).getTime() / 1000));
-    if (processEnd.value) params.set("end", Math.floor(new Date(processEnd.value).getTime() / 1000));
+  if (processPeriod.value === 'custom' && !appliedProcessRange.value.start) return;
+  const params = new URLSearchParams({ period: processPeriod.value, limit: '30' });
+  if (processPeriod.value === 'custom') {
+    params.set('start', Math.floor(new Date(appliedProcessRange.value.start).getTime() / 1000));
+    params.set('end', Math.floor(new Date(appliedProcessRange.value.end).getTime() / 1000));
   }
-  return processRequest.run((signal) => api(`/api/processes?${params.toString()}`, { signal }), (data) => { processes.value = data.processes || []; });
+  processLoading.value = true;
+  try { return await processRequest.run(signal => api(`/api/processes?${params.toString()}`, { signal }), data => { processes.value = data.processes || []; }); }
+  finally { processLoading.value = false; }
 }
-async function refreshSettings() {
-  settings.value = await api("/api/settings");
-  monitorRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.rules || [])).map(normalizeMonitorRuleForm);
-  containerRules.value = JSON.parse(JSON.stringify(settings.value.monitor?.containerRules || [])).map(normalizeContainerRuleForm);
-  channels.value = JSON.parse(JSON.stringify(settings.value.monitor?.channels || []));
-  Object.assign(runtimeForm, settings.value.runtime || {});
-  Object.assign(aiForm, settings.value.ai || {});
-  aiForm.apiKey = "";
+function applyProcessRange() {
+  processRangeError.value = validateTimeRange(processStart.value, processEnd.value);
+  if (processRangeError.value) return;
+  appliedProcessRange.value = { start: processStart.value, end: processEnd.value };
+  refreshProcesses();
+}
+const confirmDialog = ref(null);
+function confirmAction(message) {
+  const discard = message.includes('放弃');
+  return confirmDialog.value.ask(message, { title: discard ? '放弃尚未保存的修改？' : '确认操作',
+    confirmLabel: discard ? '放弃修改' : message.includes('清') ? '确认清理' : '确认', cancelLabel: discard ? '继续编辑' : '取消' });
+}
+function settingsDraftValue(group) {
+  return { monitor: monitorRules.value, protection: containerRules.value, channels: channels.value, runtime: runtimeForm, ai: aiForm }[group];
+}
+function sectionDirty(section) {
+  settingsDraftRevision.value;
+  const group = section === 'maintenance' ? 'runtime' : section;
+  return settingsDrafts.isDirty(group, settingsDraftValue(group));
+}
+function acceptSettings(data, forceGroups = [], submitted = {}) {
+  settings.value = { ...(settings.value || {}), ...data, monitor: { ...(settings.value?.monitor || {}), ...(data.monitor || {}) } };
+  const incoming = {};
+  if (data.monitor?.rules) incoming.monitor = data.monitor.rules.map(normalizeMonitorRuleForm);
+  if (data.monitor?.containerRules) incoming.protection = data.monitor.containerRules.map(normalizeContainerRuleForm);
+  if (data.monitor?.channels) incoming.channels = data.monitor.channels;
+  if (data.runtime) incoming.runtime = data.runtime;
+  if (data.ai) incoming.ai = { ...data.ai, apiKey: '' };
+  for (const [group, value] of Object.entries(incoming)) {
+    const result = submitted[group]
+      ? settingsDrafts.applySaved(group, value, settingsDraftValue(group), submitted[group])
+      : settingsDrafts.hydrate(group, value, settingsDraftValue(group), forceGroups.includes(group));
+    if (group === 'monitor') monitorRules.value = result;
+    if (group === 'protection') containerRules.value = result;
+    if (group === 'channels') channels.value = result;
+    if (group === 'runtime') Object.assign(runtimeForm, result);
+    if (group === 'ai') Object.assign(aiForm, result);
+  }
+  settingsDraftRevision.value++;
+}
+async function refreshSettings(forceGroups = []) {
+  if (settingsLoading.value) return;
+  settingsLoading.value = true;
+  try { acceptSettings(await api('/api/settings'), forceGroups); }
+  finally { settingsLoading.value = false; }
   if (activeView.value === "settings") refreshDockerContainerOptions();
+}
+async function discardSettingsDraft() {
+  if (!await confirmAction('放弃当前分区尚未保存的修改，并重新读取服务器设置？')) return;
+  await refreshSettings([currentSettingsGroup.value]);
+  settingsErrors[currentSettingsGroup.value] = '';
+}
+async function saveSettingsGroup(group, action, validation = '') {
+  if (settingsSaving[group]) return false;
+  settingsErrors[group] = '';
+  if (validation) { settingsErrors[group] = validation; return false; }
+  settingsSaving[group] = true;
+  const submitted = JSON.parse(JSON.stringify(settingsDraftValue(group)));
+  try { acceptSettings(await action(), [group], { [group]: submitted }); showToast(`${settingsSections.find(s => s.key === group)?.label || '设置'}已保存${sectionDirty(group) ? '，还有新的未保存修改' : ''}`); return true; }
+  catch (error) { settingsErrors[group] = '保存失败：' + formatValidationError(error); return false; }
+  finally { settingsSaving[group] = false; }
 }
 async function refreshAlertHistory() {
   const data = await api("/api/alerts?limit=100");
@@ -1601,13 +1745,9 @@ async function askAiAboutDiagnostic() {
   await analyzeWithAi("history", `请重点排查 ${date} 的异常公网上传，结合当天总量、进程、网卡、告警证据和通知投递结果，说明最可能来源及证据局限。`);
 }
 async function refreshAiSettings() {
-  const data = await api("/api/settings/ai");
-  Object.assign(aiForm, data || {});
-  aiForm.apiKey = "";
-  aiModels.value = [];
-  aiModelsError.value = "";
-  await refreshAiHistory();
+  acceptSettings({ ai: await api('/api/settings/ai') });
 }
+
 async function refreshAiHistory(force = false) {
   if (aiHistoryPromise && !force) return aiHistoryPromise;
   if (aiHistoryLoaded.value && !force) return;
@@ -1622,6 +1762,7 @@ async function refreshAiHistory(force = false) {
 }
 async function clearAiHistory() {
   if (!aiMessages.value.length || aiLoading.value) return;
+  if (!await confirmAction("清空 AI 历史对话？此操作不可撤销。")) return;
   await api("/api/ai/history", { method: "DELETE" });
   aiMessages.value = [];
   aiHistoryLoaded.value = true;
@@ -1724,8 +1865,8 @@ async function readAiModels() {
       aiModelsError.value = result.detail || "模型读取失败";
       return;
     }
-    aiModels.value = Array.isArray(result.models) ? result.models.slice(0, 200) : [];
-    if (aiModels.value.length && !aiModels.value.some((item) => item.id === aiForm.model)) aiForm.model = aiModels.value[0].id;
+    aiModels.value = Array.isArray(result.models) ? result.models : [];
+
     showToast(`已读取 ${aiModels.value.length} 个模型`);
   } catch (error) {
     aiModels.value = [];
@@ -1743,23 +1884,25 @@ async function refreshSystem() {
     systemLoading = false;
   }
 }
-async function refreshDocker() {
+async function refreshDocker(force = false) {
   if (dockerLoading) return;
   dockerLoading = true;
+  dockerListLoading.value = true;
   try {
-  const data = await api("/api/docker/containers");
+  const data = await api(`/api/docker/containers${force === true ? '?refresh=true' : ''}`);
   dockerData.value = { ...data, containers: mergeDockerContainers(data.containers || []) };
   } finally {
     dockerLoading = false;
+    dockerListLoading.value = false;
   }
 }
-async function refreshDockerContainerOptions() {
-  if (dockerLoading || (dockerData.value?.containers || []).length) return;
-  try {
-    await refreshDocker();
-  } catch (error) {
-    console.warn("load docker container options failed", error);
-  }
+async function refreshDockerContainerOptions(force = false) {
+  if (containerOptionsLoading.value || dockerLoading || (!force && (dockerData.value?.containers || []).length)) return;
+  containerOptionsLoading.value = true;
+  containerOptionsError.value = '';
+  try { await refreshDocker(force); if (!dockerData.value.enabled) containerOptionsError.value = 'Docker 自动发现未开启，请在常用设置中启用后重新获取。'; }
+  catch (error) { containerOptionsError.value = '获取容器失败：' + formatValidationError(error); }
+  finally { containerOptionsLoading.value = false; }
 }
 function dockerKey(container) {
   return container?.id || container?.name || "";
@@ -1793,50 +1936,29 @@ function replaceDockerContainer(container) {
     containers: (dockerData.value?.containers || []).map((item) => (dockerKey(item) === key ? normalizeDockerContainer(container, item) : item)),
   };
 }
-function containerOptionValue(container = {}) {
-  const id = (container.id || "").slice(0, 12);
-  const compose = [container.composeProject, container.composeService].filter(Boolean).join("/");
-  return `${container.name || id} | ${compose || "no-compose"} | ${container.image || ""} | ${id}`;
+function normalizeContainerRuleForm(rule = {}) { return normalizeProtectionRule(rule); }
+function resetProtectionThreshold(condition) {
+  const units = protectionUnitOptions(condition.metric);
+  condition.thresholdUnit = units.includes("MB") ? "MB" : units.includes("MB/s") ? "MB/s" : units[0];
+  condition.thresholdValue = 0;
 }
-function normalizeContainerRuleForm(rule = {}) {
-  const normalized = {
-    composeProject: "",
-    composeService: "",
-    containerSearch: "",
-    ...rule,
-  };
-  normalized.containerSearch = normalized.containerSearch || containerOptionValue({
-    id: normalized.containerId,
-    name: normalized.containerName,
-    image: normalized.image || "",
-    composeProject: normalized.composeProject,
-    composeService: normalized.composeService,
-  });
-  return normalized;
+function protectionStatusLabel(status) {
+  return { healthy: "正常", exceeded: "占用超限", locked: "已锁定", unavailable: "采样失败", missing: "容器未运行/不可见", stale: "采样过期", waiting: "等待下轮", monitoring: "监控中" }[status] || "等待采样";
 }
-function selectContainerForRule(rule) {
-  const keyword = String(rule.containerSearch || "").trim().toLowerCase();
-  const selected = dockerContainerOptions.value.find((container) => container.optionValue.toLowerCase() === keyword)
-    || dockerContainerOptions.value.find((container) => {
-      const id = String(container.id || "").slice(0, 12).toLowerCase();
-      return keyword && (
-        String(container.name || "").toLowerCase() === keyword
-        || id === keyword
-        || String(container.composeService || "").toLowerCase() === keyword
-      );
-    });
-  if (!selected) return;
-  rule.containerId = String(selected.id || "").slice(0, 12);
-  rule.containerName = selected.name || rule.containerName || "";
-  rule.composeProject = selected.composeProject || "";
-  rule.composeService = selected.composeService || "";
-  rule.containerSearch = selected.optionValue;
+function protectionMetricSummary(state) {
+  return (state.metricDetails || []).map(item => {
+    const metric = containerProtectionMetricLabels[item.metric] || item.metric;
+    const value = item.metric.endsWith("Percent") ? `${Number(item.value).toFixed(1)}%` : item.metric.endsWith("Bps") ? formatRate(item.value) : formatBytes(item.value);
+    return `${metric} ${value}${item.hot && !item.ready ? ` · 等待持续 ${item.durationSeconds} 秒` : ''}`;
+  }).join(" · ");
 }
-function containerRuleTargetText(rule = {}) {
-  const id = rule.containerId ? `当前ID ${String(rule.containerId).slice(0, 12)}` : "未绑定当前ID";
-  const name = rule.containerName ? `容器名 ${rule.containerName}` : "未设置容器名";
-  const compose = rule.composeProject && rule.composeService ? `Compose ${rule.composeProject}/${rule.composeService}` : "无 Compose 标识";
-  return `${name} · ${compose} · ${id}`;
+function protectionRuleStatus(rule) {
+  if (!rule.enabled) return "停用";
+  const state = protectionState(rule);
+  if (state.locked) return "已锁定";
+  if (["unavailable", "missing", "stale"].includes(state.monitorStatus)) return protectionStatusLabel(state.monitorStatus);
+  const failures = Object.values(state.containers || {}).filter(s => ["unavailable", "missing", "stale"].includes(s.monitorStatus)).length;
+  return failures ? `${failures} 个采样异常` : "监控中";
 }
 async function loadDockerDetail(container) {
   if (!container?.id && !container?.name) return null;
@@ -2009,7 +2131,7 @@ function toggleTheme() {
   theme.value = theme.value === "dark" ? "light" : "dark";
 }
 function openConnections(options = {}) {
-  Object.assign(connFilters, { mode: "capture", iface: options.iface || "all", scope: options.scope || "all", direction: options.direction || "all", owner: options.owner || "", source: "", dest: "" });
+  Object.assign(connFilters, connectionDefaults(options));
   connOffset.value = 0;
   if (!connectionDialog.value.open) connectionDialog.value.showModal();
   refreshConnections();
@@ -2017,12 +2139,13 @@ function openConnections(options = {}) {
 }
 function openWanConnections() {
   const mode = connectionSummary.value.source === "conntrack" ? "conntrack" : "capture";
-  Object.assign(connFilters, { mode, iface: "all", scope: "wan", direction: "all", owner: "", source: "", dest: "" });
+  Object.assign(connFilters, connectionDefaults({ mode, scope: "wan" }));
   connOffset.value = 0;
   if (!connectionDialog.value.open) connectionDialog.value.showModal();
   refreshConnections();
   startConnectionTimer();
 }
+function resetConnectionFilters() { Object.assign(connFilters, connectionDefaults()); refreshConnections(true); }
 function startConnectionTimer() {
   connectionTimer?.stop();
   connectionTimer = createPollLoop(() => connectionRequest.busy ? undefined : refreshConnections(false), 5000, { shouldRun: () => !disposed && !transport.hidden() && connectionDialog.value?.open });
@@ -2042,52 +2165,38 @@ function pageConnections(direction) {
   refreshConnections(false);
 }
 async function clearAlerts() {
+  if (!await confirmAction('清除全部告警记录、异常证据和通知回执？此操作不可撤销，流量历史与配置仍会保留。')) return;
   await api("/api/alerts/clear", { method: "POST" });
+  showToast("全部告警记录已清除");
   refreshOverview();
+  refreshAlertHistory();
   if (activeView.value === "monitor") refreshUploadDiagnostic();
 }
 function protectionState(rule) { return settings.value?.monitor?.containerStates?.[rule.id] || {}; }
 async function resetProtection(rule) {
-  if (!await transport.confirm(`重置“${rule.name}”的保护计数并解除锁定？启用的规则将恢复监控。`)) return;
+  if (!await confirmAction(`重置“${rule.name}”的保护计数并解除锁定？启用的规则将恢复监控。`)) return;
   settings.value = await api(`/api/settings/container-protection/${encodeURIComponent(rule.id)}/reset`, { method: "POST" });
   showToast("保护计数已重置");
 }
 async function clearTrafficHistory() {
-  if (!await transport.confirm("清除全部网卡和进程流量历史？此操作不可撤销。规则、通知渠道、AI 对话和告警证据会保留。")) return;
+  if (!await confirmAction("清除全部网卡和进程流量历史？此操作不可撤销。规则、通知渠道、AI 对话和告警证据会保留。")) return;
   await api("/api/history/clear", { method: "POST" });
   historyData.value = { buckets: [], totals: {} };
   showToast("流量历史已清理，配置已保留");
 }
 async function saveRuntime() {
-  settings.value = await api("/api/settings/runtime", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(runtimeForm) });
-  Object.assign(runtimeForm, settings.value.runtime || {});
-  showToast("运行参数已保存");
+  return saveSettingsGroup('runtime', () => api('/api/settings/runtime', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(runtimeForm) }));
 }
 async function saveAiSettings() {
-  try {
-    settings.value = await api("/api/settings/ai", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        enabled: Boolean(aiForm.enabled),
-        provider: aiForm.provider || "openai",
-        baseUrl: String(aiForm.baseUrl || "").trim(),
-        apiKey: aiForm.apiKey,
-        model: String(aiForm.model || "").trim(),
-        timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 180, 60),
-        maxTokens: clampNumber(aiForm.maxTokens, 128, 393216, 1200),
-        systemPrompt: aiForm.systemPrompt,
-      }),
-    });
-    Object.assign(aiForm, settings.value.ai || {});
-    aiForm.apiKey = "";
-    aiModels.value = [];
-    aiModelsError.value = "";
-    showToast("AI 配置已保存");
-  } catch (error) {
-    showToast(`保存失败：${formatValidationError(error)}`);
-  }
+  return saveSettingsGroup('ai', () => api('/api/settings/ai', {
+    localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      enabled: Boolean(aiForm.enabled), provider: aiForm.provider || 'openai', baseUrl: String(aiForm.baseUrl || '').trim(),
+      apiKey: aiForm.apiKey, model: String(aiForm.model || '').trim(), timeoutSeconds: clampNumber(aiForm.timeoutSeconds, 5, 180, 60),
+      maxTokens: clampNumber(aiForm.maxTokens, 128, 393216, 1200), systemPrompt: aiForm.systemPrompt,
+    }),
+  }));
 }
+
 function applyAiStreamEvent(event, assistantIndex) {
   if (event.type === "delta" && aiMessages.value[assistantIndex]) {
     aiMessages.value[assistantIndex].content += event.content || "";
@@ -2170,52 +2279,30 @@ function handleAiComposerKeydown(event) {
   sendAiChat();
 }
 async function saveRules() {
-  const rules = monitorRules.value.map((rule) => ({
-    ...rule,
-    threshold: thresholdToBytes(rule.thresholdValue, rule.thresholdUnit),
-    thresholdValue: undefined,
-    thresholdUnit: undefined,
-  }));
-  settings.value = await api("/api/settings/monitor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rules }) });
-  await refreshSettings();
-  showToast("监控规则已保存");
+  return saveSettingsGroup('monitor', () => api('/api/settings/monitor', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: monitorRules.value.map(monitorPayload) }) }), validateMonitorRules(monitorRules.value));
 }
 async function saveContainerRules() {
-  const payload = containerRules.value.map((rule) => ({
-    ...rule,
-    containerSearch: undefined,
-    containerId: String(rule.containerId || "").slice(0, 12),
-    containerName: String(rule.containerName || "").trim(),
-    composeProject: String(rule.composeProject || "").trim(),
-    composeService: String(rule.composeService || "").trim(),
-    maxActions: Number(rule.maxActions || 1),
-    cooldownSeconds: Number(rule.cooldownSeconds || 0),
-    conditions: (rule.conditions || []).map((condition) => ({
-      ...condition,
-      threshold: Number(condition.threshold || 0),
-      durationSeconds: Number(condition.durationSeconds || 0),
-    })),
-  }));
-  settings.value = await api("/api/settings/container-protection", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ rules: payload }),
-  });
-  await refreshSettings();
-  showToast("容器保护已保存");
+  return saveSettingsGroup('protection', () => api('/api/settings/container-protection', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: containerRules.value.map(protectionRulePayload) }) }), validateContainerRules(containerRules.value));
 }
 async function saveChannels() {
-  settings.value = await api("/api/settings/channels", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ channels: channels.value }) });
-  await refreshSettings();
-  showToast("通知渠道已保存");
+  return saveSettingsGroup('channels', () => api('/api/settings/channels', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channels: channels.value }) }), validateChannels(channels.value));
 }
 async function testChannel(channelId) {
-  await saveChannels();
-  const result = await api("/api/notifications/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ channelId }) });
-  showToast(result.ok ? "测试通知已发送" : `测试失败：${result.detail || result.body || "未知错误"}`);
+  if (testingChannel.value) return;
+  const channel = channels.value.find(row => row.id === channelId);
+  const error = validateChannels([{ ...channel, enabled: true }]);
+  if (error) { settingsErrors.channels = error; return; }
+  if (!await saveChannels()) return;
+  testingChannel.value = channelId;
+  try {
+    const result = await api('/api/notifications/test', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channelId }) });
+    if (!result.ok) throw new Error(result.detail || result.body || '发送失败');
+    showToast('测试通知已发送');
+  } catch (error) { settingsErrors.channels = '测试通知发送失败：' + formatValidationError(error); }
+  finally { testingChannel.value = ''; }
 }
 function addRule() {
-  const rule = normalizeMonitorRuleForm({ id: `rule-${Date.now()}`, name: "新监控规则", metric: "wan_tx_bps", operator: "gte", threshold: 0, durationSeconds: 0, scope: "wan", direction: "tx", window: "realtime", enabled: false, channelIds: [] });
+  const rule = normalizeMonitorRuleForm(newUploadRule(`rule-${Date.now()}`));
   monitorRules.value.push(rule);
   expandMonitorCard("traffic", rule.id);
 }
@@ -2224,7 +2311,7 @@ function removeRule(id) {
   expandedMonitorCards.delete(monitorCardKey("traffic", id));
 }
 function addContainerRule() {
-  const rule = {
+  const rule = normalizeProtectionRule({
     id: `protection-${Date.now()}`,
     name: "新容器保护",
     containerId: "",
@@ -2232,16 +2319,17 @@ function addContainerRule() {
     composeProject: "",
     composeService: "",
     containerSearch: "",
+    targetMode: "single",
+    containers: [],
     enabled: false,
     channelIds: [],
     logic: "and",
     action: "restart",
-    maxActions: 3,
     cooldownSeconds: 60,
     conditions: [
       { metric: "cpuPercent", operator: "gte", threshold: 90, durationSeconds: 30 },
     ],
-  };
+  });
   containerRules.value.push(rule);
   expandMonitorCard("container", rule.id);
 }
@@ -2251,7 +2339,7 @@ function removeContainerRule(id) {
 }
 function addContainerCondition(rule) {
   rule.conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
-  rule.conditions.push({ metric: "cpuPercent", operator: "gte", threshold: 90, durationSeconds: 30 });
+  rule.conditions.push(normalizeProtectionCondition({ metric: "cpuPercent", operator: "gte", threshold: 90, durationSeconds: 30 }));
 }
 function removeContainerCondition(rule, index) {
   rule.conditions.splice(index, 1);
@@ -2328,6 +2416,8 @@ async function editDockerContainer(container) {
   dockerEditor.icon = detail.containerIcon || "";
   dockerEditor.iconKey = detail.iconSource === "builtin" ? (detail.iconKey || "") : "";
   dockerEditor.ports = (detail.ports || []).map(normalizeEditorPort);
+  dockerEditBaseline.value = JSON.stringify(dockerEditor);
+  dockerEditError.value = "";
   dockerEditDialog.value?.showModal();
 }
 function addDockerPort() {
@@ -2336,14 +2426,31 @@ function addDockerPort() {
 function removeDockerPort(index) {
   dockerEditor.ports.splice(index, 1);
 }
-async function saveDockerPorts() {
-  await saveDockerPortsFor({ id: dockerEditor.id, name: dockerEditor.name, containerIcon: dockerEditor.icon, iconKey: dockerEditor.iconKey, ports: dockerEditor.ports });
+async function requestCloseDockerEditor() {
+  if (dockerEditSaving.value) return;
+  if (JSON.stringify(dockerEditor) !== dockerEditBaseline.value && !await confirmAction('放弃尚未保存的访问入口和图标修改？')) return;
   dockerEditDialog.value?.close();
-  showToast("Docker 端口配置已保存");
+}
+async function saveDockerPorts() {
+  if (dockerEditSaving.value) return;
+  dockerEditError.value = '';
+  const seen = new Set();
+  for (const port of dockerEditor.ports) {
+    if (![port.hostPort, port.containerPort].every(n => Number.isInteger(Number(n)) && Number(n) >= 1 && Number(n) <= 65535)) { dockerEditError.value = '请输入 1–65535 范围内的有效端口'; return; }
+    const key = `${port.proto}:${port.hostPort}`;
+    if (seen.has(key)) { dockerEditError.value = '同一协议的主机访问端口不能重复，请修改后再保存'; return; }
+    seen.add(key);
+  }
+  dockerEditSaving.value = true;
+  try {
+    await saveDockerPortsFor({ id: dockerEditor.id, name: dockerEditor.name, containerIcon: dockerEditor.icon, iconKey: dockerEditor.iconKey, ports: dockerEditor.ports });
+    dockerEditDialog.value?.close(); showToast('访问入口已保存');
+  } catch (error) { dockerEditError.value = '保存失败：' + formatValidationError(error); }
+  finally { dockerEditSaving.value = false; }
 }
 async function saveDockerPortsFor(container) {
   const data = await api("/api/docker/containers/ports", {
-    method: "POST",
+    localError: true, method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       containerId: container.id || "",

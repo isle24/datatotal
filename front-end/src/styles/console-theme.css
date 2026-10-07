@@ -1,0 +1,628 @@
+/*
+ * NAS operator console. Native CSS, informed by Impeccable's Operate guidance.
+ * Every rule stays inside App.vue's app-shell; the desktop launcher is separate.
+ * :root adds enough specificity to supersede the existing NAS component skin.
+ */
+:root .app-shell,
+:root .app-shell.nas-native-content {
+  color-scheme: light;
+  --bg: #f4f3ef;
+  --side: #252d2e;
+  --panel: #fffefb;
+  --panel-soft: #f0f2ee;
+  --text: #202d29;
+  --muted: #5c6862;
+  --line: #d7ded8;
+  --control-line: #7f8f83;
+  --accent: #176a58;
+  --accent-hover: #115444;
+  --accent-soft: #e8f2eb;
+  --blue: var(--accent);
+  --cyan: #256c78;
+  --green: #276746;
+  --orange: #87591e;
+  --red: #aa3e35;
+  --teal: var(--accent);
+  --shadow: none;
+  --ds-bg: var(--bg);
+  --ds-surface: var(--panel);
+  --ds-text: var(--text);
+  --ds-muted: var(--muted);
+  --ds-line: var(--line);
+  --ds-accent: var(--accent);
+  min-height: 100dvh;
+  grid-template-columns: 218px minmax(0, 1fr);
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: .875rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="dark"] .app-shell,
+:root[data-theme="dark"] .app-shell.nas-native-content {
+  color-scheme: dark;
+  --bg: #171d1b;
+  --side: #171c1d;
+  --panel: #212925;
+  --panel-soft: #28322d;
+  --text: #e6ede7;
+  --muted: #aab7ac;
+  --line: #3a4740;
+  --control-line: #6c7d70;
+  --accent: #8ecbb3;
+  --accent-hover: #b1ddc7;
+  --accent-soft: #2b4135;
+  --cyan: #95c8d1;
+  --green: #97c7a4;
+  --orange: #ddba7d;
+  --red: #f0a99e;
+}
+
+:root .app-shell ::selection { background: var(--accent-soft); color: var(--text); }
+:root .app-shell :is(input, textarea) { caret-color: var(--accent); }
+:root .app-shell :is(button, input, select, textarea) { font: inherit; }
+:root .app-shell :is(button, .file-button) {
+  min-height: 40px;
+  border-color: var(--control-line);
+  border-radius: 7px;
+  padding: 7px 12px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 550;
+  line-height: 1.35;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+:root .app-shell button:not(:disabled):hover,
+:root .app-shell .file-button:hover {
+  border-color: var(--accent);
+  background: var(--panel-soft);
+  color: var(--accent);
+}
+:root .app-shell button:not(:disabled):active { background: var(--accent-soft); }
+:root .app-shell :is(button, input, select, textarea):disabled {
+  opacity: .62;
+  cursor: not-allowed;
+}
+:root .app-shell :is(button, a, summary, input, select, textarea):focus-visible,
+:root .app-shell .file-button:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+:root .app-shell :is(input, select, textarea) {
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--control-line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 11px;
+  line-height: 1.4;
+}
+:root .app-shell select { appearance: auto; padding-right: 28px; }
+:root .app-shell textarea { min-height: 88px; resize: vertical; line-height: 1.65; }
+:root .app-shell :is(input, textarea)::placeholder { color: var(--muted); opacity: 1; }
+:root .app-shell :is(input, select, textarea):focus-visible { outline-offset: 1px; border-color: var(--accent); }
+:root .app-shell :is(input, select, textarea)[aria-invalid="true"] { border-color: var(--red); }
+:root .app-shell :is(input[type="checkbox"], input[type="radio"]) {
+  width: 17px;
+  height: 17px;
+  min-height: 17px;
+  flex: 0 0 17px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+  appearance: auto;
+  cursor: pointer;
+}
+:root .app-shell .danger { color: var(--red); }
+:root .app-shell .danger:not(:disabled):hover { color: var(--red); border-color: var(--red); }
+:root .app-shell :is(.primary-button, .nav-primary) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+}
+:root .app-shell :is(.primary-button, .nav-primary):not(:disabled):hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+  color: var(--panel);
+}
+:root .app-shell .subtle-button { border-style: solid; color: var(--text); background: var(--panel); }
+:root .app-shell .icon-button { width: 40px; min-width: 40px; padding: 0; }
+
+:root .app-shell > .sidebar {
+  height: 100dvh;
+  padding: 24px 14px;
+  background: var(--side);
+  color: #eef2ef;
+}
+:root .app-shell .brand { gap: 11px; margin: 0 4px 28px; }
+:root .app-shell .brand-mark {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #53635c;
+  border-radius: 8px;
+  background: #34443b;
+  color: #bce0cb;
+}
+:root .app-shell .brand h1 { font-size: .9375rem; font-weight: 650; letter-spacing: 0; }
+:root .app-shell .brand p { color: #b5c1b9; font-size: .75rem; }
+:root .app-shell .menu { gap: 4px; }
+:root .app-shell .menu button {
+  min-height: 44px;
+  gap: 12px;
+  border: 1px solid transparent;
+  padding: 10px 13px;
+  background: transparent;
+  color: #bcc8c0;
+  font-size: .875rem;
+  font-weight: 500;
+}
+:root .app-shell .menu button:hover { color: #f2f6f3; background: #343e38; border-color: transparent; }
+:root .app-shell .menu button.active { color: #def0e4; background: #3b4b40; border-color: #53685a; }
+:root .app-shell .menu button:focus-visible { outline-color: #bce0cb; }
+:root .app-shell > .main,
+:root .app-shell.nas-native-content > .main {
+  width: 100%;
+  max-width: 1640px;
+  min-width: 0;
+  margin: 0 auto;
+  padding: 28px 32px 40px;
+}
+:root .app-shell.nas-native-content { display: block; min-height: 0; }
+:root .app-shell .topbar { gap: 20px; margin-bottom: 24px; }
+:root .app-shell .topbar h2 { font-size: 1.375rem; font-weight: 650; letter-spacing: -.02em; line-height: 1.35; }
+:root .app-shell .eyebrow { margin-bottom: 5px; font-size: .75rem; }
+:root .app-shell .top-actions { gap: 8px; }
+:root .app-shell .toast { color: var(--accent); font-size: .8125rem; font-weight: 550; }
+:root .app-shell .view { gap: 24px; min-width: 0; }
+:root .app-shell :is(.view > *, .grid > *, .metric-grid > *) { min-width: 0; }
+:root .app-shell .grid.two { gap: 24px; }
+
+/* One flat surface per section; nested information uses rows and dividers. */
+:root .app-shell .card,
+:root .app-shell.nas-native-content .card {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
+:root .app-shell .card-head { gap: 16px; padding: 18px 20px; margin: 0; border-bottom: 1px solid var(--line); background: transparent; }
+:root .app-shell .card-head h3 { font-size: 1rem; line-height: 1.45; font-weight: 650; }
+:root .app-shell .card-head p { margin-top: 4px; max-width: 72ch; color: var(--muted); font-size: .75rem; line-height: 1.6; }
+:root .app-shell :is(.card-actions, .controls, .edit-actions) { gap: 8px; }
+:root .app-shell .card-actions { justify-content: flex-end; }
+:root .app-shell :is(.info-grid, .history-cards, .temp-grid, .fan-grid) { gap: 8px 20px; padding: 16px 20px 20px; }
+:root .app-shell .info-item {
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+:root .app-shell .info-item span { font-size: .75rem; color: var(--muted); }
+:root .app-shell .info-item b { margin-top: 5px; font-size: .875rem; font-weight: 550; line-height: 1.5; }
+:root .app-shell button.info-item { min-height: 68px; padding: 12px 0; }
+:root .app-shell button.info-item:hover { border-color: var(--line); background: transparent; }
+:root .app-shell .alert-list { gap: 0; padding: 4px 20px 16px; }
+:root .app-shell .alert-row { gap: 10px; padding: 14px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+:root .app-shell .alert-row > svg { flex-shrink: 0; color: var(--orange); margin-top: 2px; }
+:root .app-shell .alert-row strong { font-size: .8125rem; font-weight: 550; }
+:root .app-shell .alert-row p { font-size: .75rem; line-height: 1.6; }
+:root .app-shell .empty { color: var(--muted); font-size: .8125rem; line-height: 1.7; }
+:root .app-shell .request-error { border-color: var(--red); border-radius: 8px; box-shadow: none; font-size: .8125rem; line-height: 1.6; }
+
+/* The overview remains an operational readout, with no decorative hero. */
+:root .app-shell .dashboard-board {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: none;
+}
+:root .app-shell .dashboard-board::after,
+:root .app-shell .temp-card::before,
+:root .app-shell .monitor-stat::before { display: none; }
+:root .app-shell .dashboard-kicker { display: none; }
+:root .app-shell .dashboard-board-header { padding: 18px 20px; gap: 20px; border-color: var(--line); }
+:root .app-shell .dashboard-board-title h3 { margin: 0; font-size: 1rem; font-weight: 650; }
+:root .app-shell .dashboard-board-title p { margin-top: 5px; color: var(--muted); font-size: .75rem; }
+:root .app-shell .dashboard-board-status { gap: 9px; }
+:root .app-shell .dashboard-board-status strong { font-size: .8125rem; font-weight: 550; }
+:root .app-shell .dashboard-board-status span { color: var(--muted); font-size: .75rem; }
+:root .app-shell .live-dot,
+:root .app-shell .live-dot.pending { flex: 0 0 8px; width: 8px; height: 8px; box-shadow: none; }
+:root .app-shell .board-ai-button { color: var(--text); border-color: var(--control-line); background: var(--panel); }
+:root .app-shell .dashboard-board-main { grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) minmax(0, 1fr); }
+:root .app-shell .dashboard-total-block { min-height: 158px; gap: 7px; padding: 22px 20px; border-right-color: var(--line); }
+:root .app-shell .dashboard-total-block > span,
+:root .app-shell .dashboard-total-block small { color: var(--muted); font-size: .75rem; }
+:root .app-shell .dashboard-total-block > strong { font-size: 1.25rem; line-height: 1.35; font-weight: 650; overflow-wrap: anywhere; }
+:root .app-shell .dashboard-total-primary > strong { color: var(--text); font-size: 1.875rem; letter-spacing: -.025em; }
+:root .app-shell .dashboard-total-connections > strong { color: var(--text); font-size: 1.875rem; }
+:root .app-shell .dashboard-total-connections button { color: var(--accent); background: transparent; border-color: var(--control-line); }
+:root .app-shell .rx-text { color: var(--cyan); }
+:root .app-shell .tx-text { color: var(--orange); }
+:root .app-shell .dashboard-rate-bars { gap: 8px; margin-top: 9px; }
+:root .app-shell .dashboard-rate-row { grid-template-columns: 56px minmax(30px, 1fr) 88px; gap: 8px; }
+:root .app-shell .dashboard-rate-row > span { color: var(--muted); font-size: .75rem; }
+:root .app-shell .dashboard-rate-row i { height: 4px; background: var(--panel-soft); }
+:root .app-shell .dashboard-rate-row b.rx { background: var(--cyan); }
+:root .app-shell .dashboard-rate-row b.tx { background: var(--orange); }
+:root .app-shell .dashboard-rate-row em { color: var(--text); font-size: .75rem; }
+:root .app-shell .dashboard-board-footer { gap: 10px 24px; padding: 12px 20px; border-top: 1px solid var(--line); color: var(--muted); background: var(--panel-soft); font-size: .75rem; }
+:root .app-shell .metric-grid { gap: 12px; }
+:root .app-shell .metric-card {
+  min-height: 108px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: none;
+  transform: none;
+}
+:root .app-shell .metric-card:hover { transform: none; box-shadow: none; border-color: var(--accent); }
+:root .app-shell .metric-icon { width: 22px; height: 22px; margin-bottom: 4px; border-radius: 0; background: transparent; color: var(--muted); }
+:root .app-shell .metric-title { color: var(--muted); font-size: .75rem; font-weight: 500; }
+:root .app-shell .metric-card strong { margin-top: 5px; font-size: 1.375rem; line-height: 1.4; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+:root .app-shell .metric-footer { font-size: .75rem; }
+:root .app-shell .metric-footer button { min-height: 32px; }
+:root .app-shell .dashboard-metric-grid { gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+:root .app-shell .dashboard-metric-grid .metric-card { min-height: 100px; border: 0; border-right: 1px solid var(--line); border-radius: 0; }
+:root .app-shell .dashboard-metric-grid .metric-card:last-child { border-right: 0; }
+:root .app-shell .dashboard-metric-grid .metric-card strong { font-size: 1.125rem; }
+
+/* Native desktop overview uses the same scoped tokens. */
+:root .app-shell .dn-overview-title { margin-bottom: 20px; }
+:root .app-shell .dn-overview-title h2 { margin: 0 0 6px; font-size: 1.375rem; font-weight: 650; }
+:root .app-shell .dn-caption { display: none; }
+:root .app-shell .dn-stat-grid { gap: 12px; }
+:root .app-shell .dn-stat-grid .dn-stat { min-height: 124px; gap: 10px; padding: 18px; border-color: var(--line); border-radius: 10px; background: var(--panel); box-shadow: none; }
+:root .app-shell .dn-stat strong { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+:root .app-shell .dn-rx { color: var(--cyan); }
+:root .app-shell .dn-tx { color: var(--orange); }
+:root .app-shell .dn-chart-section { margin-top: 24px; }
+:root .app-shell .dn-bottom-grid { gap: 24px; border-color: var(--line); }
+
+/* Tables keep their native horizontal scroll instead of shrinking every cell. */
+:root .app-shell .table-wrap { max-width: 100%; border: 0; border-radius: 0; background: var(--panel); overscroll-behavior-x: contain; }
+:root .app-shell table { font-variant-numeric: tabular-nums; }
+:root .app-shell table th { padding: 12px 16px; background: var(--panel-soft); color: var(--muted); font-size: .75rem; font-weight: 600; }
+:root .app-shell table td { padding: 13px 16px; color: var(--text); font-size: .8125rem; line-height: 1.6; }
+:root .app-shell table td p { font-size: .75rem; }
+:root .app-shell table tbody tr:last-child td { border-bottom: 0; }
+:root .app-shell table tbody tr:hover { background: var(--panel-soft); }
+:root .app-shell .text-link { min-height: 32px; padding: 3px 0; border: 0; border-radius: 4px; color: var(--accent); background: transparent; text-underline-offset: 3px; }
+:root .app-shell .text-link:hover { background: transparent; text-decoration: underline; }
+:root .app-shell :is(.pill, .state-badge, .rule-state, .fan-status) { font-size: .75rem; font-weight: 550; }
+:root .app-shell .segmented { gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); }
+:root .app-shell .segmented button { min-height: 34px; border: 1px solid transparent; background: transparent; color: var(--muted); padding: 6px 10px; }
+:root .app-shell .segmented button.active { color: var(--accent); background: var(--panel); border-color: var(--line); }
+:root .app-shell .pager { gap: 8px; padding: 14px 20px; font-size: .75rem; }
+
+/* Settings are a workspace: persistent category tabs and one form at a time. */
+:root .app-shell .settings-workspace { align-content: start; gap: 20px; }
+:root .app-shell .settings-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; padding: 4px 0 0; border-bottom: 1px solid var(--line); }
+:root .app-shell .settings-tab {
+  flex: 0 0 auto;
+  min-height: 44px;
+  gap: 7px;
+  padding: 10px 16px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 5px 5px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+:root .app-shell .settings-tab:hover { background: var(--panel-soft); }
+:root .app-shell .settings-tab.active,
+:root .app-shell .settings-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); background: transparent; font-weight: 600; }
+:root .app-shell .settings-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+:root .app-shell .settings-toolbar p { color: var(--muted); font-size: .8125rem; line-height: 1.6; }
+:root .app-shell .settings-toolbar > div { min-width: 0; }
+:root .app-shell .settings-toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+:root .app-shell :is(.settings-feedback, .settings-unsaved) { display: flex; align-items: flex-start; gap: 8px; font-size: .8125rem; line-height: 1.6; }
+:root .app-shell .settings-feedback { padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-soft); color: var(--text); }
+:root .app-shell .settings-feedback.success { color: var(--green); }
+:root .app-shell .settings-feedback.error { color: var(--red); border-color: var(--red); }
+:root .app-shell .settings-unsaved { color: var(--orange); }
+:root .app-shell :is(.settings-feedback, .settings-unsaved) > svg { flex-shrink: 0; margin-top: 2px; }
+:root .app-shell .settings-ai-card { border-color: var(--line); }
+:root .app-shell :is(.form-grid, .ai-form-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; padding: 20px; }
+:root .app-shell .form-grid.mini { padding: 0; }
+:root .app-shell :is(label, .textarea-label, .field-block) { gap: 7px; min-width: 0; color: var(--text); font-size: .8125rem; font-weight: 500; line-height: 1.5; }
+:root .app-shell :is(label.check, label.switch) { min-height: 40px; gap: 9px; padding: 6px 0; font-weight: 400; }
+:root .app-shell .form-grid > .wide { grid-column: 1 / -1; }
+:root .app-shell .field-hint { max-width: 76ch; color: var(--muted); font-size: .75rem; font-weight: 400; line-height: 1.65; }
+:root .app-shell :is(.channel-checks, .template-help) { gap: 8px; }
+:root .app-shell .check-chip { min-height: 38px; gap: 8px; padding: 8px 10px; border-radius: 7px; background: var(--panel); font-size: .8125rem; font-weight: 400; cursor: pointer; }
+:root .app-shell .check-chip:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+:root .app-shell .check-chip small { color: var(--muted); font-size: .75rem; }
+:root .app-shell .template-help { line-height: 1.6; }
+:root .app-shell .template-help code { color: var(--muted); border-color: var(--line); font-size: .75rem; }
+:root .app-shell .threshold-control { margin: 0; grid-template-columns: minmax(0, 1fr) 100px; gap: 8px; }
+:root .app-shell .threshold-control em { min-height: 40px; border-radius: 7px; border-color: var(--control-line); color: var(--muted); font-size: .8125rem; }
+:root .app-shell .inline-field { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; }
+:root .app-shell .inline-field > :only-child { grid-column: 1 / -1; }
+:root .app-shell .settings-security-note { align-items: flex-start; margin: 0 20px 20px; max-width: 84ch; font-size: .75rem; line-height: 1.65; }
+:root .app-shell .settings-security-note > svg { flex-shrink: 0; margin-top: 3px; }
+
+/* Details-based selection expands in document flow, even in nested forms. */
+:root .app-shell .container-picker { display: grid; gap: 10px; min-width: 0; border: 0; border-radius: 0; background: transparent; }
+:root .app-shell .container-picker > details { min-width: 0; border: 1px solid var(--control-line); border-radius: 7px; background: var(--panel); }
+:root .app-shell .container-picker-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 7px; background: var(--panel); color: var(--text); cursor: pointer; list-style: none; }
+:root .app-shell .container-picker-trigger::-webkit-details-marker { display: none; }
+:root .app-shell .container-picker-trigger > span { min-width: 0; overflow-wrap: anywhere; }
+:root .app-shell .container-picker-trigger > svg { flex-shrink: 0; color: var(--muted); }
+:root .app-shell .container-picker > details[open] { border-color: var(--accent); }
+:root .app-shell .container-picker > details[open] > .container-picker-trigger { border-bottom: 1px solid var(--line); border-radius: 7px 7px 0 0; background: var(--panel-soft); }
+:root .app-shell .container-picker-panel { position: static; width: auto; display: grid; gap: 12px; margin: 0; padding: 12px; border: 0; border-radius: 0 0 7px 7px; background: var(--panel); box-shadow: none; }
+:root .app-shell .container-picker > details:not([open]) > .container-picker-panel { display: none; }
+:root .app-shell .container-picker-options { display: grid; gap: 2px; max-height: 280px; overflow-y: auto; overscroll-behavior: contain; }
+:root .app-shell .container-picker-option { display: flex; align-items: flex-start; justify-content: flex-start; gap: 10px; min-height: 48px; width: 100%; padding: 10px; border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; cursor: pointer; }
+:root .app-shell .container-picker-option:hover { color: var(--text); border-color: var(--line); background: var(--panel-soft); }
+:root .app-shell .container-picker-option > input { margin-top: 3px; }
+:root .app-shell .container-picker-option :is(span, div) { min-width: 0; }
+:root .app-shell .container-picker-option :is(strong, small) { display: block; overflow-wrap: anywhere; }
+:root .app-shell .container-picker-option strong { font-size: .8125rem; font-weight: 550; }
+:root .app-shell .container-picker-option small { color: var(--muted); font-size: .75rem; font-weight: 400; line-height: 1.55; }
+:root .app-shell .container-picker-option:has(input:checked),
+:root .app-shell .container-picker-option[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+:root .app-shell .container-picker-selection { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+:root .app-shell .container-picker-selection button { min-height: 36px; width: 36px; max-width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }
+
+/* Expandable editors are divided sections rather than elevated nested cards. */
+:root .app-shell :is(.accordion-stack, .docker-stack) { gap: 10px; padding: 16px 20px 20px; }
+:root .app-shell :is(.docker-card, .collapsible-card, .monitor-status-card) { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: none; transform: none; }
+:root .app-shell :is(.docker-card, .collapsible-card, .monitor-status-card):hover { border-color: var(--control-line); transform: none; box-shadow: none; }
+:root .app-shell :is(.docker-card, .collapsible-card, .monitor-status-card).expanded { border: 1px solid var(--control-line); box-shadow: none; }
+:root .app-shell .accordion-stack .collapsible-card.expanded { border-left: 1px solid var(--control-line); }
+:root .app-shell .card-summary-row { min-height: 72px; padding: 10px 14px; }
+:root .app-shell .collapse-toggle { min-height: 48px; padding: 0; border: 0; background: transparent; }
+:root .app-shell .collapse-toggle:hover { background: transparent; }
+:root .app-shell :is(.collapse-toggle, .docker-card-trigger, .monitor-card-trigger) strong { font-size: .875rem; font-weight: 600; }
+:root .app-shell :is(.collapse-toggle, .docker-card-trigger, .monitor-card-trigger) small,
+:root .app-shell .docker-card-trigger p { font-size: .75rem; color: var(--muted); }
+:root .app-shell .card-editor { gap: 20px; padding: 20px; background: var(--panel-soft); }
+:root .app-shell .condition-list { gap: 12px; }
+:root .app-shell .condition-row { padding: 16px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; gap: 12px; }
+:root .app-shell .condition-row label { min-width: 0; flex: 1 1 140px; }
+:root .app-shell .condition-row > button { align-self: end; }
+:root .app-shell .docker-card { margin: 0; }
+:root .app-shell .docker-card-trigger { min-height: 78px; padding: 14px 16px; border: 0; border-radius: 0; background: var(--panel); }
+:root .app-shell .docker-card-body { padding: 18px; border-color: var(--line); background: var(--panel-soft); }
+:root .app-shell .docker-icon { width: 42px; height: 42px; border-radius: 7px; background: var(--panel); color: var(--muted); }
+:root .app-shell .docker-stats { gap: 16px; }
+:root .app-shell .docker-stats span { padding: 8px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; font-size: .75rem; }
+:root .app-shell .port-row { gap: 10px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+:root .app-shell .port-editor { padding: 16px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; gap: 12px; }
+:root .app-shell .port-row p { font-size: .75rem; }
+:root .app-shell .monitor-hero,
+:root .app-shell .ai-center-hero { min-height: 0; padding: 18px 0 8px; border: 0; border-radius: 0; background: transparent; color: var(--text); box-shadow: none; }
+:root .app-shell :is(.monitor-hero, .ai-center-hero) h3 { margin: 0; font-size: 1.25rem; font-weight: 650; }
+:root .app-shell :is(.monitor-hero, .ai-center-hero) p { max-width: 72ch; margin-top: 7px; color: var(--muted); font-size: .8125rem; }
+:root .app-shell .monitor-stat { min-height: 100px; padding: 16px; border-color: var(--line); border-radius: 10px; background: var(--panel); box-shadow: none; }
+:root .app-shell .monitor-stat strong { margin-top: 8px; font-size: 1.5rem; font-weight: 650; }
+:root .app-shell .monitor-stat p { font-size: .75rem; }
+:root .app-shell .monitor-card-trigger { min-height: 72px; padding: 14px 16px; border: 0; border-radius: 0; background: transparent; }
+:root .app-shell .monitor-card-body { padding: 14px 16px 16px; border-color: var(--line); }
+:root .app-shell .monitor-card-icon { background: var(--panel-soft); color: var(--muted); }
+:root .app-shell .monitor-card-body span { font-size: .75rem; }
+:root .app-shell :is(.temp-card, .fan-card, .diagnostic-panel) { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 0; background: transparent; box-shadow: none; }
+:root .app-shell .temp-readings p { padding: 8px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+:root .app-shell .fan-icon { background: var(--panel-soft); color: var(--muted); }
+:root .app-shell .fan-rpm b { font-size: 1.5rem; color: var(--text); }
+:root .app-shell .process-card { min-height: 130px; border-radius: 8px; }
+:root .app-shell .avatar { background: var(--panel-soft); color: var(--muted); font-weight: 600; }
+:root .app-shell .bars i { height: 4px; }
+:root .app-shell .upload-diagnostic-summary > div { border: 0; border-radius: 0; background: transparent; padding: 8px 0; }
+
+/* AI remains a familiar conversation surface without a separate visual theme. */
+:root .app-shell .ai-chat-toolbar { padding: 16px 20px; background: var(--panel-soft); }
+:root .app-shell .ai-mode-tabs button { min-height: 36px; font-size: .75rem; }
+:root .app-shell .ai-mode-tabs button.active { color: var(--accent); background: var(--accent-soft); }
+:root .app-shell .ai-messages { padding: 20px; }
+:root .app-shell .ai-message { max-width: min(780px, 94%); }
+:root .app-shell .ai-message-avatar { color: var(--muted); background: var(--panel-soft); }
+:root .app-shell .ai-message small { font-size: .75rem; }
+:root .app-shell .ai-message.user p { color: var(--text); background: var(--accent-soft); border-color: var(--line); }
+:root .app-shell :is(.ai-markdown, .ai-message p) { font-size: .875rem; }
+:root .app-shell .ai-markdown blockquote { border-left-width: 1px; }
+:root .app-shell .ai-composer { padding: 16px 20px 20px; }
+:root .app-shell .ai-composer textarea { min-height: 72px; }
+:root .app-shell .ai-proposal-change { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+:root .app-shell .modal { border-radius: 12px; box-shadow: 0 20px 60px #00000035; }
+:root .app-shell .modal::backdrop { background: #101a1766; }
+:root .app-shell .connection-filters { gap: 10px; padding: 16px 20px; background: var(--panel-soft); }
+:root .app-shell .refresh-note { font-size: .75rem; padding: 0 20px 18px; }
+
+/* The existing service-navigation component shares this palette in both modes. */
+:root .app-shell .nav-hub {
+  --nav-bg: var(--bg);
+  --nav-panel: var(--panel);
+  --nav-line: var(--line);
+  --nav-text: var(--text);
+  --nav-muted: var(--muted);
+  --nav-accent: var(--accent);
+}
+:root .app-shell .nav-toolbar { margin: 0 0 24px; }
+:root .app-shell .nav-summary h3 { font-size: 1.125rem; font-weight: 650; }
+:root .app-shell .nav-search { min-height: 40px; border-color: var(--control-line); border-radius: 7px; }
+:root .app-shell .nav-search input { min-height: 38px; border: 0; background: transparent; }
+:root .app-shell .nav-search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+:root .app-shell .nav-grid { gap: 12px; }
+:root .app-shell .nav-card { border-radius: 10px; box-shadow: none; }
+:root .app-shell .nav-card:hover { box-shadow: none; }
+:root .app-shell .nav-card .nav-launch { min-height: 90px; padding: 18px 16px; border: 0; border-radius: 0; }
+:root .app-shell .nav-editor { border-radius: 12px; background: var(--panel); }
+
+@media (max-width: 1280px) {
+  :root .app-shell > .main,
+  :root .app-shell.nas-native-content > .main { padding: 24px; }
+  :root .app-shell .dashboard-board-main { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); }
+  :root .app-shell .dashboard-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  :root .app-shell .dashboard-metric-grid .metric-card { border-bottom: 1px solid var(--line); }
+  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(3n) { border-right: 0; }
+  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(n+4) { border-bottom: 0; }
+  :root .app-shell .inline-field { grid-template-columns: minmax(0, 1fr) auto; }
+  :root .app-shell .inline-field > select { grid-column: 1 / -1; }
+}
+
+@media (max-width: 1020px) {
+  :root .app-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  :root .app-shell > .sidebar { position: static; height: auto; padding: 14px 16px 8px; }
+  :root .app-shell .brand { margin: 0 0 12px; }
+  :root .app-shell .menu { display: flex; gap: 4px; overflow-x: auto; padding: 3px 2px 7px; }
+  :root .app-shell .menu button { flex-shrink: 0; padding: 10px 12px; }
+  :root .app-shell .grid.two { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  :root .app-shell :is(.form-grid, .form-grid.mini, .info-grid, .history-cards, .system-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  :root .app-shell .dashboard-board-main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  :root .app-shell .dashboard-total-primary { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--line); }
+  :root .app-shell .dashboard-total-block { min-height: 144px; }
+  :root .app-shell .card-head { flex-direction: row; align-items: center; flex-wrap: wrap; }
+  :root .app-shell .card-actions { justify-content: flex-start; }
+  :root .app-shell .connection-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  :root .app-shell .docker-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  :root .app-shell .port-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  :root .app-shell .port-row { grid-template-columns: minmax(0, 1fr) auto; }
+  :root .app-shell .search-input { width: min(320px, 100%); }
+}
+
+@media (max-width: 720px) {
+  :root .app-shell > .main,
+  :root .app-shell.nas-native-content > .main { padding: 18px 14px 28px; }
+  :root .app-shell .topbar { margin-bottom: 20px; gap: 12px; align-items: flex-start; }
+  :root .app-shell .topbar h2 { font-size: 1.25rem; }
+  :root .app-shell .top-actions { gap: 6px; }
+  :root .app-shell :is(button, input, select, .file-button) { min-height: 44px; }
+  :root .app-shell .icon-button { min-width: 44px; width: 44px; }
+  :root .app-shell :is(input[type="checkbox"], input[type="radio"]) { min-height: 17px; }
+  :root .app-shell :is(.view, .settings-workspace) { gap: 18px; }
+  :root .app-shell :is(.card-head, .dashboard-board-header) { padding: 16px; gap: 12px; }
+  :root .app-shell .card-head { align-items: flex-start; flex-direction: column; }
+  :root .app-shell .card-actions { width: 100%; }
+  :root .app-shell .card-actions > :is(input, .controls) { width: 100%; }
+  :root .app-shell .controls { width: 100%; }
+  :root .app-shell .controls :is(input, select) { flex: 1 1 150px; width: 100%; }
+  :root .app-shell .dashboard-board-header { grid-template-columns: minmax(0, 1fr) auto; }
+  :root .app-shell .dashboard-board-title { grid-column: 1 / -1; }
+  :root .app-shell .board-ai-button { width: auto; }
+  :root .app-shell .dashboard-board-status { min-width: 0; }
+  :root .app-shell .dashboard-board-main { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .dashboard-total-block { min-height: 0; padding: 18px 16px; border-right: 0; border-bottom: 1px solid var(--line); }
+  :root .app-shell .dashboard-total-primary > strong,
+  :root .app-shell .dashboard-total-connections > strong { font-size: 1.625rem; }
+  :root .app-shell .dashboard-board-footer { display: flex; gap: 8px 16px; padding: 12px 16px; }
+  :root .app-shell .dashboard-rate-row { grid-template-columns: 54px minmax(20px, 1fr) 88px; }
+  :root .app-shell :is(.metric-grid, .dashboard-metric-grid, .dn-stat-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  :root .app-shell .dashboard-metric-grid .metric-card { min-height: 96px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(3n) { border-right: 1px solid var(--line); }
+  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(2n),
+  :root .app-shell .dashboard-metric-grid .metric-card:last-child { border-right: 0; }
+  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(n+4) { border-bottom: 1px solid var(--line); }
+  :root .app-shell .dashboard-metric-grid .metric-card:last-child { grid-column: 1 / -1; border-bottom: 0; }
+  :root .app-shell .metric-card { min-height: 104px; padding: 14px; }
+  :root .app-shell .metric-card strong { font-size: 1.25rem; }
+  :root .app-shell .dn-stat-grid .dn-stat { min-height: 124px; padding: 16px; }
+  :root .app-shell .dn-bottom-grid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  :root .app-shell :is(.form-grid, .form-grid.mini, .info-grid, .temp-grid, .fan-grid, .ai-form-grid) { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 16px; }
+  :root .app-shell .form-grid.mini { padding: 0; }
+  :root .app-shell :is(.accordion-stack, .docker-stack, .process-grid, .rule-grid, .channel-grid, .docker-grid) { padding: 12px 16px 16px; }
+  :root .app-shell :is(.process-grid, .docker-grid) { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .card-summary-row { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; }
+  :root .app-shell .summary-actions { justify-content: flex-end; }
+  :root .app-shell .card-editor { padding: 16px; gap: 20px; }
+  :root .app-shell .collapse-toggle :is(strong, small) { white-space: normal; overflow-wrap: anywhere; }
+  :root .app-shell .settings-toolbar { padding: 16px; }
+  :root .app-shell .settings-toolbar-actions { width: 100%; }
+  :root .app-shell .settings-tab { padding-left: 12px; padding-right: 12px; }
+  :root .app-shell .settings-security-note { margin: 0 16px 16px; }
+  :root .app-shell .check-chip { min-height: 44px; }
+  :root .app-shell .container-picker-panel { padding: 10px; }
+  :root .app-shell .container-picker-option { min-height: 52px; }
+  :root .app-shell .container-picker-selection button { width: 44px; min-height: 44px; }
+  :root .app-shell .inline-field { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .docker-card-summary { padding-left: 54px; }
+  :root .app-shell .docker-card-body { padding: 16px; }
+  :root .app-shell .docker-stats { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  :root .app-shell .port-row { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .monitor-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  :root .app-shell .monitor-stat { min-height: 108px; padding: 14px; }
+  :root .app-shell :is(.ai-chat-toolbar, .ai-messages, .ai-composer) { padding: 16px; }
+  :root .app-shell .ai-message { max-width: 100%; }
+  :root .app-shell .connection-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
+  :root .app-shell .pager { justify-content: flex-start; padding: 12px 16px; }
+  :root .app-shell .request-error { flex-wrap: wrap; padding: 12px; }
+  :root .app-shell .nav-tools { width: 100%; }
+  :root .app-shell .nav-search { flex: 1 1 100%; }
+  :root .app-shell .nav-search input { max-width: none; }
+  :root .app-shell .nav-tools select { flex: 1; max-width: none; }
+}
+
+@media (max-width: 430px) {
+  :root .app-shell .topbar { flex-wrap: wrap; }
+  :root .app-shell .top-actions { justify-content: flex-start; }
+  :root .app-shell .toast { max-width: 100%; }
+  :root .app-shell .card-summary-row { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .summary-actions { justify-content: flex-start; }
+  :root .app-shell .history-cards { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .port-editor,
+  :root .app-shell .connection-filters { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .docker-card-summary { padding-left: 0; }
+  :root .app-shell .condition-row { display: grid; grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .condition-row > button { justify-self: start; }
+  :root .app-shell .settings-toolbar-actions { align-items: stretch; }
+  :root .app-shell .settings-toolbar-actions button { flex: 1 1 auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root .app-shell *,
+  :root .app-shell *::before,
+  :root .app-shell *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+/* Field grouping shared by date controls and connection filters. */
+:root .app-shell .controls > label,
+:root .app-shell .connection-filters > label {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  font-size: .75rem;
+  color: var(--muted);
+}
+:root .app-shell fieldset.docker-editor { border: 0; padding: 0; margin: 0; min-width: 0; }
+:root .app-shell .advanced-fields { margin: 12px 20px 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+:root .app-shell .advanced-fields > summary { cursor: pointer; color: var(--muted); font-size: .8125rem; padding: 8px 0; }
+:root .app-shell .advanced-fields > .form-grid { padding: 16px 0 0; }
+:root .app-shell .card-editor .advanced-fields { margin-inline: 0; }
+@media (max-width: 720px) {
+  :root .app-shell :is(input, select, textarea) { font-size: 1rem; }
+}
+:root .app-shell fieldset.settings-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+:root .app-shell .delivery-muted { color: var(--muted); border-color: var(--line); background: var(--panel-soft); }
+:root .app-shell .mobile-page-select { display: none; }
+@media (max-width: 720px) {
+  :root .app-shell .sidebar > .menu { display: none; }
+  :root .app-shell .mobile-page-select { display: grid; gap: 6px; color: #d4ded9; font-size: .75rem; margin-top: 12px; }
+  :root .app-shell .mobile-page-select select { color: #f2f6f3; background: #303c37; border-color: #64726a; width: 100%; }
+  :root .app-shell .settings-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; gap: 4px; }
+  :root .app-shell .settings-tab { padding: 10px 6px; min-width: 0; white-space: normal; }
+}

@@ -824,6 +824,38 @@ label.check input, label.switch input { width: auto; min-height: auto; }
   display: grid;
   gap: 8px;
 }
+.container-target-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+.container-target-options .check-chip {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+.container-target-options small {
+  color: var(--muted);
+}
+.protection-target-states {
+  display: grid;
+  gap: 8px;
+}
+.protection-target-states > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.protection-target-states small {
+  flex-basis: 100%;
+  color: var(--muted);
+}
 .condition-row {
   flex-wrap: wrap;
   align-items: end;

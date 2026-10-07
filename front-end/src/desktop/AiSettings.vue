@@ -102,7 +102,7 @@
         <button class="ds-button ds-primary" :disabled="busy">
           <Save :size="16" />{{ busy ? "处理中…" : "保存配置" }}</button
         ><button type="button" class="ds-button" :disabled="busy" @click="test">
-          <FlaskConical :size="16" />测试连接</button
+          <FlaskConical :size="16" />保存并测试连接</button
         ><button
           type="button"
           class="ds-button ds-danger"

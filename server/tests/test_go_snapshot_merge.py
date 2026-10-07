@@ -32,6 +32,7 @@ def make_collector():
     collector.container_ports = {}
     collector.docker_overrides = main.empty_docker_overrides()
     collector.docker_web_probe_cache = {}
+    collector.docker_stats_cache = {}
     collector.last_container_refresh = main.now()
     collector.container_refresh_lock = main.threading.Lock()
     collector.notification_channels = [{"id": "webhook", "name": "Webhook", "enabled": True, "type": "webhook"}]
@@ -331,7 +332,7 @@ def test_container_protection_or_fires_when_any_metric_matches():
     assert calls[0]["logic"] == "or"
 
 
-def test_container_protection_max_actions_forces_stop():
+def test_container_protection_legacy_max_actions_does_not_force_stop():
     collector = make_collector()
     collector.container_protection_rules = [{
         "id": "rule-3",
@@ -356,8 +357,8 @@ def test_container_protection_max_actions_forces_stop():
     collector.evaluate_container_protection(11.0)
     collector.evaluate_container_protection(12.0)
 
-    assert actions == ["restart", "restart", "stop"]
-    assert collector.container_protection_states["rule-3"]["lastAction"] == "stop"
+    assert actions == ["restart", "restart", "restart"]
+    assert collector.container_protection_states["rule-3"]["lastAction"] == "restart"
 
 
 def test_container_protection_resolves_recreated_container_by_compose_identity():
