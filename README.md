@@ -58,6 +58,7 @@ Windows / macOS 另有 **Traffic Lens 桌面预览版**：无需 Docker，可查
 | 环境 | 说明 |
 | --- | --- |
 | 极空间 Z425 | Intel Ultra 5 125H，x64 架构，推荐 `linux/amd64` 镜像 |
+| 绿联 DXP4300 Plus | ARM aarch64（UGOS Pro），推荐 `linux/arm64` 镜像，模板见 `docker-compose.ugreen.yml` |
 | 普通 x86 NAS / Linux 主机 | 使用 `linux/amd64` |
 | ARM NAS / ARM Linux 主机 | 使用 `linux/arm64` |
 | macOS / Windows Docker Desktop | 可用于开发和构建，但采集宿主网络信息会受 Docker 虚拟化限制 |
@@ -502,7 +503,9 @@ Docker socket 应视为主机级控制权限：`:ro` 只限制挂载点的文件
 
 host 网络模式容器通常没有 published ports，页面支持手动添加端口。
 
-## GPU / NPU / 温度
+## GPU / NPU / VPU / 温度
+
+支持 x86（Intel 核显 + NPU）与 ARM（绿联云等 Rockchip RK3588 机型：Mali GPU + RKNPU + VPU）两类平台，能力自动探测：完整矩阵与各平台部署步骤见 [`doc/nas-compat.md`](doc/nas-compat.md)。
 
 Intel 核显通常通过 `/dev/dri` 暴露：
 
@@ -524,9 +527,11 @@ devices:
 
 - **Intel 核显（i915）**：读取内核 i915 PMU 的 `*-busy` 事件（`intel_gpu_top` 用的是同一来源），按两次采样之间各引擎的忙碌时间算出利用率，服务端每 2 秒采一次；未映射 PMU 时回退到 `amdgpu` 的 `gpu_busy_percent`。系统页会列出 Render/3D、Video、Video Enhance、Blitter、Compute 每个引擎的占比，以及核心频率和空闲驻留（RC6）。
 - **Intel NPU（intel_vpu）**：读取 `/sys/class/accel/*/device/npu_busy_time_us`（内核 6.11+ 提供，官方文档说明它就是用来算 NPU 利用率的），同时显示当前/最高频率、常驻显存、电源状态和调度模式。
+- **ARM 机型（绿联云 / RK3588 等）**：Mali GPU 与 RKNPU 通过 `/sys/class/devfreq/*/load` 读取 governor 上报的负载；驱动在空闲时可能上报固定基线（RKNPU 为 100/1000），页面按观测到的最小负载做基线校正，避免把空闲显示成 10%。详情里同时给出原始 load、基线与 governor。
+- **VPU（视频编解码）**：Rockchip 机型读取 `/proc/mpp_service/load`，系统页出现「VPU」卡片，按解码（vdpu/rkvdec/av1d/jpegd）与编码（vepu/rkvenc/jpege）聚合，展开可看 13 个核心各自的实时利用率。Intel 平台没有该卡片，编解码负载体现在 i915 的 vcs 引擎上。
 - 读取 PMU 需要容器具备 `privileged` 或 `CAP_PERFMON`；只映射设备节点时页面会显示设备可用并给出具体原因，而不是显示错误的百分比。
 
-温度会把 `coretemp`、`acpitz`、`nvme`、`drivetemp` 等传感器名整理为 CPU、主板/机箱、NVMe、硬盘等更容易看的名称。
+温度会把 `coretemp`、`acpitz`、`nvme`、`drivetemp` 等传感器名整理为 CPU、主板/机箱、NVMe、硬盘等更容易看的名称；ARM 机型的 `soc_thermal`、`bigcore0_thermal`、`gpu_thermal`、`npu_thermal` 等热区会显示为 SoC、CPU 大核 0、GPU、NPU。
 
 ## 常见问题
 

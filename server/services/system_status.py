@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import threading
 import time
@@ -84,7 +85,13 @@ def read_gpu_stats() -> List[dict]:
                     "utilPercent": intel.get("utilPercent"),
                     "engines": intel.get("engines") or [],
                     "frequencyMhz": intel.get("frequencyMhz"),
+                    "maxFrequencyMhz": intel.get("maxFrequencyMhz"),
                     "idleResidencyPercent": intel.get("idleResidencyPercent"),
+                    # ARM SoCs (Rockchip) expose the governor load instead of a PMU.
+                    "loadRaw": intel.get("loadRaw"),
+                    "loadUnit": intel.get("loadUnit"),
+                    "governor": intel.get("governor"),
+                    "source": intel.get("source") or ("devfreq" if intel.get("loadRaw") is not None else ""),
                     "memoryUsedMB": None,
                     "memoryTotalMB": None,
                     "temperatureC": None,
@@ -93,6 +100,32 @@ def read_gpu_stats() -> List[dict]:
                 }
             )
     return gpus
+
+
+def read_vpu_stats() -> List[dict]:
+    """Rockchip VPU (video codec) utilization from /proc/mpp_service/load."""
+    vpus = accelerator_stats.read_accelerator_stats().get("vpus") or []
+    if vpus:
+        return vpus
+
+    devices = []
+    for path in ("/dev/mpp_service", "/dev/rkvdec", "/dev/rkvenc"):
+        if os.path.exists(path):
+            devices.append(path)
+    media = _read_first("/proc/mpp_service/version")
+    if not devices and not media:
+        return []
+    return [{
+        "index": 0,
+        "name": "Rockchip VPU",
+        "type": "mpp",
+        "available": True,
+        "driver": "mpp_service",
+        "path": "/proc/mpp_service/load",
+        "utilPercent": None,
+        "status": "detected",
+        "hint": "已识别 VPU/编解码设备；需要 /proc/mpp_service/load 才能读取利用率",
+    }]
 
 
 def read_npu_stats() -> List[dict]:
@@ -203,6 +236,40 @@ def read_fan_stats() -> List[dict]:
     return fans
 
 
+# Rockchip/RK3588 class SoCs expose per-cluster thermal zones instead of the
+# Intel style coretemp/pch sensors.
+_ARM_THERMAL_ZONES = (
+    ("soc_thermal", "SoC"),
+    ("center_thermal", "SoC 中心"),
+    ("gpu_thermal", "GPU"),
+    ("npu_thermal", "NPU"),
+    ("ddr_thermal", "内存"),
+    ("vpu_thermal", "VPU"),
+    ("vepu_thermal", "VPU 编码"),
+    ("vdec_thermal", "VPU 解码"),
+    ("bigcore", "CPU 大核"),
+    ("littlecore", "CPU 小核"),
+)
+
+
+def arm_temperature_group(raw_name: str) -> Optional[str]:
+    """Friendly name for an ARM SoC thermal zone, e.g. bigcore0_thermal."""
+    name = (raw_name or "").lower()
+    match = re.match(r"^(bigcore|littlecore)(\d*)_thermal$", name)
+    if match:
+        family = "大核" if match.group(1) == "bigcore" else "小核"
+        suffix = f" {match.group(2)}" if match.group(2) else ""
+        return f"CPU {family}{suffix}"
+    for token, label in _ARM_THERMAL_ZONES:
+        if name == token or name.startswith(token):
+            return label
+    if name.endswith("_thermal"):
+        stem = name[: -len("_thermal")].replace("_", " ").strip()
+        if stem:
+            return stem.title()
+    return None
+
+
 def friendly_temperature_group(raw_name: str, index: int) -> str:
     name = (raw_name or "").lower()
     if name.startswith(("coretemp", "k10temp", "zenpower")):
@@ -217,6 +284,9 @@ def friendly_temperature_group(raw_name: str, index: int) -> str:
         return "GPU"
     if name.startswith(("acpitz", "pch_", "thermal_zone")):
         return "主板/机箱"
+    arm = arm_temperature_group(name)
+    if arm:
+        return arm
     return raw_name or f"传感器 {index}"
 
 
@@ -234,6 +304,8 @@ def friendly_temperature_label(raw_name: str, raw_label: str, group: str, index:
         return "盘体"
     if name.startswith(("acpitz", "thermal_zone")):
         return label or group
+    if arm_temperature_group(name):
+        return group
     return label or group
 
 
@@ -318,6 +390,7 @@ def collect_system_status() -> dict:
         "temperatureGroups": friendly_temperatures(temps),
         "gpu": read_gpu_stats(),
         "npu": read_npu_stats(),
+        "vpu": read_vpu_stats(),
         "fans": read_fan_stats(),
         "uptimeSeconds": max(0, int(time.time() - boot)),
     }

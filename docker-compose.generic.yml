@@ -1,0 +1,32 @@
+# 通用 Linux / 飞牛 OS（fnOS）部署模板
+#
+# 适用于任何装好 Docker 的 Linux（含飞牛 OS、群晖、威联通、普通发行版）。
+# 使用相对路径，直接在项目目录里 docker compose up -d 即可。
+# GPU / NPU / VPU 利用率会自动探测（i915 PMU、amdgpu、devfreq、intel_vpu、
+# /proc/mpp_service），探测不到时系统页会显示具体原因，不影响其它功能。
+#
+# 注意：
+#   * 抓包与连接归因需要 host 网络；进程归因需要 pid: host。
+#   * 显卡/温度/NPU 统计需要 privileged（或至少 --device /dev/dri 与 CAP_PERFMON）。
+#   * 若宿主的 /proc 不允许挂载（部分 NAS 会拒绝），不要添加 /proc 相关卷。
+services:
+  nas-traffic-lens:
+    image: isle204/nas-traffic-lens:latest
+    container_name: nas-traffic-lens
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    privileged: true
+    environment:
+      APP_PORT: "8088"
+      DASHBOARD_PASSWORD: "change-me"
+      DB_PATH: /data/traffic.db
+      LOG_DIR: /logs
+      ENABLE_DOCKER_DISCOVERY: "true"
+      SAMPLE_SECONDS: "1"
+      RETENTION_SECONDS: "3600"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro

@@ -1,8 +1,20 @@
-"""Intel iGPU (i915 PMU) and NPU (intel_vpu sysfs) utilization readers.
+"""iGPU, NPU and VPU utilization readers.
+
+Three hardware families are covered:
+
+* Intel iGPU through the i915 PMU and Intel NPU through the intel_vpu sysfs
+  counters (ZSpace/ZOS class machines).
+* ARM SoCs (Rockchip RK3588 class, e.g. UGREEN DXP4300 Plus) where the Mali
+  GPU and the RKNPU expose only a devfreq governor load, and the VPU reports
+  real percentages through /proc/mpp_service/load.
 
 Both drivers expose cumulative busy counters rather than a ready-made
-percentage: the iGPU through perf PMU events (the same source intel_gpu_top
-uses) and the NPU through /sys/class/accel/*/device/npu_busy_time_us. The
+
+Both drivers expose cumulative busy counters rather than a ready-made
+percentage, so: the Intel iGPU through perf PMU events (the same source
+intel_gpu_top uses), the Intel NPU through
+/sys/class/accel/*/device/npu_busy_time_us, and the Rockchip GPU/NPU through
+/sys/class/devfreq/*/load. The
 utilization is therefore the delta between two samples, which a small
 background sampler collects so API responses never wait on a measurement
 window. Every reader degrades to an explanatory hint when the kernel, the
@@ -13,6 +25,7 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
+import re
 import struct
 import threading
 import time
@@ -21,6 +34,11 @@ from typing import Dict, List, Optional, Tuple
 I915_PMU_ROOT = "/sys/bus/event_source/devices/i915"
 DRM_ROOT = "/sys/class/drm"
 ACCEL_ROOT = "/sys/class/accel"
+DEVFREQ_ROOT = "/sys/class/devfreq"
+MPP_LOAD_PATH = "/proc/mpp_service/load"
+
+# Rockchip reports the devfreq governor load in per-mille (1000 = 100%).
+DEVFREQ_LOAD_UNIT = 10.0
 
 SAMPLE_SECONDS = 2.0
 FIRST_SAMPLE_SECONDS = 0.3
@@ -45,6 +63,9 @@ _ENGINE_LABELS = {
 _HINT_NO_PMU = "未找到 i915 PMU；需要 5.8+ 内核并映射 /sys 与 /dev/dri"
 _HINT_NO_PERF = "i915 PMU 存在但 perf_event_open 被拒绝；需要 privileged 或 CAP_PERFMON"
 _HINT_NO_MEDIA = "容器内未见 /dev/dri；privileged 运行或映射 devices: /dev/dri"
+_HINT_DEVFREQ = ("利用率按 devfreq governor load（千分比）扣除观测基线换算；"
+                 "空闲设备的驱动可能上报固定基线值")
+_HINT_NO_DEVFREQ = "该 SoC 未暴露 devfreq 负载接口；映射 /sys 后可读"
 
 
 def _read_text(path: str) -> Optional[str]:
@@ -253,14 +274,138 @@ def _dri_driver(drm_root: str, card: str) -> str:
         return ""
 
 
+_MPP_LINE = re.compile(
+    r"^(?P<device>\S+)\s+load:\s*(?P<load>[\d.]+)%\s+utilization:\s*(?P<utilization>[\d.]+)%\s*$"
+)
+_VPU_DECODE_TOKENS = ("vdpu", "rkvdec", "av1d", "jpegd")
+_VPU_ENCODE_TOKENS = ("vepu", "rkvenc", "jpege")
+
+
+def parse_devfreq_load(text: Optional[str]) -> Optional[dict]:
+    """Parse the devfreq governor load attribute, e.g. ``0@300000000Hz``."""
+    if not text:
+        return None
+    head, _, tail = text.strip().partition("@")
+    try:
+        load = int(float(head.strip()))
+    except ValueError:
+        return None
+    frequency = None
+    if tail:
+        digits = "".join(character for character in tail if character.isdigit())
+        if digits:
+            frequency = int(digits)
+    return {"load": load, "frequencyHz": frequency}
+
+
+def devfreq_utilization(load: Optional[int]) -> Optional[float]:
+    """Convert the Rockchip per-mille governor load into a percentage."""
+    if load is None:
+        return None
+    return round(max(0.0, min(100.0, float(load) / DEVFREQ_LOAD_UNIT)), 2)
+
+
+def parse_mpp_load(text: Optional[str]) -> List[dict]:
+    """Parse /proc/mpp_service/load into one entry per VPU core."""
+    cores = []
+    for line in (text or "").splitlines():
+        match = _MPP_LINE.match(line.strip())
+        if not match:
+            continue
+        cores.append({
+            "device": match.group("device"),
+            "loadPercent": round(float(match.group("load")), 2),
+            "utilizationPercent": round(float(match.group("utilization")), 2),
+        })
+    return cores
+
+
+def vpu_role(device: str) -> str:
+    """Classify an MPP core as decode / encode / other."""
+    name = str(device or "").lower()
+    if any(token in name for token in _VPU_DECODE_TOKENS):
+        return "decode"
+    if any(token in name for token in _VPU_ENCODE_TOKENS):
+        return "encode"
+    return "other"
+
+
+def mpp_summary(cores: List[dict]) -> dict:
+    """Aggregate per-core VPU utilization into decode / encode / overall peaks."""
+    buckets: Dict[str, List[float]] = {"decode": [], "encode": [], "other": []}
+    for core in cores or []:
+        value = core.get("utilizationPercent")
+        if value is None:
+            continue
+        buckets[vpu_role(core.get("device", ""))].append(float(value))
+    peaks = {role: (round(max(values), 2) if values else 0.0) for role, values in buckets.items()}
+    overall = max(peaks.values()) if peaks else 0.0
+    return {
+        "decodePercent": peaks["decode"],
+        "encodePercent": peaks["encode"],
+        "otherPercent": peaks["other"],
+        "maxPercent": overall,
+        "coreCount": len(cores or []),
+        "activeCoreCount": sum(1 for core in cores or [] if float(core.get("utilizationPercent") or 0) > 0.5),
+    }
+
+
+def match_devfreq(names: List[str], needle: str) -> Optional[str]:
+    """Pick the devfreq device whose name contains ``needle``."""
+    for name in sorted(names or []):
+        if needle in name.lower():
+            return name
+    return None
+
+
+def list_devfreq(root: str = DEVFREQ_ROOT) -> List[str]:
+    try:
+        return sorted(os.listdir(root))
+    except OSError:
+        return []
+
+
+class _DevfreqDevice:
+    """Rockchip style devfreq device exposing ``load`` and frequency."""
+
+    def __init__(self, root: str, name: str):
+        self.root = root
+        self.name = name
+        self.path = os.path.join(root, name)
+
+    def describe(self) -> dict:
+        parsed = parse_devfreq_load(_read_text(os.path.join(self.path, "load")))
+        current = _read_number(os.path.join(self.path, "cur_freq"))
+        minimum = _read_number(os.path.join(self.path, "min_freq"))
+        maximum = _read_number(os.path.join(self.path, "max_freq"))
+        if parsed and parsed.get("frequencyHz"):
+            current = float(parsed["frequencyHz"])
+        info = {
+            "driver": "devfreq",
+            "path": self.path,
+            "governor": _read_text(os.path.join(self.path, "governor")) or "",
+            "loadRaw": parsed["load"] if parsed else None,
+            "loadUnit": int(DEVFREQ_LOAD_UNIT),
+            "utilPercent": devfreq_utilization(parsed["load"] if parsed else None),
+            "frequencyMhz": int(round(current / 1_000_000)) if current else None,
+            "minFrequencyMhz": int(round(minimum / 1_000_000)) if minimum else None,
+            "maxFrequencyMhz": int(round(maximum / 1_000_000)) if maximum else None,
+        }
+        info["hint"] = _HINT_DEVFREQ if parsed else _HINT_NO_DEVFREQ
+        return info
+
+
 class AcceleratorSampler:
     """Background sampler for iGPU engines and NPU busy time."""
 
     def __init__(self, drm_root: str = DRM_ROOT, accel_root: str = ACCEL_ROOT,
                  pmu_root: str = I915_PMU_ROOT, interval: float = SAMPLE_SECONDS,
-                 first_sample_seconds: float = FIRST_SAMPLE_SECONDS):
+                 first_sample_seconds: float = FIRST_SAMPLE_SECONDS,
+                 devfreq_root: str = DEVFREQ_ROOT, mpp_load_path: str = MPP_LOAD_PATH):
         self.drm_root = drm_root
         self.accel_root = accel_root
+        self.devfreq_root = devfreq_root
+        self.mpp_load_path = mpp_load_path
         self.interval = interval
         self.first_sample_seconds = first_sample_seconds
         self._pmu = _I915Pmu(pmu_root)
@@ -269,8 +414,10 @@ class AcceleratorSampler:
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._devfreq_baselines: Dict[str, int] = {}
         self._gpu: List[dict] = []
         self._npu: List[dict] = []
+        self._vpu: List[dict] = []
         self._gpu_error = ""
         self._pmu_ok = False
         self._rc6: Optional[Tuple[float, float]] = None
@@ -318,9 +465,16 @@ class AcceleratorSampler:
             busy = _read_number(os.path.join(self.drm_root, card, "device", "gpu_busy_percent"))
             if busy is not None:
                 util = round(max(0.0, min(100.0, busy)), 2)
+        devfreq = None
+        if util is None:
+            # ARM SoCs (Rockchip RK3588 class): the Mali GPU only reports through
+            # the devfreq governor, so fall back to it before giving up.
+            devfreq = self._devfreq_device("gpu")
+            if devfreq:
+                util = devfreq.get("utilPercent")
         entry = {
             "index": 0,
-            "name": "Intel 核显" if driver in ("i915", "xe") else f"{driver or 'DRM'} 显卡",
+            "name": self._gpu_name(driver),
             "type": "dri",
             "available": True,
             "driver": driver or "drm",
@@ -331,6 +485,10 @@ class AcceleratorSampler:
             "idleResidencyPercent": rc6_percent,
             "status": "busy" if (util or 0) >= 1 else "idle",
         }
+        if devfreq:
+            entry.update({key: value for key, value in devfreq.items() if key not in ("utilPercent",)})
+            entry["utilPercent"] = util
+            entry["source"] = "devfreq"
         entry["hint"] = "" if util is not None else (self._pmu.hint or "等待第二次采样以计算利用率")
         return [entry]
 
@@ -360,6 +518,17 @@ class AcceleratorSampler:
             if percent is None and "busyTimeUs" not in info:
                 entry["hint"] = "该内核未暴露 npu_busy_time_us；需要 6.11+ 与 ACCEL 驱动"
             npus.append(entry)
+        if not npus:
+            devfreq = self._devfreq_device("npu")
+            if devfreq:
+                devfreq.setdefault("driver", "devfreq")
+                devfreq["index"] = 0
+                devfreq["name"] = "RKNPU" if "rk" in str(devfreq.get("governor", "")) or True else "NPU"
+                devfreq["type"] = "devfreq"
+                devfreq["available"] = True
+                devfreq["device"] = "/dev/rknpu"
+                devfreq["status"] = "busy" if (devfreq.get("utilPercent") or 0) >= 1 else "idle"
+                npus.append(devfreq)
         if not npus and os.path.isdir("/dev/accel"):
             npus.append({
                 "index": 0,
@@ -372,6 +541,69 @@ class AcceleratorSampler:
             })
         return npus
 
+    def _devfreq_device(self, needle: str) -> Optional[dict]:
+        """Describe the devfreq device matching ``needle`` (gpu / npu), if any.
+
+        Rockchip drivers can report a constant baseline load while the device is
+        idle (the RKNPU governor sits at 100/1000), so the utilization is
+        measured against the lowest load observed for that device instead of
+        against zero.
+        """
+        name = match_devfreq(list_devfreq(self.devfreq_root), needle)
+        if not name:
+            return None
+        info = _DevfreqDevice(self.devfreq_root, name).describe()
+        load = info.get("loadRaw")
+        if load is None:
+            return info
+        path = info.get("path") or name
+        baseline = self._devfreq_baselines.get(path)
+        if baseline is None or load < baseline:
+            baseline = load
+            self._devfreq_baselines[path] = baseline
+        info["loadBaseline"] = baseline
+        info["utilPercent"] = devfreq_utilization(max(0, load - baseline))
+        return info
+
+    def _gpu_name(self, driver: str) -> str:
+        if driver in ("i915", "xe"):
+            return "Intel 核显"
+        if driver in ("panfrost", "mali", "rockchip-drm", "lima"):
+            return "Mali GPU"
+        return f"{driver or 'DRM'} 显卡"
+
+    def _sample_vpu(self) -> List[dict]:
+        """Rockchip VPU (MPP) cores, which report ready-made percentages."""
+        text = _read_text(self.mpp_load_path)
+        if text is None:
+            return []
+        cores = parse_mpp_load(text)
+        if not cores:
+            return []
+        for core in cores:
+            core["role"] = vpu_role(core["device"])
+        summary = mpp_summary(cores)
+        busiest = max(cores, key=lambda core: float(core.get("utilizationPercent") or 0))
+        status = "busy" if summary["maxPercent"] >= 1 else "idle"
+        return [{
+            "index": 0,
+            "name": "Rockchip VPU",
+            "type": "mpp",
+            "available": True,
+            "driver": "mpp_service",
+            "path": self.mpp_load_path,
+            "utilPercent": summary["maxPercent"],
+            "status": status,
+            "decodePercent": summary["decodePercent"],
+            "encodePercent": summary["encodePercent"],
+            "otherPercent": summary["otherPercent"],
+            "coreCount": summary["coreCount"],
+            "activeCoreCount": summary["activeCoreCount"],
+            "busiestCore": busiest.get("device"),
+            "cores": cores,
+            "hint": "VPU 利用率来自 /proc/mpp_service/load；播放/转码时才会出现非零值",
+        }]
+
     def _run(self) -> None:
         self._pmu_ok = self._pmu.open()
         # Baseline both counters first so the very first published snapshot already
@@ -379,6 +611,7 @@ class AcceleratorSampler:
         start = time.monotonic()
         self._sample_gpu(start)
         self._sample_npu(start)
+        self._sample_vpu()
         deadline = time.monotonic() + self.first_sample_seconds
         while time.monotonic() < deadline and not self._stop.is_set():
             time.sleep(0.05)
@@ -386,8 +619,9 @@ class AcceleratorSampler:
             now = time.monotonic()
             gpu = self._sample_gpu(now)
             npu = self._sample_npu(now)
+            vpu = self._sample_vpu()
             with self._lock:
-                self._gpu, self._npu = gpu, npu
+                self._gpu, self._npu, self._vpu = gpu, npu, vpu
             self._ready.set()
             self._stop.wait(self.interval)
 
@@ -397,7 +631,8 @@ class AcceleratorSampler:
         self._ready.wait(timeout=READY_TIMEOUT_SECONDS)
         with self._lock:
             return {"gpus": [dict(entry) for entry in self._gpu],
-                    "npus": [dict(entry) for entry in self._npu]}
+                    "npus": [dict(entry) for entry in self._npu],
+                    "vpus": [dict(entry) for entry in self._vpu]}
 
 
 _sampler: Optional[AcceleratorSampler] = None

@@ -329,7 +329,7 @@
           </section>
         </div>
         <section v-if="acceleratorCards.length" class="card">
-          <CardHead title="GPU 与 NPU" :meta="`${acceleratorCards.length} 个设备 · 点击展开`" />
+          <CardHead :title="acceleratorSectionTitle" :meta="`${acceleratorCards.length} 个设备 · 点击展开`" />
           <div class="accordion-stack system-stack">
             <article v-stack-motion
               v-for="item in acceleratorCards"
@@ -337,7 +337,7 @@
               :class="['system-card', 'accelerator-card', { expanded: isSystemCardExpanded('accel', item.cardKey) }]"
             >
               <button class="system-card-trigger" type="button" :aria-expanded="isSystemCardExpanded('accel', item.cardKey)" @click="toggleSystemCard('accel', item.cardKey)">
-                <span class="system-card-icon"><component :is="item.kind === 'gpu' ? Monitor : Cpu" :size="17" /></span>
+                <span class="system-card-icon"><component :is="acceleratorIcon(item)" :size="17" /></span>
                 <span class="system-card-copy">
                   <strong>{{ item.name }}</strong>
                   <small>{{ acceleratorSubtitle(item) }}</small>
@@ -350,7 +350,19 @@
                 <component :is="isSystemCardExpanded('accel', item.cardKey) ? ChevronUp : ChevronDown" class="accordion-chevron" :size="18" />
               </button>
               <div v-if="isSystemCardExpanded('accel', item.cardKey)" class="system-card-body">
-                <template v-if="item.kind === 'gpu'">
+                <template v-if="item.kind === 'vpu'">
+                  <div v-for="core in item.cores" :key="core.device" class="temp-reading">
+                    <span class="temp-reading-label"><strong>{{ vpuRoleLabel(core.role) }}</strong><small>{{ core.device }}</small></span>
+                    <span class="temp-reading-bar" role="presentation"><i :style="{ width: percentBarWidth(core.utilizationPercent) }"></i></span>
+                    <b class="temp-value">{{ formatPercent(core.utilizationPercent) }}</b>
+                  </div>
+                  <p v-if="!item.cores?.length" class="system-card-note">没有可用的 VPU 核心计数器。</p>
+                  <div class="fan-detail"><span>解码峰值</span><b>{{ formatPercent(item.decodePercent) }}</b></div>
+                  <div class="fan-detail"><span>编码峰值</span><b>{{ formatPercent(item.encodePercent) }}</b></div>
+                  <div class="fan-detail"><span>活跃核心</span><b>{{ item.activeCoreCount ?? 0 }} / {{ item.coreCount ?? 0 }}</b></div>
+                  <div v-if="item.busiestCore" class="fan-detail"><span>最忙核心</span><b>{{ item.busiestCore }}</b></div>
+                </template>
+                <template v-else-if="item.kind === 'gpu'">
                   <div v-for="engine in item.engines" :key="engine.name" class="temp-reading">
                     <span class="temp-reading-label"><strong>{{ engine.label }}</strong><small>{{ engine.name }}</small></span>
                     <span class="temp-reading-bar" role="presentation"><i :style="{ width: percentBarWidth(engine.busyPercent) }"></i></span>
@@ -358,8 +370,9 @@
                   </div>
                   <p v-if="!item.engines?.length" class="system-card-note">没有可用的引擎计数器。</p>
                   <div class="fan-detail"><span>驱动</span><b>{{ item.driver || "-" }}</b></div>
-                  <div class="fan-detail"><span>核心频率</span><b>{{ item.frequencyMhz ? `${item.frequencyMhz} MHz` : "空闲 0 MHz" }}</b></div>
+                  <div class="fan-detail"><span>核心频率</span><b>{{ item.frequencyMhz ? `${item.frequencyMhz} MHz` : "空闲 0 MHz" }}<template v-if="item.maxFrequencyMhz"> / 最高 {{ item.maxFrequencyMhz }} MHz</template></b></div>
                   <div v-if="item.idleResidencyPercent != null" class="fan-detail"><span>空闲驻留 (RC6)</span><b>{{ formatPercent(item.idleResidencyPercent) }}</b></div>
+                  <div v-if="item.loadRaw != null" class="fan-detail"><span>驱动负载</span><b>{{ item.loadRaw }} / 1000<template v-if="item.loadBaseline">（基线 {{ item.loadBaseline }}）</template><template v-if="item.governor"> · {{ item.governor }}</template></b></div>
                 </template>
                 <template v-else>
                   <div class="fan-detail"><span>驱动</span><b>{{ item.driver || "-" }}</b></div>
@@ -368,6 +381,8 @@
                   <div v-if="item.powerState" class="fan-detail"><span>电源状态</span><b>{{ item.powerState }}</b></div>
                   <div v-if="item.schedMode" class="fan-detail"><span>调度模式</span><b>{{ item.schedMode }}</b></div>
                   <div v-if="item.busyTimeUs != null" class="fan-detail"><span>累计忙碌</span><b>{{ formatDuration(item.busyTimeUs / 1000000) }}</b></div>
+                  <div v-if="item.loadRaw != null" class="fan-detail"><span>驱动负载</span><b>{{ item.loadRaw }} / 1000<template v-if="item.loadBaseline">（基线 {{ item.loadBaseline }}）</template><template v-if="item.governor"> · {{ item.governor }}</template></b></div>
+                  <div v-if="item.minFrequencyMhz != null && item.frequencyMhz == null" class="fan-detail"><span>频率范围</span><b>{{ item.minFrequencyMhz }} - {{ item.maxFrequencyMhz || "-" }} MHz</b></div>
                 </template>
                 <p v-if="item.hint" class="system-card-note">{{ item.hint }}</p>
               </div>
@@ -1093,6 +1108,7 @@ import {
   Thermometer,
   Trash2,
   UserRound,
+  Video,
   X,
 } from "@lucide/vue";
 
@@ -1448,9 +1464,15 @@ const npuSummary = computed(() => {
 const acceleratorCards = computed(() => {
   const gpus = (system.value?.gpu || []).map((item) => ({ ...item, kind: "gpu", cardKey: `gpu:${item.index ?? 0}` }));
   const npus = (system.value?.npu || []).map((item) => ({ ...item, kind: "npu", cardKey: `npu:${item.index ?? 0}` }));
-  return [...gpus, ...npus];
+  const vpus = (system.value?.vpu || []).map((item) => ({ ...item, kind: "vpu", cardKey: `vpu:${item.index ?? 0}` }));
+  return [...gpus, ...npus, ...vpus];
 });
 
+const acceleratorSectionTitle = computed(() => {
+  const kinds = new Set(acceleratorCards.value.map((item) => item.kind));
+  const labels = ["gpu", "npu", "vpu"].filter((kind) => kinds.has(kind)).map((kind) => kind.toUpperCase());
+  return labels.length ? labels.join(" / ") : "GPU 与 NPU";
+});
 function acceleratorPercent(item) {
   const value = Number(item?.utilPercent);
   return Number.isFinite(value) ? value : null;
@@ -1462,13 +1484,43 @@ function acceleratorStatus(item) {
   return { key: "idle", label: "空闲" };
 }
 function acceleratorSubtitle(item) {
-  const parts = [item.driver || (item.kind === "gpu" ? "drm" : "accel")];
+  const fallback = { gpu: "drm", npu: "accel", vpu: "mpp" }[item.kind] || "drm";
+  const parts = [item.driver || fallback];
   if (item.kind === "gpu") {
     if (item.engines?.length) parts.push(`${item.engines.length} 个引擎`);
+    if (item.path) parts.push(item.path);
+  } else if (item.kind === "vpu") {
+    if (item.coreCount) parts.push(`${item.coreCount} 个编解码核心`);
     if (item.path) parts.push(item.path);
   } else if (item.device) {
     parts.push(item.device);
   }
+  return parts.join(" · ");
+}
+function acceleratorIcon(item) {
+  if (item.kind === "gpu") return Monitor;
+  if (item.kind === "vpu") return Video;
+  return Cpu;
+}
+function vpuRoleLabel(role) {
+  return { decode: "解码", encode: "编码", other: "图像处理" }[role] || "核心";
+}
+function acceleratorDetail(item) {
+  const parts = [];
+  if (item.kind === "vpu") {
+    if (Number.isFinite(Number(item.decodePercent))) parts.push(`解码 ${item.decodePercent}%`);
+    if (Number.isFinite(Number(item.encodePercent))) parts.push(`编码 ${item.encodePercent}%`);
+    if (item.busiestCore) parts.push(item.busiestCore);
+    return parts.join(" · ");
+  }
+  if (Number.isFinite(Number(item.frequencyMhz))) parts.push(`${item.frequencyMhz} MHz`);
+  if (Number.isFinite(Number(item.maxFrequencyMhz)) && Number(item.maxFrequencyMhz) !== Number(item.frequencyMhz)) {
+    parts.push(`最高 ${item.maxFrequencyMhz} MHz`);
+  }
+  if (item.kind === "gpu" && Number.isFinite(Number(item.idleResidencyPercent))) {
+    parts.push(`空闲驻留 ${item.idleResidencyPercent}%`);
+  }
+  if (Number.isFinite(Number(item.loadRaw))) parts.push(`load ${item.loadRaw}/${(item.loadUnit || 1000)}`);
   return parts.join(" · ");
 }
 function percentBarWidth(value) {

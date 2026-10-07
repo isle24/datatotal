@@ -125,3 +125,154 @@ class FakeSysfsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DevfreqParsingTests(unittest.TestCase):
+    """ARM SoCs (Rockchip RK3588 class) only expose a devfreq governor load."""
+
+    def test_parse_devfreq_load_reads_load_and_frequency(self):
+        self.assertEqual(accelerator.parse_devfreq_load("0@300000000Hz"),
+                         {"load": 0, "frequencyHz": 300000000})
+        self.assertEqual(accelerator.parse_devfreq_load(" 250@1000000000Hz\n"),
+                         {"load": 250, "frequencyHz": 1000000000})
+        self.assertEqual(accelerator.parse_devfreq_load("17"), {"load": 17, "frequencyHz": None})
+        self.assertIsNone(accelerator.parse_devfreq_load("busy"))
+        self.assertIsNone(accelerator.parse_devfreq_load(""))
+
+    def test_devfreq_utilization_scales_per_mille_and_clamps(self):
+        self.assertEqual(accelerator.devfreq_utilization(0), 0.0)
+        self.assertEqual(accelerator.devfreq_utilization(250), 25.0)
+        self.assertEqual(accelerator.devfreq_utilization(1000), 100.0)
+        self.assertEqual(accelerator.devfreq_utilization(5000), 100.0)
+        self.assertIsNone(accelerator.devfreq_utilization(None))
+
+    def test_match_devfreq_picks_the_matching_device(self):
+        names = ["dmc", "fb000000.gpu", "fdab0000.npu", "fdd90000.vop"]
+        self.assertEqual(accelerator.match_devfreq(names, "gpu"), "fb000000.gpu")
+        self.assertEqual(accelerator.match_devfreq(names, "npu"), "fdab0000.npu")
+        self.assertIsNone(accelerator.match_devfreq(names, "vpu"))
+
+    def test_devfreq_device_describes_frequency_and_load(self):
+        with tempfile.TemporaryDirectory() as root:
+            device = Path(root) / "fb000000.gpu"
+            device.mkdir()
+            (device / "load").write_text("0@300000000Hz\n")
+            (device / "cur_freq").write_text("300000000\n")
+            (device / "min_freq").write_text("300000000\n")
+            (device / "max_freq").write_text("900000000\n")
+            (device / "governor").write_text("simple_ondemand\n")
+            info = accelerator._DevfreqDevice(root, "fb000000.gpu").describe()
+        self.assertEqual(info["driver"], "devfreq")
+        self.assertEqual(info["utilPercent"], 0.0)
+        self.assertEqual(info["loadRaw"], 0)
+        self.assertEqual(info["frequencyMhz"], 300)
+        self.assertEqual(info["maxFrequencyMhz"], 900)
+        self.assertEqual(info["governor"], "simple_ondemand")
+
+    def test_devfreq_device_hints_when_the_attribute_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            device = Path(root) / "fb000000.gpu"
+            device.mkdir()
+            info = accelerator._DevfreqDevice(root, "fb000000.gpu").describe()
+        self.assertIsNone(info["utilPercent"])
+        self.assertEqual(info["hint"], accelerator._HINT_NO_DEVFREQ)
+
+
+class MppVpuTests(unittest.TestCase):
+    """The Rockchip VPU reports ready-made percentages through MPP."""
+
+    SAMPLE = (
+        "fdb50400.vdpu             load:   0.00% utilization:   0.00%\n"
+        "fdb50000.vepu             load:   0.00% utilization:   0.00%\n"
+        "fdbd0000.rkvenc-core      load:  12.00% utilization:  34.50%\n"
+        "fdc38100.rkvdec-core      load:  40.00% utilization:  62.25%\n"
+        "fdc70000.av1d             load:   1.00% utilization:   2.00%\n"
+        "\n"
+        "not a core line\n"
+    )
+
+    def test_parse_mpp_load_reads_every_core(self):
+        cores = accelerator.parse_mpp_load(self.SAMPLE)
+        self.assertEqual(len(cores), 5)
+        self.assertEqual(cores[0], {"device": "fdb50400.vdpu", "loadPercent": 0.0, "utilizationPercent": 0.0})
+        self.assertEqual(cores[3]["device"], "fdc38100.rkvdec-core")
+        self.assertEqual(cores[3]["utilizationPercent"], 62.25)
+        self.assertEqual(accelerator.parse_mpp_load(""), [])
+        self.assertEqual(accelerator.parse_mpp_load(None), [])
+
+    def test_vpu_role_classifies_decode_and_encode_cores(self):
+        self.assertEqual(accelerator.vpu_role("fdc38100.rkvdec-core"), "decode")
+        self.assertEqual(accelerator.vpu_role("fdc70000.av1d"), "decode")
+        self.assertEqual(accelerator.vpu_role("fdb50000.vepu"), "encode")
+        self.assertEqual(accelerator.vpu_role("fdba0000.jpege-core"), "encode")
+        self.assertEqual(accelerator.vpu_role("fdbb0000.iep"), "other")
+
+    def test_mpp_summary_reports_peaks_per_role(self):
+        summary = accelerator.mpp_summary(accelerator.parse_mpp_load(self.SAMPLE))
+        self.assertEqual(summary["decodePercent"], 62.25)
+        self.assertEqual(summary["encodePercent"], 34.5)
+        self.assertEqual(summary["maxPercent"], 62.25)
+        self.assertEqual(summary["coreCount"], 5)
+        self.assertEqual(summary["activeCoreCount"], 3)
+        self.assertEqual(accelerator.mpp_summary([])["maxPercent"], 0.0)
+
+    def test_sampler_reads_vpu_cores_from_a_fake_proc_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            load_file = Path(root) / "mpp_load"
+            load_file.write_text(self.SAMPLE)
+            sampler = accelerator.AcceleratorSampler(mpp_load_path=str(load_file))
+            entries = sampler._sample_vpu()
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry["name"], "Rockchip VPU")
+        self.assertEqual(entry["utilPercent"], 62.25)
+        self.assertEqual(entry["status"], "busy")
+        self.assertEqual(entry["coreCount"], 5)
+        self.assertEqual(entry["busiestCore"], "fdc38100.rkvdec-core")
+        self.assertTrue(all(core["role"] for core in entry["cores"]))
+
+    def test_sampler_stays_quiet_without_mpp(self):
+        sampler = accelerator.AcceleratorSampler(mpp_load_path="/nonexistent/mpp/load")
+        self.assertEqual(sampler._sample_vpu(), [])
+
+
+class DevfreqBaselineTests(unittest.TestCase):
+    """Idle Rockchip devices can report a fixed baseline instead of zero."""
+
+    def _device(self, root, name, load, governor="rknpu_ondemand"):
+        device = Path(root) / name
+        device.mkdir(exist_ok=True)
+        (device / "load").write_text(load)
+        (device / "governor").write_text(governor)
+        (device / "cur_freq").write_text("300000000\n")
+        return device
+
+    def test_idle_baseline_is_not_reported_as_utilization(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._device(root, "fdab0000.npu", "100@300000000Hz\n")
+            sampler = accelerator.AcceleratorSampler(devfreq_root=root)
+            idle = sampler._devfreq_device("npu")
+        self.assertEqual(idle["loadRaw"], 100)
+        self.assertEqual(idle["loadBaseline"], 100)
+        self.assertEqual(idle["utilPercent"], 0.0)
+
+    def test_utilization_is_measured_above_the_baseline(self):
+        with tempfile.TemporaryDirectory() as root:
+            device = self._device(root, "fdab0000.npu", "100@300000000Hz\n")
+            sampler = accelerator.AcceleratorSampler(devfreq_root=root)
+            sampler._devfreq_device("npu")
+            (device / "load").write_text("350@600000000Hz\n")
+            busy = sampler._devfreq_device("npu")
+        self.assertEqual(busy["loadBaseline"], 100)
+        self.assertEqual(busy["utilPercent"], 25.0)
+        self.assertEqual(busy["frequencyMhz"], 600)
+
+    def test_zero_baseline_devices_keep_their_percentage(self):
+        with tempfile.TemporaryDirectory() as root:
+            device = self._device(root, "fb000000.gpu", "0@300000000Hz\n", "simple_ondemand")
+            sampler = accelerator.AcceleratorSampler(devfreq_root=root)
+            self.assertEqual(sampler._devfreq_device("gpu")["utilPercent"], 0.0)
+            (device / "load").write_text("500@800000000Hz\n")
+            busy = sampler._devfreq_device("gpu")
+        self.assertEqual(busy["loadBaseline"], 0)
+        self.assertEqual(busy["utilPercent"], 50.0)

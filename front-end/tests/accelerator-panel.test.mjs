@@ -11,7 +11,7 @@ test("system page shows GPU and NPU utilization from the accelerator API", () =>
   assert.match(source, /function acceleratorPercent/);
   assert.match(source, /function acceleratorStatus/);
   assert.match(source, /function percentBarWidth/);
-  assert.match(source, /title="GPU 与 NPU"/);
+  assert.match(source, /<CardHead :title="acceleratorSectionTitle"/);
   assert.match(source, /v-for="item in acceleratorCards"/);
   assert.match(source, /isSystemCardExpanded\('accel'/);
   assert.match(source, /toggleSystemCard\('accel'/);
@@ -43,4 +43,25 @@ test("console palette leads with light blue and keeps green for status only", ()
   assert.match(desktop, /--ds-accent: #2578b8;/);
   assert.match(desktop, /--ds-accent: #7db8e8;/);
   assert.doesNotMatch(desktop, /--ds-accent: #0b8068/);
+});
+
+test("VPU cores are surfaced alongside the GPU and NPU cards", () => {
+  assert.match(source, /const vpus = \(system\.value\?\.vpu \|\| \[\]\)\.map/);
+  assert.match(source, /return \[\.\.\.gpus, \.\.\.npus, \.\.\.vpus\];/);
+  assert.match(source, /function vpuRoleLabel\(role\)/);
+  assert.match(source, /function acceleratorIcon\(item\)/);
+  assert.match(source, /<template v-if="item\.kind === 'vpu'">/);
+  assert.match(source, /v-for="core in item\.cores"/);
+  assert.match(source, /解码峰值/);
+  assert.match(source, /编码峰值/);
+  assert.match(source, /活跃核心/);
+  // devfreq backed GPU/NPU also expose the raw governor load.
+  assert.match(source, /驱动负载/);
+  assert.match(source, /item\.loadRaw/);
+});
+
+test("the accelerator section title follows the devices that are present", () => {
+  assert.match(source, /const acceleratorSectionTitle = computed/);
+  assert.match(source, /<CardHead :title="acceleratorSectionTitle"/);
+  assert.match(source, /\["gpu", "npu", "vpu"\]\.filter\(\(kind\) => kinds\.has\(kind\)\)/);
 });

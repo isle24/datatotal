@@ -1,0 +1,35 @@
+# 绿联云 UGOS Pro（DXP4300 Plus 等 ARM 机型）部署模板
+#
+# 实测要点：
+#   * UGOS 允许 privileged + host 网络 + pid host。
+#   * /volume2/docker 默认可写，存放路径也可以在建项目时自选。
+#   * 容器内需要显式挂载 docker.sock（/var/run 不与宿主共享）。
+#   * GPU/NPU 走 /sys/class/devfreq，VPU 走 /proc/mpp_service/load，
+#     privileged 模式下无需额外映射设备。
+# 用法：
+#   mkdir -p /volume2/docker/nas-traffic-lens/{data,logs}
+#   cp docker-compose.ugreen.yml /volume2/docker/nas-traffic-lens/docker-compose.yml
+#   cd /volume2/docker/nas-traffic-lens && docker compose up -d
+services:
+  nas-traffic-lens:
+    image: isle204/nas-traffic-lens:latest
+    container_name: nas-traffic-lens
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    platform: linux/arm64
+    privileged: true
+    environment:
+      APP_PORT: "8088"
+      # 请改成你自己的密码；留空则不需要登录（不建议暴露到公网）
+      DASHBOARD_PASSWORD: "change-me"
+      DB_PATH: /data/traffic.db
+      LOG_DIR: /logs
+      ENABLE_DOCKER_DISCOVERY: "true"
+      SAMPLE_SECONDS: "1"
+      RETENTION_SECONDS: "3600"
+      TZ: Asia/Shanghai
+    volumes:
+      - /volume2/docker/nas-traffic-lens/data:/data
+      - /volume2/docker/nas-traffic-lens/logs:/logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
