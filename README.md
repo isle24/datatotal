@@ -1,8 +1,10 @@
 # NAS Traffic Lens / datatotal
 
-NAS Traffic Lens 是一个面向极空间、家庭 NAS 和 x86/ARM Linux 主机的轻量网络监控面板。它用于补齐 NAS 自带系统缺少的实时公网流量、累计公网流量、进程和端口归因、Docker 容器识别、告警通知等能力。
+NAS Traffic Lens 是一个面向家庭 NAS 的轻量网络监控面板：实时公网流量、进程与 Docker 归因、容器保护与告警通知，并内置一个**只读运维助手**——用一句话就能查"今天公网上传了多少流量""最近哪个进程上传最多""哪个容器在大量读写磁盘"。
 
-Windows / macOS 另有 **Traffic Lens 桌面预览版**：无需 Docker，可查看本机基础资源与网卡总流量、使用本机 AI 分析，也可保存并切换多台 NAS。每台 NAS 可选择客户端布局或网页布局，完整使用其 Docker、AI、监控和系统页面。各端新增服务导航，支持分组、搜索、图标与地址维护，Docker Web 端口可一键加入导航。桌面端支持从 GitHub 检查并安装签名更新。
+已在 **极空间 Z425（x86，i915 核显 + Intel NPU）** 与 **绿联 DXP4300 Plus（ARM，Mali GPU + RKNPU + VPU）** 上实机验证，同一镜像同时提供 `linux/amd64` 与 `linux/arm64`，通用 Linux 与飞牛 OS 使用通用模板即可。各平台的能力差异与部署步骤见 [多 NAS 兼容性说明](doc/nas-compat.md)。
+
+Windows / macOS 另有 **Traffic Lens 0.5.0 桌面预览版**：无需 Docker，可查看本机基础资源与网卡总流量、使用本机 AI 分析，也可保存并切换多台 NAS。每台 NAS 可选择客户端布局或网页布局，完整使用其 Docker、AI、监控和系统页面。各端新增服务导航，支持分组、搜索、图标与地址维护，Docker Web 端口可一键加入导航。桌面端支持从 GitHub 检查并安装签名更新。
 
 桌面版不包含本机公网归属、进程网络流量和传感器采集；完整能力与构建方法见 [桌面客户端使用与构建](doc/desktop-usage.md)。Mac Apple Silicon / Intel 和 Windows x64 安装包见 [桌面 Releases](https://github.com/isle24/datatotal/releases?q=desktop-v)；跨平台签名更新包由 [GitHub Actions](https://github.com/isle24/datatotal/actions/workflows/desktop-release.yml) 编译。NAS 导航需要更新 Docker 镜像，Compose 不需要新增环境变量或挂载。
 
@@ -16,17 +18,37 @@ Windows / macOS 另有 **Traffic Lens 桌面预览版**：无需 Docker，可查
 
 ## 界面预览
 
-2026.10.07 控制台改版：左侧固定导航、设置按功能区独立保存、可搜索的容器勾选列表、明暗主题，手机端改为下拉切换页面。截图取自实际运行 2026.10.07-3 的极空间 NAS。
+截图取自实际运行的极空间 NAS（NAS 镜像 2026.10.07-12）。
 
-| 桌面端 · 概览（浅色） | 桌面端 · 概览（暗色） |
+**首页门户**：居中品牌 + 一行实时状态 + 六个大入口卡片，顶部按钮默认隐藏、鼠标移入才出现；服务导航里的服务直接出现在首页，`/` 或 `⌘K` 搜索后回车直达。
+
+![首页门户](doc/screenshots/console-portal-light.png)
+
+**运维助手（只读 Agent）**：一句话提问，面板展示选用的只读工具、参数、耗时与 token 估算，结果渲染成小卡与排行条，原始 JSON 可折叠查看。
+
+![运维助手](doc/screenshots/console-agent-light.png)
+
+**流量总览**：公网/内网实时速率、累计流量、连接数与 Docker 概况。
+
+| 浅色 | 暗色 |
 | --- | --- |
-| ![桌面端概览浅色](doc/screenshots/console-overview-light.png) | ![桌面端概览暗色](doc/screenshots/console-overview-dark.png) |
-| **设置 · 常用设置**：按功能区保存，未保存修改不丢 | **设置 · 容器保护**：搜索勾选容器，逐个判断阈值 |
+| ![流量总览浅色](doc/screenshots/console-overview-light.png) | ![流量总览暗色](doc/screenshots/console-overview-dark.png) |
+
+**系统与加速器**：CPU/内存/磁盘/温度，以及 GPU、NPU、VPU 的实时利用率（ARM 机型通过 devfreq 与 `/proc/mpp_service` 读取）。
+
+| GPU / NPU / VPU 卡片 | 展开 VPU 的 13 个编解码核心 |
+| --- | --- |
+| ![加速器卡片](doc/screenshots/console-system-accel-light.png) | ![VPU 明细](doc/screenshots/console-system-vpu-light.png) |
+
+**设置**：按功能区独立保存，容器保护支持搜索勾选容器。
+
+| 常用设置 | 容器保护 |
+| --- | --- |
 | ![常用设置](doc/screenshots/console-settings-light.png) | ![容器保护](doc/screenshots/console-protection-picker-light.png) |
 
 手机端（浏览器访问 NAS）：
 
-![手机端概览](doc/screenshots/console-mobile-overview-light.png)
+![手机端门户](doc/screenshots/console-mobile-portal-light.png)
 
 ## 主要功能
 
@@ -42,13 +64,16 @@ Windows / macOS 另有 **Traffic Lens 桌面预览版**：无需 Docker，可查
 - 监控中心展示上传速率、连接数、每日流量等规则的运行状态。
 - 通知渠道模块，支持 Webhook、IYUU、MeoW，并支持消息模板变量。
 - 历史统计折线图，支持今日、本周、本月等时间范围。
-- 系统状态页面，展示 CPU、内存、磁盘、温度风扇，以及 Intel 核显与 NPU 的实时利用率（核显按引擎细分，NPU 含频率和常驻显存）。
+- 系统状态页面，展示 CPU、内存、磁盘、温度风扇与加速器利用率：Intel 机型读 i915 PMU 与 intel_vpu，ARM 机型（绿联云等）读 devfreq 的 Mali GPU / RKNPU 负载与 `/proc/mpp_service/load` 的 13 个 VPU 核心。
+- 首页门户：居中品牌与实时状态、六个入口卡片（含 Docker 容器数）、服务直达卡片与搜索，顶部按钮默认隐藏。
+- 运维助手（只读 Agent）：自然语言 → 计划 → 白名单只读工具 → 结果解读，最多 2 次模型调用；10 个工具覆盖流量概览/历史/进程排行/连接明细、系统状态、容器列表/单容器/容器资源排行、最近告警、配置概况；密钥脱敏、结果裁剪、每次提问写入审计表并统计当日用量。
 - AI 中心支持 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义接口的按需分析与对话；首页、历史、监控中心都有快捷分析入口。
 - AI 中心包含“设置助手”：可以用自然语言同时调整运行参数、监控规则、通知模板非敏感字段、容器保护、Docker 备注/内置图标和 AI 偏好；AI 先生成差异预览，点击一次确认后才写入 SQLite。
 - AI 设置助手不会读取或修改密码、API Key、Webhook/IYUU/MeoW Token、Docker socket、数据库/日志路径，也不会执行 SQL、宿主命令或 Docker 命令。
 - 支持访问密码、登录失败限制、SQLite 持久化、日志目录映射。
 - 上传阈值可在设置页使用 `MB` / `GB` / `MB/s` / `GB/s` 编辑；后端仍以字节保存，旧值 `53687091200` 会自动显示为 `50 GB`。
 - 上传告警会保存触发值、阈值、Top 网卡、可见进程、活跃公网连接、Docker 归属和每个通知渠道的投递结果。
+- 手风琴卡片为层叠 3D 牌堆：滚动视差、悬停浮起、点击展开置顶，Docker / 传感器 / 规则 / 设置编辑器全部接入。
 - 监控中心支持按日期回溯上传异常；AI 回复支持安全 Markdown，`Enter` 发送、`Shift+Enter` 换行。
 
 ## 适用环境
