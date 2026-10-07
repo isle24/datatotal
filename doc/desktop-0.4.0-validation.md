@@ -6,6 +6,7 @@
 - [桌面安装包](https://github.com/isle24/datatotal/releases/tag/desktop-v0.4.0)：Mac arm64、Mac x64 的 DMG，以及 Windows x64 NSIS 安装器，三个平台都带签名更新包，共 10 个产物。
 - [发布工作流](https://github.com/isle24/datatotal/actions/runs/37624799777)：三个平台的测试、编译、更新包验签和发布全部成功，用时约 15 分钟（2026-10-07T12:57:36Z → 13:12:14Z）。
 - `desktop-update/latest.json` 已指向 0.4.0，包含 `darwin-aarch64`、`darwin-x86_64`、`windows-x86_64` 三个平台。
+- 工作流默认把版本 Release 建为 preview；本次按 0.3.1 的最终状态把 0.4.0 标为正式发布并设为 Latest（`gh release edit desktop-v0.4.0 --prerelease=false --latest`），否则仓库首页的 Latest 仍会停留在 0.3.1。
 - 三个更新包在本地再次通过 Minisign 验签（`cargo run -p traffic-lens-core --example verify_update`），与 `tauri.conf.json` 内置公钥一致。
 
 ## 本地校验
