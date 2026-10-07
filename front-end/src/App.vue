@@ -99,7 +99,7 @@
           <MetricCard title="内网实时下行" accent="cyan" :value="formatRate(summary.lan?.rxBps)">
             <ArrowDown :size="18" />
           </MetricCard>
-          <MetricCard title="内网实时上行" accent="green" :value="formatRate(summary.lan?.txBps)">
+          <MetricCard title="内网实时上行" accent="cyan" :value="formatRate(summary.lan?.txBps)">
             <ArrowUp :size="18" />
           </MetricCard>
           <MetricCard title="公网连接数" accent="red" :value="`${connectionSummary.wan || 0}`" @click="openWanConnections">
@@ -242,9 +242,9 @@
       <section v-if="activeView === 'system'" class="view">
         <div class="metric-grid system-grid">
           <MetricCard title="CPU" accent="blue" :value="`${system?.cpu?.percent ?? 0}%`"><Cpu :size="18" /></MetricCard>
-          <MetricCard title="内存" accent="green" :value="`${system?.memory?.percent ?? 0}%`"><Server :size="18" /></MetricCard>
+          <MetricCard title="内存" accent="cyan" :value="`${system?.memory?.percent ?? 0}%`"><Server :size="18" /></MetricCard>
           <MetricCard title="磁盘" accent="orange" :value="`${system?.disk?.percent ?? 0}%`"><HardDrive :size="18" /></MetricCard>
-          <MetricCard title="运行时间" accent="teal" :value="formatDuration(system?.uptimeSeconds)"><Monitor :size="18" /></MetricCard>
+          <MetricCard title="运行时间" accent="violet" :value="formatDuration(system?.uptimeSeconds)"><Monitor :size="18" /></MetricCard>
         </div>
         <div class="grid two">
           <section class="card">
@@ -262,7 +262,7 @@
           <section class="card">
             <CardHead title="温度" :meta="temperatureGroups.length ? `${temperatureGroups.length} 组传感器 · 点击展开` : 'psutil / sensors'" />
             <div v-if="temperatureGroups.length" class="accordion-stack system-stack">
-              <article
+              <article v-stack-motion
                 v-for="group in temperatureGroups"
                 :key="temperatureGroupKey(group)"
                 :class="['system-card', 'temp-stack-card', { expanded: isSystemCardExpanded('temp', temperatureGroupKey(group)) }]"
@@ -297,7 +297,7 @@
         <section v-if="acceleratorCards.length" class="card">
           <CardHead title="GPU 与 NPU" :meta="`${acceleratorCards.length} 个设备 · 点击展开`" />
           <div class="accordion-stack system-stack">
-            <article
+            <article v-stack-motion
               v-for="item in acceleratorCards"
               :key="item.cardKey"
               :class="['system-card', 'accelerator-card', { expanded: isSystemCardExpanded('accel', item.cardKey) }]"
@@ -343,7 +343,7 @@
         <section class="card">
           <CardHead title="风扇转速" :meta="systemFans.length ? `${systemFans.length} 个传感器 · 点击展开` : 'psutil / hwmon'" />
           <div v-if="systemFans.length" class="accordion-stack system-stack">
-            <article
+            <article v-stack-motion
               v-for="fan in systemFans"
               :key="fanCardKey(fan)"
               :class="['system-card', 'fan-stack-card', { expanded: isSystemCardExpanded('fan', fanCardKey(fan)) }]"
@@ -383,7 +383,7 @@
             <button type="button" @click="refreshDocker(true)"><RefreshCw :size="16" />刷新</button>
           </CardHead>
           <div class="docker-stack">
-            <article v-for="container in dockerContainers" :key="container.id || container.name" :class="['docker-card', 'accordion-card', { expanded: isDockerCardExpanded(container) }]">
+            <article v-stack-motion v-for="container in dockerContainers" :key="container.id || container.name" :class="['docker-card', 'accordion-card', { expanded: isDockerCardExpanded(container) }]">
               <button class="docker-card-trigger" type="button" :aria-expanded="isDockerCardExpanded(container)" @click="toggleDockerCard(container)">
                 <div class="docker-icon" :title="container.iconSource ? `图标：${container.iconSource === 'builtin' ? '内置' : '自定义'}${container.iconKey ? ` · ${container.iconKey}` : ''}` : '未匹配图标'">
                   <img v-if="container.containerIcon" :src="container.containerIcon" :alt="`${container.name} 图标`" />
@@ -473,7 +473,7 @@
             <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
           </CardHead>
           <div class="accordion-stack monitor-stack">
-            <article v-for="rule in statusRules" :key="`status-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-traffic', rule.id) }]">
+            <article v-stack-motion v-for="rule in statusRules" :key="`status-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-traffic', rule.id) }]">
               <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-traffic', rule.id)">
                 <span class="monitor-card-icon"><Bell :size="17" /></span>
                 <span class="monitor-card-copy"><strong>{{ rule.name || "未命名规则" }}</strong><small>{{ monitorRuleSummary(rule) }}</small></span>
@@ -492,7 +492,7 @@
             <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
           </CardHead>
           <div class="accordion-stack monitor-stack">
-            <article v-for="rule in statusContainerRules" :key="`status-container-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-container', rule.id) }]">
+            <article v-stack-motion v-for="rule in statusContainerRules" :key="`status-container-${rule.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-container', rule.id) }]">
               <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-container', rule.id)">
                 <span class="monitor-card-icon protection"><ShieldCheck :size="17" /></span>
                 <span class="monitor-card-copy"><strong>{{ rule.name || "未命名容器保护" }}</strong><small>{{ containerProtectionSummary(rule) }}</small></span>
@@ -509,7 +509,7 @@
             <button type="button" @click="setView('settings')"><Settings :size="16" />配置</button>
           </CardHead>
           <div class="accordion-stack monitor-stack">
-            <article v-for="channel in statusChannels" :key="`status-channel-${channel.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-channel', channel.id) }]">
+            <article v-stack-motion v-for="channel in statusChannels" :key="`status-channel-${channel.id}`" :class="['monitor-status-card', { expanded: isMonitorCardExpanded('status-channel', channel.id) }]">
               <button class="monitor-card-trigger" type="button" @click="toggleMonitorCard('status-channel', channel.id)">
                 <span class="monitor-card-icon channel"><Send :size="17" /></span>
                 <span class="monitor-card-copy"><strong>{{ channel.name || "未命名渠道" }}</strong><small>{{ channelTypeLabel(channel.type) }} · {{ channelAddressSummary(channel) }}</small></span>
@@ -729,7 +729,7 @@
             <button type="button" class="primary-button" :disabled="settingsSaving.monitor" @click="saveRules"><Save :size="16" />{{ settingsSaving.monitor ? '保存中…' : '保存流量告警' }}</button>
           </CardHead>
           <div class="rule-grid accordion-stack">
-            <div v-for="rule in monitorRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('traffic', rule.id) }]">
+            <div v-stack-motion v-for="rule in monitorRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('traffic', rule.id) }]">
               <div class="edit-title card-summary-row">
                 <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('traffic', rule.id)" @click="toggleMonitorCard('traffic', rule.id)">
                   <component :is="isMonitorCardExpanded('traffic', rule.id) ? ChevronUp : ChevronDown" :size="16" />
@@ -776,7 +776,7 @@
             <button type="button" class="primary-button" :disabled="settingsSaving.protection" @click="saveContainerRules"><Save :size="16" />{{ settingsSaving.protection ? '保存中…' : '保存容器保护' }}</button>
           </CardHead>
           <div class="rule-grid accordion-stack">
-            <div v-for="rule in containerRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('container', rule.id) }]">
+            <div v-stack-motion v-for="rule in containerRules" :key="rule.id" :class="['edit-card', 'collapsible-card', { expanded: isMonitorCardExpanded('container', rule.id) }]">
               <div class="edit-title card-summary-row">
                 <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('container', rule.id)" @click="toggleMonitorCard('container', rule.id)">
                   <component :is="isMonitorCardExpanded('container', rule.id) ? ChevronUp : ChevronDown" :size="16" />
@@ -855,7 +855,7 @@
             <button type="button" class="primary-button" :disabled="settingsSaving.channels" @click="saveChannels"><Save :size="16" />{{ settingsSaving.channels ? '保存中…' : '保存通知渠道' }}</button>
           </CardHead>
           <div class="channel-grid accordion-stack">
-            <div v-for="channel in channels" :key="channel.id" :class="['edit-card', 'channel-card', 'collapsible-card', { expanded: isMonitorCardExpanded('channel', channel.id) }]">
+            <div v-stack-motion v-for="channel in channels" :key="channel.id" :class="['edit-card', 'channel-card', 'collapsible-card', { expanded: isMonitorCardExpanded('channel', channel.id) }]">
               <div class="edit-title card-summary-row">
                 <button class="collapse-toggle" type="button" :aria-expanded="isMonitorCardExpanded('channel', channel.id)" @click="toggleMonitorCard('channel', channel.id)">
                   <component :is="isMonitorCardExpanded('channel', channel.id) ? ChevronUp : ChevronDown" :size="16" />
@@ -1008,6 +1008,7 @@ import { createSettingsDrafts, notificationMode, monitorPayload, validateContain
 const transport = inject("trafficTransport", browserTransport);
 let disposed = false;
 import { createLatestRequest, createPollLoop } from "./utils/requests.js";
+import { vStackMotion } from "./utils/stack-motion.js";
 import { LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
@@ -2199,7 +2200,7 @@ function renderHistoryChart() {
   if (!historyChart) historyChart = echarts.init(historyChartEl.value);
   const buckets = historyData.value?.buckets || [];
   historyChart.setOption({
-    color: ["#2f80ed", "#f2994a", "#00a8c8", "#27ae60"],
+    color: ["#2f80ed", "#f2994a", "#00a8c8", "#6d5bd0"],
     tooltip: { trigger: "axis", valueFormatter: (value) => formatBytes(value) },
     legend: { top: 8, textStyle: { color: theme.value === "dark" ? "#cbd5e1" : "#475569" } },
     grid: { left: 52, right: 24, top: 52, bottom: 36 },

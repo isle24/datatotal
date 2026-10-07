@@ -294,7 +294,7 @@
   height: 6px;
   width: 6px;
   border-radius: 50%;
-  background: #24a67a;
+  background: var(--ds-accent);
 }
 .dn-live.stale i {
   background: #df9c36;

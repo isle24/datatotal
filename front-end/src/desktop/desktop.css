@@ -361,7 +361,7 @@
   height: 34px;
   border-radius: 8px;
   color: white;
-  background: #127c64;
+  background: var(--ds-accent);
 }
 .ds-version {
   font-size: 10px;
@@ -489,7 +489,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #0f9d82;
+  background: var(--ds-accent);
 }
 .ds-live > span.stale {
   background: #c39636;
@@ -544,7 +544,7 @@
   padding: 0;
 }
 .ds-green {
-  color: #0d9c7c;
+  color: var(--ds-accent);
 }
 .ds-pink {
   color: #d85f7d;
@@ -662,9 +662,9 @@
   border-color: var(--ds-accent);
 }
 .desktop-shell .ds-primary {
-  background: #147d65;
+  background: var(--ds-accent);
   color: #fff;
-  border-color: #147d65;
+  border-color: var(--ds-accent);
 }
 .desktop-shell .ds-danger {
   color: #d35466;
@@ -786,7 +786,7 @@
   background: transparent;
 }
 .ds-segments button.active {
-  background: #147d65;
+  background: var(--ds-accent);
   color: white;
 }
 .ds-history-totals {

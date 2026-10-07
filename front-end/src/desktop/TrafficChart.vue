@@ -36,7 +36,7 @@ function draw() {
   chart.setOption(
     {
       animation: false,
-      color: ["#0f9d82", "#d65a7c"],
+      color: ["#2f8fbf", "#c2703c"],
       grid: { left: 62, right: 24, top: 42, bottom: 30 },
       legend: { top: 0, right: 16, textStyle: { color } },
       tooltip: {
@@ -48,7 +48,7 @@ function draw() {
         min: props.start ? props.start * 1000 : undefined,
         max: props.end ? props.end * 1000 : undefined,
         axisLabel: { color },
-        axisLine: { lineStyle: { color: props.dark ? "#354740" : "#dce5e1" } },
+        axisLine: { lineStyle: { color: props.dark ? "#33404e" : "#d9e0e9" } },
       },
       yAxis: {
         type: "value",
@@ -56,7 +56,7 @@ function draw() {
         min: 0,
         nameTextStyle: { color },
         axisLabel: { color },
-        splitLine: { lineStyle: { color: props.dark ? "#283c34" : "#edf1ef" } },
+        splitLine: { lineStyle: { color: props.dark ? "#26313d" : "#eef2f7" } },
       },
       series: [
         ["下行", "rx"],

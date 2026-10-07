@@ -17,9 +17,10 @@
   --accent: #2578b8;
   --accent-hover: #1f689f;
   --accent-soft: #e6f1fa;
+  --violet: #6d5bd0;
   --blue: var(--accent);
   --cyan: #2f8fbf;
-  --green: #1f7a55;
+  --green: var(--accent);
   --orange: #87591e;
   --red: #aa3e35;
   --teal: var(--accent);
@@ -54,8 +55,9 @@
   --accent: #7db8e8;
   --accent-hover: #a1cdf0;
   --accent-soft: #1f3548;
+  --violet: #a99cf0;
   --cyan: #6cc0dd;
-  --green: #7fc9a2;
+  --green: var(--accent);
   --orange: #ddba7d;
   --red: #f0a99e;
 }
@@ -135,19 +137,19 @@
   height: 100dvh;
   padding: 24px 14px;
   background: var(--side);
-  color: #eef2ef;
+  color: #eaf0f7;
 }
 :root .app-shell .brand { gap: 11px; margin: 0 4px 28px; }
 :root .app-shell .brand-mark {
   width: 36px;
   height: 36px;
-  border: 1px solid #53635c;
+  border: 1px solid #46586c;
   border-radius: 8px;
-  background: #34443b;
-  color: #bce0cb;
+  background: #2b3a4a;
+  color: #9dc6ea;
 }
 :root .app-shell .brand h1 { font-size: .9375rem; font-weight: 650; letter-spacing: 0; }
-:root .app-shell .brand p { color: #b5c1b9; font-size: .75rem; }
+:root .app-shell .brand p { color: #a9b7c7; font-size: .75rem; }
 :root .app-shell .menu { gap: 4px; }
 :root .app-shell .menu button {
   min-height: 44px;
@@ -155,13 +157,13 @@
   border: 1px solid transparent;
   padding: 10px 13px;
   background: transparent;
-  color: #bcc8c0;
+  color: #b3c0cf;
   font-size: .875rem;
   font-weight: 500;
 }
-:root .app-shell .menu button:hover { color: #f2f6f3; background: #343e38; border-color: transparent; }
-:root .app-shell .menu button.active { color: #def0e4; background: #3b4b40; border-color: #53685a; }
-:root .app-shell .menu button:focus-visible { outline-color: #bce0cb; }
+:root .app-shell .menu button:hover { color: #f1f6fb; background: #2c3846; border-color: transparent; }
+:root .app-shell .menu button.active { color: #dceafb; background: #2f4257; border-color: #47617f; }
+:root .app-shell .menu button:focus-visible { outline-color: #8fc0e8; }
 :root .app-shell > .main,
 :root .app-shell.nas-native-content > .main {
   width: 100%;
@@ -340,7 +342,7 @@
 :root .app-shell .settings-toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 :root .app-shell :is(.settings-feedback, .settings-unsaved) { display: flex; align-items: flex-start; gap: 8px; font-size: .8125rem; line-height: 1.6; }
 :root .app-shell .settings-feedback { padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-soft); color: var(--text); }
-:root .app-shell .settings-feedback.success { color: var(--green); }
+:root .app-shell .settings-feedback.success { color: var(--accent); }
 :root .app-shell .settings-feedback.error { color: var(--red); border-color: var(--red); }
 :root .app-shell .settings-unsaved { color: var(--orange); }
 :root .app-shell :is(.settings-feedback, .settings-unsaved) > svg { flex-shrink: 0; margin-top: 2px; }
@@ -515,6 +517,76 @@
 :root .app-shell .bars i { height: 4px; }
 :root .app-shell .upload-diagnostic-summary > div { border: 0; border-radius: 0; background: transparent; padding: 8px 0; }
 
+/* ---------------------------------------------------------------------------
+ * Overlapping 3D card deck.
+ * Cards of one stack touch like a hand of cards: the last card sits in front
+ * and every earlier card keeps a strip of its header plus a deeper shadow.
+ * Depth comes from --stack-back (set per card by utils/stack-motion.js), while
+ * --stack-tilt/--stack-scale/--stack-shift follow the scroll position.
+ * ------------------------------------------------------------------------- */
+:root .app-shell :is(.accordion-stack, .docker-stack) {
+  perspective: 1500px;
+  perspective-origin: 50% 38%;
+}
+:root .app-shell .stack-deck > * {
+  position: relative;
+  z-index: calc(20 - var(--stack-back, 0));
+  border-radius: 10px;
+  transform:
+    translateZ(var(--stack-z, 0px))
+    translateY(calc(var(--stack-rise, 0px) + var(--stack-back, 0) * var(--stack-shift, 0px)))
+    rotateX(var(--stack-tilt, 0deg))
+    scale(calc(var(--stack-scale, 1) * var(--stack-boost, 1)));
+  opacity: var(--stack-fade, 1);
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--panel) 55%, transparent),
+    0 calc(8px + var(--stack-back, 0) * 3px) calc(20px + var(--stack-back, 0) * 5px) calc(-16px - var(--stack-back, 0) * 3px) rgba(15, 30, 51, .5);
+  transition:
+    transform .34s cubic-bezier(.22, .61, .36, 1),
+    opacity .3s ease,
+    box-shadow .34s ease,
+    border-color .2s ease,
+    background-color .2s ease,
+    margin .34s ease;
+}
+:root .app-shell .stack-deck > *:not(:first-child) { margin-top: calc(var(--deck-peek, 12px) * -1); }
+:root .app-shell .stack-deck.stack-deck-deep > *:not(:first-child) { margin-top: calc(var(--deck-peek-deep, 20px) * -1); }
+:root .app-shell .stack-deck-deep > * {
+  margin-left: calc(var(--stack-back, 0) * 5px);
+  margin-right: calc(var(--stack-back, 0) * 5px);
+}
+:root .app-shell .stack-deck > *:hover {
+  --stack-z: 16px;
+  --stack-boost: 1.005;
+  z-index: 40;
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--panel) 40%, transparent),
+    0 22px 40px -22px rgba(15, 30, 51, .55);
+}
+:root .app-shell .stack-deck > *.expanded {
+  --stack-z: 26px;
+  z-index: 50;
+  margin-left: 0;
+  margin-right: 0;
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--panel) 40%, transparent),
+    0 26px 48px -24px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+:root .app-shell .stack-deck > *.expanded + * { margin-top: 10px; }
+/* A soft accent wash makes the open card read as the front of the deck. */
+:root .app-shell .stack-deck > *.expanded > :first-child {
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%);
+}
+
+/* Small depth accents that keep the console lively without decorative noise. */
+:root .app-shell .metric-card { transition: transform .24s ease, box-shadow .24s ease, border-color .2s ease; }
+:root .app-shell .metric-card:hover { transform: translateY(-2px); box-shadow: 0 18px 32px -26px rgba(15, 30, 51, .6); }
+:root .app-shell .live-dot { animation: console-live-pulse 2.6s ease-in-out infinite; }
+@keyframes console-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 42%, transparent); }
+  55% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+
 /* AI remains a familiar conversation surface without a separate visual theme. */
 :root .app-shell .ai-chat-toolbar { padding: 16px 20px; background: var(--panel-soft); }
 :root .app-shell .ai-mode-tabs button { min-height: 36px; font-size: .75rem; }
@@ -530,7 +602,7 @@
 :root .app-shell .ai-composer textarea { min-height: 72px; }
 :root .app-shell .ai-proposal-change { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
 :root .app-shell .modal { border-radius: 12px; box-shadow: 0 20px 60px #00000035; }
-:root .app-shell .modal::backdrop { background: #101a1766; }
+:root .app-shell .modal::backdrop { background: #0d151f66; }
 :root .app-shell .connection-filters { gap: 10px; padding: 16px 20px; background: var(--panel-soft); }
 :root .app-shell .refresh-note { font-size: .75rem; padding: 0 20px 18px; }
 
@@ -709,7 +781,7 @@
 @media (max-width: 720px) {
   :root .app-shell .sidebar > .menu { display: none; }
   :root .app-shell .mobile-page-select { display: grid; gap: 6px; color: #d4ded9; font-size: .75rem; margin-top: 12px; }
-  :root .app-shell .mobile-page-select select { color: #f2f6f3; background: #303c37; border-color: #64726a; width: 100%; }
+  :root .app-shell .mobile-page-select select { color: #f1f6fb; background: #2a3744; border-color: #55697e; width: 100%; }
   :root .app-shell .settings-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; gap: 4px; }
   :root .app-shell .settings-tab { padding: 10px 6px; min-width: 0; white-space: normal; }
 }
