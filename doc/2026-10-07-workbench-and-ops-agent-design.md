@@ -1,6 +1,8 @@
 # 工作台首页 + 运维 Agent 设计（待讨论）
 
 > 状态：设计稿，未实现。本文只给方案与默认值，代码改动需确认后再动。
+>
+> **已确认（2026-10-07）**：② 镜像加 docker CLI + compose 插件：需要；③ compose 根目录由用户在设置里自选；④ 权限档位默认"只读 + 设置提案"，Docker 写操作显式开启；⑤ 所有写操作人工确认；⑥ 禁止操作自身容器；⑦ 极空间"应用列表"不保证收录：可接受；⑧ 镜像来源限制、审计 90 天、回滚范围：确认。
 > 关联现状：`front-end/src/App.vue`（导航与视图）、`server/main.py`（`docker_api_request`、容器保护动作、设置 API、AI 提案链路）、`server/services/ai.py`、`docker-compose.nas.yml`。
 
 ## 1. 需求与目标
@@ -38,7 +40,7 @@
 | 方案 | 行为 | 优点 | 缺点 |
 | --- | --- | --- | --- |
 | **A. 仅工作台隐藏（推荐）** | 首页无侧边栏；点任意磁贴/进入其他页面后，侧边栏恢复常驻 | 实现简单、行为可预期；用户"点其他页面才显示菜单"的原话就是这个 | 从其他页面回首页时菜单会收起 |
-| B. 全站抽屉 | 侧边栏默认全部隐藏，靠汉堡按钮/快捷键随时呼出；可在设置里"固定" | 内容区最宽 | 每次切页面多一步；NAS 用户常年用侧边栏，可能觉得别扭 |
+| B. 全站抽屉 | **所有页面**都不再有常驻侧边栏，菜单变成一块从左侧滑出的浮层：点左上角按钮（或按 `m`）滑出，选中某个页面后自动收起，内容区始终占满整宽；可在设置里"固定菜单"变回常驻 | 内容区最宽、视觉最干净；手机与桌面行为一致 | 每次切页面要多点一下（或靠快捷键）；习惯了常驻侧边栏会觉得别扭 |
 
 实现要点（两种方案共用）：
 
@@ -182,16 +184,73 @@
 | P2 只读 Agent | Agent 面板、JSON 计划协议、R0 工具、审计表、用量统计 | 能回答"今天哪个进程上传最多""哪个容器占用磁盘最多"；零写操作；单测覆盖工具参数校验与脱敏 |
 | P3 设置与 Docker 生命周期 | settings.propose/apply 复用、容器 start/stop/restart 确认执行 | 变更前有 diff、确认后才生效；破坏性动作用例全部被拦截；审计可查 |
 | P4 Compose 创建与更新 | 镜像加 docker CLI + compose 插件、挂载 compose 根、模板生成、校验/备份/原子替换/启动/回滚 | 真机创建一个新容器（如 `redis`）并出现在极空间容器列表；改端口后重建成功；失败自动回滚；删除功能默认关闭 |
+| P5 多 NAS 适配 | 平台探测、devfreq GPU/NPU、ARM 温度命名、compose 根自选、四套 compose 模板与 `doc/nas-compat.md` | 绿联 DXP4300 Plus 上全功能跑通并显示 Mali/NPU 负载；通用 Linux 用模板可直接起；平台标识与能力徽标正确 |
 
-## 7. 待确认问题（请先拍板）
+## 7. 待确认问题
 
-1. **菜单策略**：只工作台隐藏（推荐 A），还是全站抽屉（B）？
-2. **是否接受镜像增加 docker CLI + compose 插件**（约 +40MB），并新增挂载 `compose root`（读写）与重建本容器？不加就没法"写 compose 文件后启动"。
-3. **compose 根目录**：默认用极空间应用根 `/tmp/zfsv3/nvme16/18181998187/data/docker`，新建应用放 `<root>/<应用名>/`，可以吗？还是希望放到单独的 `.../data/docker/nas-traffic-lens/apps/` 之类目录？
-4. **权限档位默认到哪一级**：只读 / +设置 / +容器启停 / +compose 创建更新 / +删除？建议默认"只读 + 设置提案"，Docker 写操作需你在设置里显式打开。
-5. **确认方式**：所有写操作都要人工点确认（推荐），还是允许低风险（如 restart）自动执行？
-6. **自保护**：是否禁止 Agent 操作 `nas-traffic-lens` 自身容器（避免把自己改坏）？建议禁止，并在 UI 说明。
-7. **极空间"应用列表"**：由我们创建的 compose 只保证出现在容器列表，不保证出现在极空间 Docker 的"应用"页（那是它自己的元数据，写入有风险）。可以接受吗？
-8. **镜像来源**：是否限制只能用 Docker Hub 官方镜像 + 本地已有镜像？其他 registry 默认拒绝。
-9. **Agent 是否允许 `docker exec`**：默认禁止（能拿到容器内 shell 就等于拿到其数据），确认一下。
-10. **审计保留与回滚**：审计默认保留 90 天；回滚只支持有备份的操作，可以吗？
+已确认：② 加 docker CLI + compose 插件；③ compose 根目录由用户自选；④ 默认权限到"只读 + 设置提案"；⑤ 写操作全部人工确认；⑥ 禁止操作自身容器；⑦ 极空间应用列表不收录可接受；⑧ 镜像来源限制、审计 90 天、回滚范围确认；⑨ 禁止 `docker exec`；⑩ 审计保留与回滚范围确认。
+
+仍需拍板：
+
+1. **菜单策略**：A 只工作台隐藏（推荐）还是 B 全站抽屉式？（两种行为见 §3.2）
+2. **绿联 4300plus 的 Docker 权限**：当前 `isle` 既不在 `docker` 组、`sudo` 又需要密码，我只能读到硬件信息，无法查看/部署容器。请二选一：把 `isle` 加入 docker 组（`sudo usermod -aG docker isle`，重新登录生效），或给我一个可用的 sudo/root 凭据。
+3. **绿联 compose 项目目录**：`/volume2/@docker` 当前不可读。UGOS 的 compose 应用实际放在哪个子目录（如 `/volume2/@docker/compose/<项目>/`）？拿到权限后我会自行确认，但如果你知道可以直接告诉我。
+4. **飞牛 OS**：你手上有机器可测吗？没有的话我按通用 Linux + 官方文档做"尽力兼容"，并在文档里标注未经实测。
+
+## 8. 多 NAS 适配（极空间 / 绿联云 / 飞牛 OS / 通用 Linux）
+
+### 8.1 实测能力矩阵（2026-10-07）
+
+| 项目 | 极空间 Z425（现有） | 绿联 DXP4300 Plus（新增） | 飞牛 OS / 通用 Linux |
+| --- | --- | --- | --- |
+| 架构 | x86_64（Intel Ultra 5 125H） | **aarch64**（8 核 ARM，RK3588 级） | 多数 x86_64，部分 ARM |
+| 系统 | ZOS（ZFS 数据集 `/tmp/zfsv3/...`） | Debian 12 + UGOS Pro，内核 6.1.84 | Debian 系（fnOS 基于 Debian） |
+| GPU 节点 | `/dev/dri/card0` + `renderD128`，驱动 i915 | `/dev/dri/card0`、`card1`、`/dev/mali0`，驱动 `rockchip-drm` | 视机型：i915 / amdgpu / panfrost / rockchip |
+| **GPU 利用率来源** | i915 PMU（`*-busy`，已实现） | **`/sys/class/devfreq/fb000000.gpu/load`**（`load@freq`） | 按驱动自动选：i915 PMU → amdgpu `gpu_busy_percent` → devfreq `load` |
+| NPU | `/dev/accel/accel0`（intel_vpu，`npu_busy_time_us` 已实现） | 无 `/dev/accel`；**`/sys/class/devfreq/fdab0000.npu/load`** + `npu_thermal` | 多数没有，做成"不可用 + 原因" |
+| 温度 | coretemp / acpitz / nvme / eth1 | hwmon0-6：soc / bigcore0 / bigcore1 / littlecore / center / gpu / npu | hwmon 通用 |
+| 风扇 | `acpi_ec_z425_fans`（3 路） | 未在 hwmon 暴露 | 视机型 |
+| 磁盘位 | `/sys/class/block` | `/sys/ugreen/disk1..disk4` | 视机型 |
+| Docker | 29.x，compose v2.29.7，用户在 docker 组 | 29.6.2，compose **v5.1.3**（UGOS 自带），`isle` 无 docker 权限 | 视安装 |
+| 应用目录 | `<zfs>/data/docker/<应用>/` | 待确认（`/volume2/@docker` 权限受限） | fnOS 常见 `/vol1/@appdata/...` |
+
+### 8.2 平台探测（新增 `server/services/nas_platform.py`）
+
+```python
+detect_platform() -> {
+  "family": "zspace" | "ugreen" | "fnos" | "generic",
+  "label": "极空间 Z425" / "绿联 DXP4300 Plus" / ...,
+  "arch": "x86_64" | "aarch64",
+  "composeRoot": {"current": "<用户设置>", "candidates": ["<探测到的目录>", ...]},
+  "accelerators": {"gpu": "i915-pmu"|"amdgpu"|"devfreq"|None,
+                    "npu": "ivpu-sysfs"|"devfreq"|None},
+  "sensors": {"temps": "hwmon", "fans": bool, "diskBays": bool}
+}
+```
+
+探测依据（按顺序）：`/sys/ugreen` 或 `/volume2/@docker` → 绿联；`/tmp/zfsv3` 或 `/etc/zspace*` → 极空间；`/vol1/@appdata` 或 `/etc/fnos*` → 飞牛；否则通用。加速器按设备节点 + 驱动名 + devfreq 路径综合判断，**不再依赖单一驱动假设**。
+
+### 8.3 需要的代码改动
+
+| 模块 | 改动 |
+| --- | --- |
+| `server/services/accelerator_stats.py` | 新增 devfreq 读取：解析 `/sys/class/devfreq/*/load`（`load@freq`），GPU 走 `*gpu*`、NPU 走 `*npu*`；`load` 单位按驱动标定（默认按千分比 ÷10），先以"原始值 + 标注待标定"呈现，实测后再定系数 |
+| 同上 | GPU 探测扩展：`rockchip-drm` / `panfrost` / `mali` → devfreq；无任何来源时才显示原因 |
+| `server/services/system_status.py` | 温度友好名补 ARM：`soc/bigcore/littlecore/center → SoC/大核/小核/中核`、`gpu_thermal → GPU`、`npu_thermal → NPU`；风扇不可用时给明确文案；可选读 `/sys/ugreen/disk*` 做磁盘位展示 |
+| 设置 | 新增 `ops_agent.composeRoot`（用户自选，带探测候选下拉）与 `nas.profile`（覆盖自动探测） |
+| 前端 | 系统页顶部显示平台标识与能力徽标（GPU/NPU 利用率可用性）；设置页"维护与高级"里加载 compose 根目录选择器 |
+| 文档 | 新增 `doc/nas-compat.md`：各平台 compose 模板、权限要求、常见坑（`/proc` 挂载、`network_mode: host`、socket 只读误解、UGOS compose v5 差异） |
+| 模板 | `docker-compose.nas.yml`（极空间）、`docker-compose.ugreen.yml`、`docker-compose.fnos.yml`、`docker-compose.generic.yml` |
+
+### 8.4 绿联部署前置条件
+
+1. Docker 权限：`sudo usermod -aG docker isle`（重新登录）或提供 sudo 凭据 —— 否则无法查看/部署容器，也验证不了 privileged + host 网络是否被 UGOS 允许。
+2. 确认 UGOS 的 compose 项目目录约定，作为 `composeRoot` 默认候选。
+3. 部署后需要复测：host 网络、`pid: host`、`privileged`、docker.sock 挂载、ZFS/btrfs 路径、`/proc` 挂载限制（UGOS 是否与极空间同样拒绝）。
+4. ARM 侧镜像已具备：Docker Hub 的 `linux/arm64` 变体现成可用。
+
+### 8.5 验收
+
+- 绿联机器上：容器起来后系统页显示 Mali GPU 与 NPU 的负载（devfreq），温度显示 SoC/大核/小核/中心/GPU/NPU 七路，网卡/进程/历史/Docker/告警/AI 全部功能与极空间一致。
+- 平台标识与能力徽标正确；无 i915 的机器不再出现"未暴露利用率"这类误导文案。
+- 通用 Linux（x86 或 ARM）用 `docker-compose.generic.yml` 能直接跑起来。
