@@ -787,50 +787,32 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Drawer navigation.
- * The menu no longer holds a permanent grid column: it slides in over the
- * content from the left, and every page gets the full canvas. `固定菜单`
- * restores the previous always-visible column.
+ * Sidebar navigation.
+ * Every page except the portal keeps the menu in its own grid column, so
+ * opening it pushes the content instead of covering it. Phones (<= 720px)
+ * fall back to a slide-over drawer, where a column would be unusable.
  * ------------------------------------------------------------------------- */
 :root .app-shell { grid-template-columns: minmax(0, 1fr); }
+:root .app-shell.menu-open:not(.nas-native-content) { grid-template-columns: 218px minmax(0, 1fr); }
 :root .app-shell > .sidebar {
   display: flex;
   flex-direction: column;
-  position: fixed;
-  inset: 0 auto 0 0;
-  z-index: 60;
-  width: min(272px, 84vw);
-  height: 100dvh;
-  padding: 20px 14px 22px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  transform: translateX(-104%);
-  transition: transform .3s cubic-bezier(.22, .61, .36, 1), box-shadow .3s ease;
-  box-shadow: none;
-}
-:root .app-shell > .sidebar.sidebar-open {
-  transform: none;
-  box-shadow: 26px 0 60px -34px rgba(8, 20, 35, .6);
-}
-/* The desktop shell renders its own tabs, so a pinned menu must not reserve a column there. */
-:root .app-shell.menu-pinned:not(.nas-native-content) { grid-template-columns: 218px minmax(0, 1fr); }
-:root .app-shell.menu-pinned > .sidebar {
   position: sticky;
   top: 0;
   width: auto;
-  transform: none;
-  box-shadow: none;
+  min-width: 0;
+  height: 100dvh;
+  padding: 20px 14px 22px;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
 }
-:root .app-shell .sidebar-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 55;
-  background: rgba(9, 18, 30, .42);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .24s ease;
+:root .app-shell:not(.menu-open) > .sidebar { display: none; }
+:root .app-shell.menu-open > .sidebar { animation: sidebar-in .22s cubic-bezier(.22, .61, .36, 1); }
+@keyframes sidebar-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: none; }
 }
-:root .app-shell .sidebar-backdrop.show { opacity: 1; pointer-events: auto; }
+:root .app-shell .sidebar-backdrop { display: none; }
 :root .app-shell .sidebar-tools {
   display: flex;
   align-items: center;
@@ -839,12 +821,23 @@
   padding-top: 18px;
   border-top: 1px solid rgba(255, 255, 255, .08);
 }
+:root .app-shell .sidebar-tools span { color: #8395a8; font-size: .6875rem; }
+:root .app-shell .sidebar-tools kbd {
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-family: inherit;
+  font-size: .6875rem;
+}
 :root .app-shell .sidebar-tools button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  min-height: 34px;
-  padding: 0 10px;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -852,13 +845,37 @@
   font-size: .75rem;
 }
 :root .app-shell .sidebar-tools button:hover { color: #f1f6fb; background: #2c3846; }
-:root .app-shell .sidebar-tools button.active { color: #dceafb; background: #2f4257; border-color: #47617f; }
-:root .app-shell .sidebar-tools button:last-child { margin-left: auto; }
 :root .app-shell .sidebar > .menu { display: grid; }
 :root .app-shell .mobile-page-select { display: none; }
 :root .app-shell .menu-toggle { display: inline-flex; }
-@media (min-width: 1024px) {
-  :root .app-shell .sidebar-backdrop.show { display: none; }
+
+@media (max-width: 720px) {
+  /* Phones: the menu slides over the content and dims it behind a backdrop. */
+  :root .app-shell.menu-open:not(.nas-native-content),
+  :root .app-shell { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell.menu-open > .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 60;
+    width: min(272px, 84vw);
+    box-shadow: 26px 0 60px -34px rgba(8, 20, 35, .6);
+    animation: sidebar-slide-in .25s cubic-bezier(.22, .61, .36, 1);
+  }
+  @keyframes sidebar-slide-in {
+    from { opacity: .4; transform: translateX(-16%); }
+    to { opacity: 1; transform: none; }
+  }
+  :root .app-shell .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(9, 18, 30, .42);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .24s ease;
+  }
+  :root .app-shell .sidebar-backdrop.show { opacity: 1; pointer-events: auto; }
 }
 
 /* ---------------------------------------------------------------------------

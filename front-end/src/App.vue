@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell" :class="{ 'nas-native-content': native, 'menu-open': menuOpen, 'menu-pinned': menuPinned }">
+  <div class="app-shell" :class="{ 'nas-native-content': native, 'menu-open': menuOpen }">
     <div v-if="!native" class="sidebar-backdrop" :class="{ show: menuOpen }" @click="closeMenu"></div>
     <aside v-if="!native" class="sidebar" :class="{ 'sidebar-open': menuOpen }">
       <div class="brand">
@@ -16,9 +16,7 @@
         </button>
       </nav>
       <div class="sidebar-tools">
-        <button type="button" :class="{ active: menuPinned }" :title="menuPinned ? '取消固定，恢复抽屉' : '固定菜单，常驻显示'" @click="setMenuPinned(!menuPinned)">
-          <Pin :size="15" />{{ menuPinned ? "取消固定" : "固定菜单" }}
-        </button>
+        <span>按 <kbd>m</kbd> 显示或隐藏菜单</span>
         <button type="button" title="收起菜单" @click="closeMenu"><X :size="15" /></button>
       </div>
     </aside>
@@ -1127,7 +1125,6 @@ import {
   Menu,
   Moon,
   MoreHorizontal,
-  Pin,
   Monitor,
   Network,
   Pencil,
@@ -1283,8 +1280,14 @@ const requestError = ref("");
 let requestErrorUrl = "";
 const theme = ref(localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 const DEFAULT_PORTAL_PAGES = ["overview", "docker", "monitor", "history", "system", "navigation"];
-const menuOpen = ref(false);
-const menuPinned = ref(localStorage.getItem("ntl-menu-pinned") === "true");
+// The portal is the only page without the menu; every other page keeps the
+// sidebar in its own grid column so the content is never covered.
+function defaultMenuOpen(view) {
+  if (view === "home") return false;
+  if (typeof window === "undefined") return true;
+  return window.innerWidth > 720;
+}
+const menuOpen = ref(defaultMenuOpen(activeView.value));
 const overview = ref(null);
 const overviewFresh = ref(false);
 const snapshot = ref(null);
@@ -1399,7 +1402,10 @@ let connectionDebounce = null;
 let overviewLoading = false;
 let systemLoading = false;
 let dockerLoading = false;
-const handleResize = () => historyChart?.resize();
+const handleResize = () => {
+  if (window.innerWidth <= 720 && menuOpen.value) closeMenu();
+  historyChart?.resize();
+};
 
 const connFilters = reactive(connectionDefaults());
 
@@ -2427,11 +2433,6 @@ function toggleMenu() {
 function closeMenu() {
   menuOpen.value = false;
 }
-function setMenuPinned(value) {
-  menuPinned.value = Boolean(value);
-  localStorage.setItem("ntl-menu-pinned", menuPinned.value ? "true" : "false");
-  if (menuPinned.value) menuOpen.value = false;
-}
 function handleMenuKeydown(event) {
   if (event.key === "Escape" && menuOpen.value) closeMenu();
   const target = event.target;
@@ -2451,7 +2452,6 @@ function handleMenuKeydown(event) {
 }
 function navigate(view) {
   setView(view);
-  if (!menuPinned.value) closeMenu();
 }
 function setView(view) {
   [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
@@ -2462,6 +2462,7 @@ function setView(view) {
   }
   if (view !== "docker") stopDockerTimer();
   activeView.value = view;
+  menuOpen.value = defaultMenuOpen(view);
   emit('view', view);
   refreshActive();
   startViewTimer();
