@@ -24,7 +24,7 @@
     </aside>
 
     <main class="main">
-      <header v-if="!native" class="topbar">
+      <header v-if="!native" class="topbar" :class="{ quiet: activeView === 'home' }">
         <div>
           <p class="topbar-description">{{ subtitle }}</p>
           <h2>{{ currentTitle }}</h2>
@@ -51,6 +51,30 @@
       <div v-if="requestError" class="request-error" role="alert"><CircleAlert :size="18" /><span>{{ requestError }}</span><button type="button" @click="refreshActive"><RefreshCw :size="15" />重试</button></div>
 
       <NavigationView v-if="activeView === 'navigation'" :repository="bookmarks" :scope="targetName || '此 NAS'" />
+      <section v-if="activeView === 'home'" class="view portal">
+        <div class="portal-inner">
+          <div class="portal-brand">
+            <span class="portal-mark"><Activity :size="24" /></span>
+            <h2>NAS Traffic Lens</h2>
+            <p class="portal-status">
+              <span :class="['live-dot', { pending: !overviewIsFresh }]" aria-hidden="true"></span>
+              {{ portalStatusLine }}
+            </p>
+          </div>
+          <div class="portal-cards">
+            <button v-for="card in portalCards" :key="card.key" class="portal-card" type="button" @click="navigate(card.key)">
+              <span class="portal-card-icon"><component :is="card.icon" :size="22" /></span>
+              <strong>{{ card.label }}</strong>
+              <small>{{ card.meta }}</small>
+            </button>
+          </div>
+          <div class="portal-links">
+            <button v-for="item in portalLinks" :key="item.key" type="button" @click="navigate(item.key)">{{ item.label }}</button>
+          </div>
+          <p class="portal-hint">按 <kbd>m</kbd> 打开全部页面</p>
+        </div>
+      </section>
+
       <section v-if="activeView === 'overview'" class="view">
         <slot name="overview" :summary="summary" :overview="overview" :connections="connectionSummary" :connection-source="connectionSourceLabel" :fresh="overviewIsFresh" :updated="lastUpdated" :open-connections="openConnections" :navigate="setView" :analyze="() => analyzeWithAi('overview')">
         <section class="dashboard-board">
@@ -97,27 +121,6 @@
             <span><Network :size="14" /> 活跃网卡 {{ summary.interfaces?.up || 0 }} / {{ summary.interfaces?.total || 0 }}</span>
             <span><Server :size="14" /> 抓包接口 {{ (overview?.captureInterfaces || []).join("、") || "-" }}</span>
             <span><ShieldCheck :size="14" /> 数据刷新 {{ overviewIsFresh ? "正常" : "等待" }}</span>
-          </div>
-        </section>
-        <section class="workbench">
-          <div class="workbench-head">
-            <div>
-              <h3>工作台</h3>
-              <p>常用入口，点击进入对应页面</p>
-            </div>
-            <button class="workbench-menu-button" type="button" @click="toggleMenu">
-              <Menu :size="16" />全部页面
-            </button>
-          </div>
-          <div class="workbench-tiles">
-            <button v-for="tile in workbenchTiles" :key="tile.key" class="workbench-tile" type="button" @click="navigate(tile.key)">
-              <span class="workbench-tile-icon"><component :is="tile.icon" :size="19" /></span>
-              <span class="workbench-tile-copy">
-                <strong>{{ tile.label }}</strong>
-                <small>{{ tile.meta }}</small>
-              </span>
-              <ArrowRight :size="16" class="workbench-tile-arrow" />
-            </button>
           </div>
         </section>
         <div class="metric-grid dashboard-metric-grid">
@@ -1069,6 +1072,7 @@ import {
   HardDrive,
   HelpCircle,
   History,
+  House,
   ImagePlus,
   Menu,
   Moon,
@@ -1123,6 +1127,7 @@ const InfoItem = defineComponent({
 });
 
 const navItems = [
+  { key: "home", label: "首页", icon: House },
   { key: "navigation", label: "导航", icon: Compass },
   { key: "overview", label: "概览", icon: Activity },
   { key: "interfaces", label: "网卡", icon: Network },
@@ -1211,7 +1216,7 @@ const historyPeriods = [
 
 const props = defineProps({ native: Boolean, view: String, targetName: String, themeMode: String });
 const emit = defineEmits(['view', 'toast']);
-const activeView = ref(props.view || "overview");
+const activeView = ref(props.view || (props.native ? "overview" : "home"));
 watch(() => props.view, view => { if (view && view !== activeView.value) setView(view); });
 watch(() => props.native, () => nextTick(handleResize));
 defineExpose({ refresh: refreshActive });
@@ -1344,7 +1349,7 @@ const handleResize = () => historyChart?.resize();
 
 const connFilters = reactive(connectionDefaults());
 
-const currentTitle = computed(() => navItems.find((item) => item.key === activeView.value)?.label || "概览");
+const currentTitle = computed(() => navItems.find((item) => item.key === activeView.value)?.label || "首页");
 const subtitle = computed(() => (overview.value?.timestamp ? `版本 ${overview.value.version || "-"} · ${formatDate(overview.value.timestamp)}` : "正在连接采集器..."));
 const summary = computed(() => overview.value?.summary || {});
 const connectionSummary = computed(() => overview.value?.connectionSummary || {});
@@ -1396,16 +1401,29 @@ const dockerContainerOptions = computed(() => (dockerData.value?.containers || [
 }));
 const temperatureGroups = computed(() => system.value?.temperatureGroups || []);
 const systemFans = computed(() => system.value?.fans || []);
-const workbenchTiles = computed(() => [
+const portalCards = computed(() => [
+  { key: "overview", label: "流量总览", meta: "实时速率与公网累计", icon: Activity },
   { key: "docker", label: "Docker", meta: overview.value?.containerStatus?.enabled ? `${overview.value?.containerStatus?.count ?? 0} 个容器` : "容器与端口", icon: Server },
-  { key: "monitor", label: "监控中心", meta: "规则与上传异常", icon: Activity },
-  { key: "history", label: "历史统计", meta: "今日 / 本周 / 本月流量", icon: History },
+  { key: "monitor", label: "监控中心", meta: "规则与上传异常", icon: Bell },
+  { key: "history", label: "历史统计", meta: "今日 / 本周 / 本月", icon: History },
   { key: "system", label: "系统状态", meta: "资源、温度与 GPU", icon: Cpu },
-  { key: "processes", label: "进程排行", meta: "按流量归因", icon: Database },
   { key: "navigation", label: "服务导航", meta: "常用服务入口", icon: Compass },
-  { key: "ai", label: "AI 中心", meta: "问答与设置助手", icon: Sparkles },
-  { key: "settings", label: "设置", meta: "运行参数与通知", icon: Settings },
 ]);
+const portalLinks = computed(() => [
+  { key: "interfaces", label: "网卡" },
+  { key: "processes", label: "进程" },
+  { key: "ai", label: "AI 中心" },
+  { key: "settings", label: "设置" },
+]);
+const portalStatusLine = computed(() => {
+  const wan = summary.value.wan || {};
+  const parts = [overviewStatusLabel.value];
+  if (overview.value) {
+    parts.push(`↓${formatRate(wan.rxBps)} ↑${formatRate(wan.txBps)}`);
+    parts.push(`${connectionSummary.value.wan || 0} 个公网连接`);
+  }
+  return parts.join(" · ");
+});
 const gpuSummary = computed(() => {
   const gpus = system.value?.gpu || [];
   if (!gpus.length) return "未检测到或未映射 /dev/dri";
@@ -2302,7 +2320,7 @@ function setView(view) {
 }
 async function refreshActive() {
   try {
-  if (activeView.value === "overview") await refreshOverview();
+  if (activeView.value === "overview" || activeView.value === "home") await refreshOverview();
   if (activeView.value === "interfaces") await refreshInterfaces();
   if (activeView.value === "history") await refreshHistory();
   if (activeView.value === "processes") await refreshProcesses();
@@ -2320,7 +2338,7 @@ function startViewTimer() {
   if (disposed) return;
   viewTimer?.stop();
   const view = activeView.value;
-  const delay = { overview: 2000, interfaces: 2000, processes: 10000, system: 5000, history: 30000 }[view];
+  const delay = { home: 2000, overview: 2000, interfaces: 2000, processes: 10000, system: 5000, history: 30000 }[view];
   if (!delay) return;
   viewTimer = createPollLoop(async () => {
     if (historyRequest.busy || processRequest.busy || interfaceRequest.busy) return;

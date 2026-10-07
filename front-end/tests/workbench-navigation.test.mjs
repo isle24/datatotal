@@ -38,18 +38,27 @@ test("drawer styles keep the content full width and support a pinned menu", () =
   assert.match(theme, /\.app-shell \.mobile-page-select \{ display: none; \}/);
 });
 
-test("home page is a workbench with live launcher tiles", () => {
-  assert.match(source, /const workbenchTiles = computed/);
-  assert.match(source, /class="workbench"/);
-  assert.match(source, /class="workbench-head"/);
-  assert.match(source, /class="workbench-tiles"/);
-  assert.match(source, /v-for="tile in workbenchTiles"/);
-  assert.match(source, /@click="navigate\(tile\.key\)"/);
-  assert.match(source, /class="workbench-menu-button"/);
-  for (const key of ["docker", "monitor", "history", "system", "processes", "navigation", "ai", "settings"]) {
-    assert.match(source, new RegExp(`key: "${key}", label:`), `workbench needs a ${key} tile`);
+test("home page is a clean portal launcher", () => {
+  assert.match(source, /const portalCards = computed/);
+  assert.match(source, /const portalLinks = computed/);
+  assert.match(source, /const portalStatusLine = computed/);
+  assert.match(source, /class="view portal"/);
+  assert.match(source, /class="portal-cards"/);
+  assert.match(source, /v-for="card in portalCards"/);
+  assert.match(source, /v-for="item in portalLinks"/);
+  assert.match(source, /@click="navigate\(card\.key\)"/);
+  assert.match(source, /:class="\{ quiet: activeView === 'home' \}"/);
+  // The portal is the browser default, while the desktop shell keeps its own view.
+  assert.match(source, /const activeView = ref\(props\.view \|\| \(props\.native \? "overview" : "home"\)\)/);
+  assert.match(source, /key: "home", label: "首页"/);
+  // The dashboard tiles moved out: the overview page keeps only the readout.
+  assert.doesNotMatch(source, /workbenchTiles/);
+  assert.doesNotMatch(source, /class="workbench"/);
+  for (const key of ["overview", "docker", "monitor", "history", "system", "navigation"]) {
+    assert.match(source, new RegExp(`key: "${key}", label:`), `portal needs a ${key} card`);
   }
-  assert.match(theme, /\.app-shell \.workbench-tiles \{/);
-  assert.match(theme, /\.app-shell \.workbench-tile:hover \{/);
-  assert.match(theme, /\.app-shell \.workbench-tile-icon \{/);
+  assert.match(theme, /\.app-shell \.portal-card:hover/);
+  assert.match(theme, /\.app-shell \.portal-links button/);
+  assert.match(theme, /\.app-shell \.topbar\.quiet \.top-actions \{ opacity: \.16;/);
+  assert.match(theme, /\.topbar\.quiet:focus-within \.top-actions \{ opacity: 1; \}/);
 });
