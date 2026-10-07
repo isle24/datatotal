@@ -16,7 +16,27 @@ export const targets = {
   "darwin-x86_64": "macOS-x64",
   "windows-x86_64": "Windows-x64",
 };
-export function manifest(version, files, now = new Date().toISOString()) {
+export function releaseNotes(version) {
+  const override = (process.env.DESKTOP_UPDATE_NOTES || "").trim();
+  if (override) return override;
+  try {
+    const first = readFileSync(join(root, "doc/desktop-release-notes.md"), "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    if (first && first.includes(version)) return first;
+  } catch {
+    // Fall through to the generic note.
+  }
+  return `Traffic Lens ${version} 桌面预览版。`;
+}
+
+export function manifest(
+  version,
+  files,
+  now = new Date().toISOString(),
+  notes = releaseNotes(version),
+) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw Error("Invalid desktop version");
   const platforms = {};
   for (const [target, name] of Object.entries(targets)) {
@@ -37,7 +57,7 @@ export function manifest(version, files, now = new Date().toISOString()) {
   }
   return {
     version,
-    notes: "NAS 客户端/网页布局、服务导航和签名自动更新。",
+    notes,
     pub_date: now,
     platforms,
   };
