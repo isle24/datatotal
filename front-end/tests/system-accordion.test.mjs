@@ -15,8 +15,11 @@ import {
   fanSpeedBarWidth,
 } from "../src/utils/system-cards.js";
 
-const source = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
-const theme = await readFile(new URL("../src/styles/console-theme.css", import.meta.url), "utf8");
+// Git may check files out with CRLF on Windows; contracts are written against LF.
+const readSource = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g, "\n");
+
+const source = await readSource(new URL("../src/App.vue", import.meta.url));
+const theme = await readSource(new URL("../src/styles/console-theme.css", import.meta.url));
 
 const nvme = {
   name: "NVMe 1",

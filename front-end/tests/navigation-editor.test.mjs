@@ -6,7 +6,10 @@ import * as vue from "vue";
 import * as icons from "@lucide/vue";
 import * as navigation from "../src/utils/navigation.js";
 
-const source = await readFile(new URL("../src/components/NavigationView.vue", import.meta.url), "utf8");
+// Git may check files out with CRLF on Windows; contracts are written against LF.
+const readSource = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g, "\n");
+
+const source = await readSource(new URL("../src/components/NavigationView.vue", import.meta.url));
 const { descriptor } = parse(source);
 const compiled = compileScript(descriptor, { id: "navigation-editor-test" });
 const bindings = { ...vue, ...icons, ...navigation, onMounted() {}, onUnmounted() {} };

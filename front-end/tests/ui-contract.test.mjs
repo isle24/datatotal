@@ -3,9 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { renderMarkdown, safeMarkdownUrl } from "../src/utils/markdown.js";
 
-const source = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
-const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
-const markdownSource = await readFile(new URL("../src/utils/markdown.js", import.meta.url), "utf8");
+// Git may check files out with CRLF on Windows; contracts are written against LF.
+const readSource = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g, "\n");
+
+const source = await readSource(new URL("../src/App.vue", import.meta.url));
+const styles = await readSource(new URL("../src/styles.css", import.meta.url));
+const markdownSource = await readSource(new URL("../src/utils/markdown.js", import.meta.url));
 
 test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(source, /class="dashboard-board"/);

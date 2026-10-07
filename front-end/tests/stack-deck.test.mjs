@@ -3,10 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { StackMotion, prefersReducedMotion } from "../src/utils/stack-motion.js";
 
-const source = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
-const theme = await readFile(new URL("../src/styles/console-theme.css", import.meta.url), "utf8");
-const base = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
-const desktop = await readFile(new URL("../src/desktop/desktop.css", import.meta.url), "utf8");
+// Git may check files out with CRLF on Windows; contracts are written against LF.
+const readSource = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g, "\n");
+
+const source = await readSource(new URL("../src/App.vue", import.meta.url));
+const theme = await readSource(new URL("../src/styles/console-theme.css", import.meta.url));
+const base = await readSource(new URL("../src/styles.css", import.meta.url));
+const desktop = await readSource(new URL("../src/desktop/desktop.css", import.meta.url));
 
 function fakeCard(index) {
   const properties = new Map();
