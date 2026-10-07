@@ -1,6 +1,7 @@
 <template>
-  <div class="app-shell" :class="{ 'nas-native-content': native }">
-    <aside v-if="!native" class="sidebar">
+  <div class="app-shell" :class="{ 'nas-native-content': native, 'menu-open': menuOpen, 'menu-pinned': menuPinned }">
+    <div v-if="!native" class="sidebar-backdrop" :class="{ show: menuOpen }" @click="closeMenu"></div>
+    <aside v-if="!native" class="sidebar" :class="{ 'sidebar-open': menuOpen }">
       <div class="brand">
         <div class="brand-mark"><Activity :size="22" /></div>
         <div>
@@ -9,12 +10,17 @@
         </div>
       </div>
       <nav class="menu">
-        <button v-for="item in navItems" :key="item.key" :class="{ active: activeView === item.key }" @click="setView(item.key)">
+        <button v-for="item in navItems" :key="item.key" :class="{ active: activeView === item.key }" @click="navigate(item.key)">
           <component :is="item.icon" :size="18" />
           <span>{{ item.label }}</span>
         </button>
       </nav>
-      <label class="mobile-page-select">切换页面<select :value="activeView" @change="setView($event.target.value)"><option v-for="item in navItems" :key="item.key" :value="item.key">{{ item.label }}</option></select></label>
+      <div class="sidebar-tools">
+        <button type="button" :class="{ active: menuPinned }" :title="menuPinned ? '取消固定，恢复抽屉' : '固定菜单，常驻显示'" @click="setMenuPinned(!menuPinned)">
+          <Pin :size="15" />{{ menuPinned ? "取消固定" : "固定菜单" }}
+        </button>
+        <button type="button" title="收起菜单" @click="closeMenu"><X :size="15" /></button>
+      </div>
     </aside>
 
     <main class="main">
@@ -25,6 +31,10 @@
         </div>
         <div class="top-actions">
           <span v-if="toast" class="toast" role="status" aria-live="polite">{{ toast }}</span>
+          <button class="icon-button menu-toggle" type="button" :aria-expanded="menuOpen" :title="menuOpen ? '收起菜单（m）' : '打开菜单（m）'" @click="toggleMenu">
+            <X v-if="menuOpen" :size="18" />
+            <Menu v-else :size="18" />
+          </button>
           <button class="icon-button" type="button" :title="theme === 'dark' ? '切换浅色模式' : '切换暗黑模式'" @click="toggleTheme">
             <Sun v-if="theme === 'dark'" :size="18" />
             <Moon v-else :size="18" />
@@ -87,6 +97,27 @@
             <span><Network :size="14" /> 活跃网卡 {{ summary.interfaces?.up || 0 }} / {{ summary.interfaces?.total || 0 }}</span>
             <span><Server :size="14" /> 抓包接口 {{ (overview?.captureInterfaces || []).join("、") || "-" }}</span>
             <span><ShieldCheck :size="14" /> 数据刷新 {{ overviewIsFresh ? "正常" : "等待" }}</span>
+          </div>
+        </section>
+        <section class="workbench">
+          <div class="workbench-head">
+            <div>
+              <h3>工作台</h3>
+              <p>常用入口，点击进入对应页面</p>
+            </div>
+            <button class="workbench-menu-button" type="button" @click="toggleMenu">
+              <Menu :size="16" />全部页面
+            </button>
+          </div>
+          <div class="workbench-tiles">
+            <button v-for="tile in workbenchTiles" :key="tile.key" class="workbench-tile" type="button" @click="navigate(tile.key)">
+              <span class="workbench-tile-icon"><component :is="tile.icon" :size="19" /></span>
+              <span class="workbench-tile-copy">
+                <strong>{{ tile.label }}</strong>
+                <small>{{ tile.meta }}</small>
+              </span>
+              <ArrowRight :size="16" class="workbench-tile-arrow" />
+            </button>
           </div>
         </section>
         <div class="metric-grid dashboard-metric-grid">
@@ -1039,7 +1070,9 @@ import {
   HelpCircle,
   History,
   ImagePlus,
+  Menu,
   Moon,
+  Pin,
   Monitor,
   Network,
   Pencil,
@@ -1191,6 +1224,8 @@ watch(toast, value => emit('toast', value));
 const requestError = ref("");
 let requestErrorUrl = "";
 const theme = ref(localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+const menuOpen = ref(false);
+const menuPinned = ref(localStorage.getItem("ntl-menu-pinned") === "true");
 const overview = ref(null);
 const overviewFresh = ref(false);
 const snapshot = ref(null);
@@ -1361,6 +1396,16 @@ const dockerContainerOptions = computed(() => (dockerData.value?.containers || [
 }));
 const temperatureGroups = computed(() => system.value?.temperatureGroups || []);
 const systemFans = computed(() => system.value?.fans || []);
+const workbenchTiles = computed(() => [
+  { key: "docker", label: "Docker", meta: overview.value?.containerStatus?.enabled ? `${overview.value?.containerStatus?.count ?? 0} 个容器` : "容器与端口", icon: Server },
+  { key: "monitor", label: "监控中心", meta: "规则与上传异常", icon: Activity },
+  { key: "history", label: "历史统计", meta: "今日 / 本周 / 本月流量", icon: History },
+  { key: "system", label: "系统状态", meta: "资源、温度与 GPU", icon: Cpu },
+  { key: "processes", label: "进程排行", meta: "按流量归因", icon: Database },
+  { key: "navigation", label: "服务导航", meta: "常用服务入口", icon: Compass },
+  { key: "ai", label: "AI 中心", meta: "问答与设置助手", icon: Sparkles },
+  { key: "settings", label: "设置", meta: "运行参数与通知", icon: Settings },
+]);
 const gpuSummary = computed(() => {
   const gpus = system.value?.gpu || [];
   if (!gpus.length) return "未检测到或未映射 /dev/dri";
@@ -2215,6 +2260,32 @@ function renderHistoryChart() {
   }, true);
   requestAnimationFrame(() => historyChart?.resize());
 }
+function toggleMenu() {
+  menuOpen.value = !menuOpen.value;
+}
+function closeMenu() {
+  menuOpen.value = false;
+}
+function setMenuPinned(value) {
+  menuPinned.value = Boolean(value);
+  localStorage.setItem("ntl-menu-pinned", menuPinned.value ? "true" : "false");
+  if (menuPinned.value) menuOpen.value = false;
+}
+function handleMenuKeydown(event) {
+  if (event.key === "Escape" && menuOpen.value) closeMenu();
+  if (event.key.toLowerCase() === "m" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const target = event.target;
+    const typing = target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+    if (!typing && !target?.isContentEditable) {
+      event.preventDefault();
+      toggleMenu();
+    }
+  }
+}
+function navigate(view) {
+  setView(view);
+  if (!menuPinned.value) closeMenu();
+}
 function setView(view) {
   [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
   requestError.value = "";
@@ -2646,12 +2717,14 @@ onMounted(async () => {
   startViewTimer();
   document.addEventListener("visibilitychange", handleVisibility);
   window.addEventListener("resize", handleResize);
+  window.addEventListener("keydown", handleMenuKeydown);
 });
 onUnmounted(() => {
   disposed = true;
   [viewTimer, connectionTimer, dockerTimer].forEach((timer) => timer?.stop());
   [historyRequest, connectionRequest, processRequest, interfaceRequest].forEach((request) => request.cancel());
   document.removeEventListener("visibilitychange", handleVisibility);
+  window.removeEventListener("keydown", handleMenuKeydown);
   window.clearTimeout(showToast.timer);
   if (connectionDebounce) clearTimeout(connectionDebounce);
   window.removeEventListener("resize", handleResize);

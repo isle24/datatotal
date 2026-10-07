@@ -785,3 +785,147 @@
   :root .app-shell .settings-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; gap: 4px; }
   :root .app-shell .settings-tab { padding: 10px 6px; min-width: 0; white-space: normal; }
 }
+
+/* ---------------------------------------------------------------------------
+ * Drawer navigation.
+ * The menu no longer holds a permanent grid column: it slides in over the
+ * content from the left, and every page gets the full canvas. `固定菜单`
+ * restores the previous always-visible column.
+ * ------------------------------------------------------------------------- */
+:root .app-shell { grid-template-columns: minmax(0, 1fr); }
+:root .app-shell > .sidebar {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 60;
+  width: min(272px, 84vw);
+  height: 100dvh;
+  padding: 20px 14px 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform: translateX(-104%);
+  transition: transform .3s cubic-bezier(.22, .61, .36, 1), box-shadow .3s ease;
+  box-shadow: none;
+}
+:root .app-shell > .sidebar.sidebar-open {
+  transform: none;
+  box-shadow: 26px 0 60px -34px rgba(8, 20, 35, .6);
+}
+/* The desktop shell renders its own tabs, so a pinned menu must not reserve a column there. */
+:root .app-shell.menu-pinned:not(.nas-native-content) { grid-template-columns: 218px minmax(0, 1fr); }
+:root .app-shell.menu-pinned > .sidebar {
+  position: sticky;
+  top: 0;
+  width: auto;
+  transform: none;
+  box-shadow: none;
+}
+:root .app-shell .sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(9, 18, 30, .42);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .24s ease;
+}
+:root .app-shell .sidebar-backdrop.show { opacity: 1; pointer-events: auto; }
+:root .app-shell .sidebar-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+}
+:root .app-shell .sidebar-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #b3c0cf;
+  font-size: .75rem;
+}
+:root .app-shell .sidebar-tools button:hover { color: #f1f6fb; background: #2c3846; }
+:root .app-shell .sidebar-tools button.active { color: #dceafb; background: #2f4257; border-color: #47617f; }
+:root .app-shell .sidebar-tools button:last-child { margin-left: auto; }
+:root .app-shell .sidebar > .menu { display: grid; }
+:root .app-shell .mobile-page-select { display: none; }
+:root .app-shell .menu-toggle { display: inline-flex; }
+@media (min-width: 1024px) {
+  :root .app-shell .sidebar-backdrop.show { display: none; }
+}
+
+/* ---------------------------------------------------------------------------
+ * Workbench: the launchpad that replaces the old dashboard-only home page.
+ * ------------------------------------------------------------------------- */
+:root .app-shell .workbench { margin-top: 22px; }
+:root .app-shell .workbench-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+:root .app-shell .workbench-head h3 { margin: 0; color: var(--text); font-size: 1rem; font-weight: 650; }
+:root .app-shell .workbench-head p { margin: 5px 0 0; color: var(--muted); font-size: .75rem; }
+:root .app-shell .workbench-menu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--control-line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: .8125rem;
+  white-space: nowrap;
+}
+:root .app-shell .workbench-menu-button:hover { border-color: var(--accent); color: var(--accent); }
+:root .app-shell .workbench-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  gap: 10px;
+}
+:root .app-shell .workbench-tile {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 74px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 97%, var(--accent) 3%), var(--panel));
+  text-align: left;
+  transition: transform .2s ease, border-color .2s ease, box-shadow .24s ease;
+}
+:root .app-shell .workbench-tile:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: 0 18px 32px -26px rgba(15, 30, 51, .55);
+}
+:root .app-shell .workbench-tile-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--accent);
+}
+:root .app-shell .workbench-tile-copy { display: grid; gap: 4px; min-width: 0; }
+:root .app-shell .workbench-tile-copy strong { color: var(--text); font-size: .875rem; font-weight: 600; }
+:root .app-shell .workbench-tile-copy small { color: var(--muted); font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root .app-shell .workbench-tile-arrow { color: var(--muted); transition: transform .2s ease, color .2s ease; }
+:root .app-shell .workbench-tile:hover .workbench-tile-arrow { color: var(--accent); transform: translateX(3px); }
+@media (max-width: 720px) {
+  :root .app-shell .workbench-tiles { grid-template-columns: minmax(0, 1fr); }
+  :root .app-shell .workbench-head { align-items: flex-start; flex-direction: column; }
+}
