@@ -1075,7 +1075,15 @@
   overflow: hidden;
 }
 :root .app-shell .portal-service-logo img { width: 26px; height: 26px; object-fit: contain; }
-:root .app-shell .portal-service strong { color: var(--text); font-size: .875rem; font-weight: 600; }
+:root .app-shell .portal-service strong {
+  color: var(--text);
+  font-size: .875rem;
+  font-weight: 600;
+  /* Keep every card the same height: long names ellipsize instead of wrapping. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 :root .app-shell .portal-service small {
   color: var(--muted);
   font-size: .75rem;
@@ -1162,3 +1170,197 @@
   :root .app-shell .portal-search { min-height: 44px; }
   :root .app-shell .topbar.quiet .top-actions { opacity: .22; }
 }
+
+/* ---------------------------------------------------------------------------
+ * Premium pass (redesign audit).
+ * Typography with a real typeface and tabular figures, one lighting direction,
+ * a single accent for decoration, press feedback on every control, and a
+ * max-width container so wide screens do not stretch edge to edge.
+ * ------------------------------------------------------------------------- */
+
+/* Typography ------------------------------------------------------------- */
+:root .app-shell {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+:root .app-shell :is(
+  .metric-card strong, .system-card-metric b, .temp-value, .accel-value,
+  .dashboard-total-block strong, .dashboard-rate-row em, .info-item strong,
+  .metric-value, .stat strong, .ds-metric strong, .badge, .pill, .accel-badge,
+  .system-card-metric small, .temp-reading b
+) {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+:root .app-shell :is(.metric-card strong, .dashboard-total-block strong) {
+  letter-spacing: -.015em;
+}
+:root .app-shell :is(.card h3, .system-card-copy strong, .portal-service strong, .metric-card small) {
+  text-wrap: balance;
+}
+:root .app-shell :is(.system-card-note, .portal-status, .portal-card small, .settings-hint) {
+  text-wrap: pretty;
+}
+/* Labels read as labels: small, spaced, quiet. */
+:root .app-shell :is(.dashboard-board-title h3, .portal-brand h2, .topbar h2) {
+  letter-spacing: -.02em;
+}
+
+/* Surface depth: one light source, tinted shadows, faint grain ------------- */
+:root .app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 60%),
+    radial-gradient(80% 50% at 100% 0%, color-mix(in srgb, var(--violet) 5%, transparent), transparent 65%);
+}
+:root .app-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: .035;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='160' height='160' filter='url(%23g)'/></svg>");
+}
+:root[data-theme="dark"] .app-shell::after { opacity: .05; }
+:root .app-shell > .sidebar,
+:root .app-shell > .main { position: relative; z-index: 2; }
+
+/* Layout: keep content readable on ultra-wide screens -------------------- */
+:root .app-shell > .main > :is(.topbar, .view) {
+  width: 100%;
+  max-width: 1480px;
+  margin-inline: auto;
+}
+/* Optical balance: cards breathe a little more at the bottom. */
+:root .app-shell :is(.card, .system-card, .docker-card, .metric-card, .monitor-status-card) {
+  --card-pad-bottom: 2px;
+}
+:root .app-shell .card > :last-child,
+:root .app-shell .metric-card > :last-child { padding-bottom: var(--card-pad-bottom, 0); }
+
+/* Interaction: press feedback and smooth focus transitions ---------------- */
+:root .app-shell :is(button, [role="button"], summary, .menu button, .settings-tab, .portal-links button):not(:disabled) {
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease,
+    box-shadow .2s ease, transform .16s cubic-bezier(.22, .61, .36, 1), opacity .18s ease;
+}
+:root .app-shell :is(button, [role="button"]):not(:disabled):active {
+  transform: translateY(1px) scale(.994);
+}
+:root .app-shell :is(.portal-service, .portal-card, .metric-card, .system-card-trigger, .workbench-tile):active {
+  transform: translateY(0) scale(.997);
+}
+:root .app-shell :focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: 2px;
+}
+
+/* Skip link for keyboard users ------------------------------------------- */
+:root .app-shell .skip-link {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  z-index: 80;
+  transform: translate(-50%, -160%);
+  padding: 9px 16px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: .8125rem;
+  transition: transform .18s ease;
+}
+:root .app-shell .skip-link:focus { transform: translate(-50%, 0); }
+
+/* Skeleton loaders replace bare "loading" text --------------------------- */
+:root .app-shell .skeleton {
+  border-radius: var(--radius-lg);
+  background: linear-gradient(
+    100deg,
+    var(--panel-soft) 28%,
+    color-mix(in srgb, var(--panel-soft) 55%, var(--panel)) 42%,
+    var(--panel-soft) 56%
+  );
+  background-size: 320% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+:root .app-shell .skeleton-service { min-height: 68px; }
+@keyframes skeleton-shimmer {
+  from { background-position: 140% 0; }
+  to { background-position: -40% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root .app-shell .skeleton { animation: none; }
+}
+
+/* Accent discipline: one brand accent for decoration, semantic colours only
+   where they carry meaning (orange = upload, red = alert). */
+:root .app-shell .metric-card.accent-muted { border-left-color: var(--line); }
+:root .app-shell .metric-card.accent-muted > svg,
+:root .app-shell .metric-card.accent-muted :is(small, .metric-label) { color: var(--muted); }
+:root .app-shell .metric-card.accent-cyan { border-left-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+:root .app-shell .metric-card {
+  border-radius: var(--radius-lg);
+  padding: 16px 18px 18px;
+}
+:root .app-shell .metric-card strong {
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+/* ---------------------------------------------------------------------------
+ * Second pass: surfaces, empty states, vertical rhythm.
+ * ------------------------------------------------------------------------- */
+:root .app-shell :is(.card, .metric-card) {
+  border-color: color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 1px 2px rgba(15, 30, 51, .04),
+    0 16px 34px -28px rgba(15, 30, 51, .42);
+}
+:root[data-theme="dark"] .app-shell :is(.card, .metric-card) {
+  border-color: color-mix(in srgb, var(--line) 85%, transparent);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, .32),
+    0 20px 40px -30px rgba(0, 0, 0, .6);
+}
+:root .app-shell .metric-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow:
+    0 1px 2px rgba(15, 30, 51, .05),
+    0 22px 40px -30px rgba(15, 30, 51, .5);
+}
+:root .app-shell .view { gap: 26px; }
+:root .app-shell .grid.two { gap: 26px; }
+
+/* Composed empty states instead of one line of grey text. */
+:root .app-shell .empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 30px 20px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--panel-soft) 55%, transparent);
+  color: var(--muted);
+  font-size: .8125rem;
+  line-height: 1.6;
+  text-align: center;
+  text-wrap: pretty;
+}
+:root .app-shell .empty::before {
+  content: "";
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px dashed color-mix(in srgb, var(--muted) 55%, transparent);
+}
+:root .app-shell .empty.compact { padding: 14px 16px; gap: 6px; }
+:root .app-shell .empty.card-empty { background: transparent; }
+:root .app-shell .empty button { margin-top: 2px; }

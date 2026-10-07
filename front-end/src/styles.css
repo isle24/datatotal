@@ -1,5 +1,26 @@
+/* Self-hosted Latin variable font: the NAS may have no internet access, so no CDN.
+   CJK text keeps falling back to the system stack. */
+@font-face {
+  font-family: "Geist";
+  src: url("./assets/fonts/geist-latin.woff2") format("woff2-variations");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
 :root {
   color-scheme: light;
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  /* One radius scale, tighter inside softer containers. */
+  --radius-xl: 18px;
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 7px;
   --bg: #f4f6f8;
   --side: #101827;
   --panel: #ffffff;
@@ -36,11 +57,13 @@
 
 * { box-sizing: border-box; }
 html, body, #app { min-height: 100%; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
 }
 button, input, select, textarea { font: inherit; }
 button {

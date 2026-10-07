@@ -1,5 +1,6 @@
 <template>
   <div class="app-shell" :class="{ 'nas-native-content': native, 'menu-open': menuOpen }">
+    <a v-if="!native" class="skip-link" href="#main">跳到主要内容</a>
     <div v-if="!native" class="sidebar-backdrop" :class="{ show: menuOpen }" @click="closeMenu"></div>
     <aside v-if="!native" class="sidebar" :class="{ 'sidebar-open': menuOpen }">
       <div class="brand">
@@ -21,7 +22,7 @@
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main" id="main">
       <header v-if="!native" class="topbar" :class="{ quiet: activeView === 'home' }">
         <div>
           <p class="topbar-description">{{ subtitle }}</p>
@@ -97,7 +98,9 @@
           </div>
           <p v-else-if="portalSearching" class="portal-empty">没有匹配的服务，页面入口见下方</p>
           <p v-else-if="portalError" class="portal-empty">{{ portalError }}</p>
-          <p v-else-if="portalLoading" class="portal-empty">正在加载服务…</p>
+          <div v-else-if="portalLoading" class="portal-services" aria-hidden="true">
+            <span v-for="index in 6" :key="`skeleton-${index}`" class="skeleton skeleton-service"></span>
+          </div>
           <button v-else class="portal-add" type="button" @click="navigate('navigation')"><Plus :size="16" />添加常用服务</button>
 
           <div class="portal-links">
@@ -168,7 +171,7 @@
           <MetricCard title="内网实时上行" accent="cyan" :value="formatRate(summary.lan?.txBps)">
             <ArrowUp :size="18" />
           </MetricCard>
-          <MetricCard title="公网连接数" accent="red" :value="`${connectionSummary.wan || 0}`" @click="openWanConnections">
+          <MetricCard title="公网连接数" accent="blue" :value="`${connectionSummary.wan || 0}`" @click="openWanConnections">
             <Network :size="18" />
           </MetricCard>
         </div>
@@ -310,7 +313,7 @@
           <MetricCard title="CPU" accent="blue" :value="`${system?.cpu?.percent ?? 0}%`"><Cpu :size="18" /></MetricCard>
           <MetricCard title="内存" accent="cyan" :value="`${system?.memory?.percent ?? 0}%`"><Server :size="18" /></MetricCard>
           <MetricCard title="磁盘" accent="orange" :value="`${system?.disk?.percent ?? 0}%`"><HardDrive :size="18" /></MetricCard>
-          <MetricCard title="运行时间" accent="violet" :value="formatDuration(system?.uptimeSeconds)"><Monitor :size="18" /></MetricCard>
+          <MetricCard title="运行时间" accent="muted" :value="formatDuration(system?.uptimeSeconds)"><Monitor :size="18" /></MetricCard>
         </div>
         <div class="grid two">
           <section class="card">
