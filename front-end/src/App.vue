@@ -659,6 +659,52 @@
             <button v-if="!(aiForm.enabled && aiForm.keyConfigured)" type="button" @click="setView('settings')"><Settings :size="15" />去设置</button>
           </div>
         </section>
+        <section class="card agent-panel">
+          <CardHead title="运维助手" :meta="agentEnabled ? `只读 · ${agentTools.length} 个查询工具` : '需要先在设置里启用 AI'" />
+          <div class="agent-body">
+            <form class="agent-ask" @submit.prevent="askAgent()">
+              <input
+                v-model="agentQuestion"
+                type="text"
+                maxlength="500"
+                autocomplete="off"
+                placeholder="用一句话提问，例如：今天哪个进程上传最多"
+                :disabled="agentLoading"
+                aria-label="运维助手提问"
+              />
+              <button type="submit" :disabled="agentLoading || !agentQuestion.trim()">
+                <Sparkles :size="15" />{{ agentLoading ? "查询中" : "查询" }}
+              </button>
+            </form>
+            <div class="agent-chips">
+              <button v-for="question in agentSuggestions" :key="question" type="button" :disabled="agentLoading" @click="askAgent(question)">
+                {{ question }}
+              </button>
+            </div>
+
+            <p v-if="agentError" class="agent-error" role="alert">{{ agentError }}</p>
+
+            <article v-if="agentAnswer" class="agent-answer-card">
+              <p class="agent-answer-text">{{ agentAnswer.answer || "已取到数据，但模型没有生成解读。" }}</p>
+              <p class="agent-trace">
+                调用 {{ agentToolLabel(agentAnswer.tool) }}
+                <span v-if="agentAnswer.args && Object.keys(agentAnswer.args).length">· {{ JSON.stringify(agentAnswer.args) }}</span>
+                · {{ agentAnswer.durationMs }} ms · {{ agentAnswer.calls }} 次模型调用 · 约 {{ agentAnswer.tokensEstimate }} tokens
+              </p>
+              <details v-if="agentAnswer.data">
+                <summary>查看原始数据</summary>
+                <pre>{{ JSON.stringify(agentAnswer.data, null, 2) }}</pre>
+              </details>
+            </article>
+
+            <p class="agent-usage">
+              <template v-if="agentUsage">今日已问 {{ agentUsage.questions }} 次 · {{ agentUsage.calls }} 次模型调用 · 约 {{ agentUsage.tokensEstimate }} tokens</template>
+              <template v-else>今日尚无查询</template>
+              · 只读工具不会修改任何配置或容器
+            </p>
+          </div>
+        </section>
+
         <section class="ai-chat card">
           <div class="ai-chat-toolbar">
             <div>
@@ -2103,6 +2149,60 @@ async function refreshAiSettings() {
   acceptSettings({ ai: await api('/api/settings/ai') });
 }
 
+const agentQuestion = ref("");
+const agentAnswer = ref(null);
+const agentError = ref("");
+const agentLoading = ref(false);
+const agentTools = ref([]);
+const agentUsage = ref(null);
+const agentEnabled = ref(false);
+const agentSuggestions = [
+  "今天公网上传了多少流量",
+  "最近哪个进程上传最多",
+  "现在有哪些公网连接",
+  "哪个容器占用磁盘最多",
+  "系统温度和 GPU 现在怎么样",
+];
+
+async function refreshAgentTools() {
+  try {
+    const data = await api("/api/agent/tools", { localError: true });
+    agentTools.value = data.tools || [];
+    agentUsage.value = data.usage || null;
+    agentEnabled.value = Boolean(data.enabled && data.configured);
+  } catch (error) {
+    console.warn("load agent tools failed", error);
+  }
+}
+async function askAgent(question) {
+  const text = String(question ?? agentQuestion.value ?? "").trim();
+  if (!text || agentLoading.value) return;
+  agentQuestion.value = text;
+  agentLoading.value = true;
+  agentError.value = "";
+  agentAnswer.value = null;
+  try {
+    const data = await api("/api/agent/query", {
+      localError: true,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: text }),
+    });
+    if (!data.ok) {
+      agentError.value = data.error || "查询失败";
+    } else {
+      agentAnswer.value = data;
+    }
+    if (data.usage) agentUsage.value = data.usage;
+  } catch (error) {
+    agentError.value = error.message || "查询失败";
+  } finally {
+    agentLoading.value = false;
+  }
+}
+function agentToolLabel(tool) {
+  return agentTools.value.find((entry) => entry.name === tool)?.label || tool || "-";
+}
 async function refreshAiHistory(force = false) {
   if (aiHistoryPromise && !force) return aiHistoryPromise;
   if (aiHistoryLoaded.value && !force) return;
@@ -2483,7 +2583,10 @@ async function refreshActive() {
     await refreshUploadDiagnostic();
   }
   if (activeView.value === "settings") await refreshSettings();
-  if (activeView.value === "ai") await refreshAiSettings();
+  if (activeView.value === "ai") {
+    await refreshAiSettings();
+    await refreshAgentTools();
+  }
   if (activeView.value === "system") await refreshSystem();
   if (activeView.value === "docker") await refreshDocker();
   } catch (error) { console.warn("refresh failed", error); }

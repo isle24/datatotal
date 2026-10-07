@@ -1364,3 +1364,75 @@
 :root .app-shell .empty.compact { padding: 14px 16px; gap: 6px; }
 :root .app-shell .empty.card-empty { background: transparent; }
 :root .app-shell .empty button { margin-top: 2px; }
+
+/* ---------------------------------------------------------------------------
+ * Read-only operations agent panel.
+ * ------------------------------------------------------------------------- */
+:root .app-shell .agent-panel { overflow: hidden; }
+:root .app-shell .agent-body { display: grid; gap: 14px; padding: 18px; }
+:root .app-shell .agent-ask {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+:root .app-shell .agent-ask input {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+  color: var(--text);
+  font-size: .875rem;
+}
+:root .app-shell .agent-ask input:focus-visible { outline: none; border-color: var(--accent); }
+:root .app-shell .agent-ask button {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: #f7fbff;
+  font-size: .875rem;
+  font-weight: 550;
+}
+:root .app-shell .agent-ask button:disabled { opacity: .5; }
+:root .app-shell .agent-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+:root .app-shell .agent-chips button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: .75rem;
+}
+:root .app-shell .agent-chips button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+:root .app-shell .agent-answer-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+}
+:root .app-shell .agent-answer-text { margin: 0; color: var(--text); font-size: .9375rem; line-height: 1.75; text-wrap: pretty; }
+:root .app-shell .agent-trace { margin: 0; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+:root .app-shell .agent-answer-card details summary { cursor: pointer; color: var(--muted); font-size: .75rem; }
+:root .app-shell .agent-answer-card pre {
+  margin: 10px 0 0;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: .6875rem;
+  line-height: 1.6;
+}
+:root .app-shell .agent-error { margin: 0; color: var(--red); font-size: .8125rem; }
+:root .app-shell .agent-usage { margin: 0; color: color-mix(in srgb, var(--muted) 85%, transparent); font-size: .6875rem; }
+@media (max-width: 720px) {
+  :root .app-shell .agent-ask { grid-template-columns: minmax(0, 1fr); }
+}

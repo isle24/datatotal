@@ -14,6 +14,8 @@ services:
   nas-traffic-lens:
     image: isle204/nas-traffic-lens:latest
     container_name: nas-traffic-lens
+    # 绿联等受限网络环境访问不了 Docker Hub：镜像用 docker load 导入，禁止 compose 联网拉取
+    pull_policy: never
     restart: unless-stopped
     network_mode: host
     pid: host

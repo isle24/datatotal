@@ -49,6 +49,7 @@ from server.services.ai import (
     normalize_ai_settings,
     public_ai_settings,
 )
+from server.services import ops_agent
 from server.services.system_status import system_status
 from server.services.protection_state import durable_states, release_legacy_restart_limits, restore_states
 from server.services.container_targets import new_state, prepare_group_states, row_protection_state, rule_matches_row, state_for_target, target_state_key
@@ -746,6 +747,10 @@ class AIChatMessage(BaseModel):
     content: str = Field(min_length=1, max_length=6000)
 
 
+class AgentQueryPayload(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+
+
 class AIChatPayload(BaseModel):
     messages: List[AIChatMessage] = Field(default_factory=list, max_length=20)
 
@@ -913,6 +918,28 @@ class TrafficDB:
                 notifications TEXT NOT NULL DEFAULT '[]',
                 updated_at INTEGER NOT NULL
             )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ops_agent_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                tool TEXT NOT NULL DEFAULT '',
+                args TEXT NOT NULL DEFAULT '{}',
+                ok INTEGER NOT NULL DEFAULT 0,
+                error TEXT NOT NULL DEFAULT '',
+                answer_chars INTEGER NOT NULL DEFAULT 0,
+                calls INTEGER NOT NULL DEFAULT 0,
+                tokens_estimate INTEGER NOT NULL DEFAULT 0,
+                duration_ms INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ops_agent_audits_created ON ops_agent_audits(created_at DESC)
             """
         )
         self.conn.execute(
@@ -1329,6 +1356,82 @@ class TrafficDB:
                 self.conn.execute("DELETE FROM labels WHERE key = ?", (key,))
             self.conn.commit()
         return {"ok": True}
+
+    def record_agent_audit(self, entry: dict) -> None:
+        """Append one read-only agent call to the audit trail."""
+        if not self.conn:
+            return
+        try:
+            with self.lock:
+                self.conn.execute(
+                    """
+                    INSERT INTO ops_agent_audits
+                        (created_at, question, tool, args, ok, error, answer_chars, calls, tokens_estimate, duration_ms)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(entry.get("createdAt") or now()),
+                        str(entry.get("question") or "")[:500],
+                        str(entry.get("tool") or "")[:64],
+                        json.dumps(entry.get("args") or {}, ensure_ascii=False)[:1000],
+                        1 if entry.get("ok") else 0,
+                        str(entry.get("error") or "")[:300],
+                        int(entry.get("answerChars") or 0),
+                        int(entry.get("calls") or 0),
+                        int(entry.get("tokensEstimate") or 0),
+                        int(entry.get("durationMs") or 0),
+                    ),
+                )
+                self.conn.commit()
+        except sqlite3.Error as error:  # pragma: no cover - audit must never break a query
+            print(f"record_agent_audit failed: {error}")
+
+    def query_agent_audits(self, limit: int = 50) -> List[dict]:
+        if not self.conn:
+            return []
+        safe_limit = max(1, min(200, int(limit or 50)))
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT created_at, question, tool, args, ok, error, answer_chars, calls, tokens_estimate, duration_ms
+                FROM ops_agent_audits ORDER BY id DESC LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        audits = []
+        for row in rows:
+            try:
+                args = json.loads(row[3] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            audits.append({
+                "createdAt": row[0],
+                "question": row[1],
+                "tool": row[2],
+                "args": args,
+                "ok": bool(row[4]),
+                "error": row[5],
+                "answerChars": row[6],
+                "calls": row[7],
+                "tokensEstimate": row[8],
+                "durationMs": row[9],
+            })
+        return audits
+
+    def agent_usage_summary(self) -> dict:
+        """Today's call count and token estimate, for the panel footer."""
+        if not self.conn:
+            return {"calls": 0, "tokensEstimate": 0, "questions": 0}
+        start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*), COALESCE(SUM(calls), 0), COALESCE(SUM(tokens_estimate), 0)
+                FROM ops_agent_audits WHERE created_at >= ?
+                """,
+                (start,),
+            ).fetchone()
+        return {"questions": int(row[0] or 0), "calls": int(row[1] or 0), "tokensEstimate": int(row[2] or 0)}
 
     def get_setting(self, key: str) -> Optional[dict]:
         if not self.conn:
@@ -4868,6 +4971,34 @@ class TrafficCollector:
                 event = {**event, "scope": context["scope"]}
             yield event
 
+    def agent_query(self, question: str) -> dict:
+        """Read-only operations agent: plan, run one whitelisted tool, explain, audit."""
+        started = time.monotonic()
+        context = ops_agent.CollectorContext(self, system_status)
+        try:
+            result = ops_agent.answer_question(question, dict(self.ai_settings or {}), context)
+        except AIServiceError as error:
+            result = {"ok": False, "error": str(error)}
+        except Exception as error:  # noqa: BLE001 - never let the panel 500
+            result = {"ok": False, "error": f"{type(error).__name__}: {error}"[:300]}
+        duration_ms = int((time.monotonic() - started) * 1000)
+        self.db.record_agent_audit({
+            "createdAt": int(now()),
+            "question": question,
+            "tool": result.get("tool") or "",
+            "args": result.get("args") or {},
+            "ok": bool(result.get("ok")),
+            "error": result.get("error") or "",
+            "answerChars": len(str(result.get("answer") or "")),
+            "calls": result.get("calls") or 0,
+            "tokensEstimate": result.get("tokensEstimate") or 0,
+            "durationMs": duration_ms,
+        })
+        payload = dict(result)
+        payload["durationMs"] = duration_ms
+        payload["usage"] = self.db.agent_usage_summary()
+        return payload
+
     def ai_chat(self, payload: AIChatPayload) -> dict:
         try:
             messages = self._ai_chat_messages(payload)
@@ -6408,6 +6539,26 @@ async def ai_chat(payload: AIChatPayload, stream: bool = False):
     if stream:
         return _ai_streaming_response(collector.ai_chat_stream(payload))
     return await asyncio.to_thread(collector.ai_chat, payload)
+
+
+@app.get("/api/agent/tools")
+async def agent_tools() -> dict:
+    return {
+        "tools": ops_agent.tool_catalog(),
+        "enabled": bool((collector.ai_settings or {}).get("enabled")),
+        "configured": bool((collector.ai_settings or {}).get("model")),
+        "usage": await asyncio.to_thread(collector.db.agent_usage_summary),
+    }
+
+
+@app.post("/api/agent/query")
+async def agent_query(payload: AgentQueryPayload) -> dict:
+    return await asyncio.to_thread(collector.agent_query, payload.question)
+
+
+@app.get("/api/agent/audits")
+async def agent_audits(limit: int = 50) -> dict:
+    return {"audits": await asyncio.to_thread(collector.db.query_agent_audits, limit)}
 
 
 @app.get("/api/ai/configure/schema")
