@@ -4,7 +4,7 @@
   --ds-text: #242a32;
   --ds-muted: #777e89;
   --ds-line: #e3e6ea;
-  --ds-accent: #0b8068;
+  --ds-accent: #2578b8;
   background: var(--ds-bg);
   color: var(--ds-text);
   min-height: 100vh;
@@ -21,7 +21,7 @@
   --ds-text: #e8eaef;
   --ds-muted: #989fac;
   --ds-line: #333740;
-  --ds-accent: #52cbb0;
+  --ds-accent: #7db8e8;
 }
 .desktop-shell * {
   box-sizing: border-box;

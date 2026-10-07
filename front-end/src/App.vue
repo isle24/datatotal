@@ -294,6 +294,52 @@
             <div v-else class="empty">当前环境未暴露温度传感器</div>
           </section>
         </div>
+        <section v-if="acceleratorCards.length" class="card">
+          <CardHead title="GPU 与 NPU" :meta="`${acceleratorCards.length} 个设备 · 点击展开`" />
+          <div class="accordion-stack system-stack">
+            <article
+              v-for="item in acceleratorCards"
+              :key="item.cardKey"
+              :class="['system-card', 'accelerator-card', { expanded: isSystemCardExpanded('accel', item.cardKey) }]"
+            >
+              <button class="system-card-trigger" type="button" :aria-expanded="isSystemCardExpanded('accel', item.cardKey)" @click="toggleSystemCard('accel', item.cardKey)">
+                <span class="system-card-icon"><component :is="item.kind === 'gpu' ? Monitor : Cpu" :size="17" /></span>
+                <span class="system-card-copy">
+                  <strong>{{ item.name }}</strong>
+                  <small>{{ acceleratorSubtitle(item) }}</small>
+                </span>
+                <span :class="['accel-badge', acceleratorStatus(item).key]">{{ acceleratorStatus(item).label }}</span>
+                <span class="system-card-metric">
+                  <b :class="['accel-value', acceleratorStatus(item).key]">{{ formatPercent(acceleratorPercent(item)) }}</b>
+                  <small>利用率</small>
+                </span>
+                <component :is="isSystemCardExpanded('accel', item.cardKey) ? ChevronUp : ChevronDown" class="accordion-chevron" :size="18" />
+              </button>
+              <div v-if="isSystemCardExpanded('accel', item.cardKey)" class="system-card-body">
+                <template v-if="item.kind === 'gpu'">
+                  <div v-for="engine in item.engines" :key="engine.name" class="temp-reading">
+                    <span class="temp-reading-label"><strong>{{ engine.label }}</strong><small>{{ engine.name }}</small></span>
+                    <span class="temp-reading-bar" role="presentation"><i :style="{ width: percentBarWidth(engine.busyPercent) }"></i></span>
+                    <b class="temp-value">{{ formatPercent(engine.busyPercent) }}</b>
+                  </div>
+                  <p v-if="!item.engines?.length" class="system-card-note">没有可用的引擎计数器。</p>
+                  <div class="fan-detail"><span>驱动</span><b>{{ item.driver || "-" }}</b></div>
+                  <div class="fan-detail"><span>核心频率</span><b>{{ item.frequencyMhz ? `${item.frequencyMhz} MHz` : "空闲 0 MHz" }}</b></div>
+                  <div v-if="item.idleResidencyPercent != null" class="fan-detail"><span>空闲驻留 (RC6)</span><b>{{ formatPercent(item.idleResidencyPercent) }}</b></div>
+                </template>
+                <template v-else>
+                  <div class="fan-detail"><span>驱动</span><b>{{ item.driver || "-" }}</b></div>
+                  <div class="fan-detail"><span>频率</span><b>{{ item.frequencyMhz != null ? `${item.frequencyMhz} / ${item.maxFrequencyMhz || "-"} MHz` : `最高 ${item.maxFrequencyMhz || "-"} MHz` }}</b></div>
+                  <div v-if="item.memoryBytes != null" class="fan-detail"><span>常驻显存</span><b>{{ formatBytes(item.memoryBytes) }}</b></div>
+                  <div v-if="item.powerState" class="fan-detail"><span>电源状态</span><b>{{ item.powerState }}</b></div>
+                  <div v-if="item.schedMode" class="fan-detail"><span>调度模式</span><b>{{ item.schedMode }}</b></div>
+                  <div v-if="item.busyTimeUs != null" class="fan-detail"><span>累计忙碌</span><b>{{ formatDuration(item.busyTimeUs / 1000000) }}</b></div>
+                </template>
+                <p v-if="item.hint" class="system-card-note">{{ item.hint }}</p>
+              </div>
+            </article>
+          </div>
+        </section>
         <section class="card">
           <CardHead title="风扇转速" :meta="systemFans.length ? `${systemFans.length} 个传感器 · 点击展开` : 'psutil / hwmon'" />
           <div v-if="systemFans.length" class="accordion-stack system-stack">
@@ -1318,16 +1364,53 @@ const gpuSummary = computed(() => {
   const gpus = system.value?.gpu || [];
   if (!gpus.length) return "未检测到或未映射 /dev/dri";
   return gpus.map((gpu) => {
-    if (gpu.type === "dri" && gpu.utilPercent != null) return `${gpu.name} ${gpu.utilPercent}%`;
-    if (gpu.type === "dri") return `${gpu.name} 已映射，未暴露利用率`;
-    return `${gpu.name} ${gpu.utilPercent ?? "-"}%`;
+    const percent = acceleratorPercent(gpu);
+    const driver = gpu.driver ? `${gpu.driver} · ` : "";
+    if (percent === null) return `${driver}${gpu.name || "GPU"} 已映射，暂无利用率读数`;
+    const frequency = gpu.frequencyMhz ? ` · ${gpu.frequencyMhz} MHz` : "";
+    return `${driver}${gpu.name || "GPU"} ${formatPercent(percent)}${frequency}`;
   }).join(" / ");
 });
 const npuSummary = computed(() => {
   const npus = system.value?.npu || [];
   if (!npus.length) return "未检测到或未映射 /dev/accel";
-  return npus.map((npu) => `${npu.name || "NPU"} ${npu.status || "可用"}`).join(" / ");
+  return npus.map((npu) => {
+    const percent = acceleratorPercent(npu);
+    const frequency = npu.frequencyMhz ? ` · ${npu.frequencyMhz}/${npu.maxFrequencyMhz || "-"} MHz` : "";
+    if (percent === null) return `${npu.name || "NPU"} 已映射，暂无利用率读数`;
+    return `${npu.name || "NPU"} ${formatPercent(percent)}${frequency}`;
+  }).join(" / ");
 });
+const acceleratorCards = computed(() => {
+  const gpus = (system.value?.gpu || []).map((item) => ({ ...item, kind: "gpu", cardKey: `gpu:${item.index ?? 0}` }));
+  const npus = (system.value?.npu || []).map((item) => ({ ...item, kind: "npu", cardKey: `npu:${item.index ?? 0}` }));
+  return [...gpus, ...npus];
+});
+
+function acceleratorPercent(item) {
+  const value = Number(item?.utilPercent);
+  return Number.isFinite(value) ? value : null;
+}
+function acceleratorStatus(item) {
+  const percent = acceleratorPercent(item);
+  if (percent === null) return { key: "unknown", label: "无读数" };
+  if (percent >= 1) return { key: "busy", label: "使用中" };
+  return { key: "idle", label: "空闲" };
+}
+function acceleratorSubtitle(item) {
+  const parts = [item.driver || (item.kind === "gpu" ? "drm" : "accel")];
+  if (item.kind === "gpu") {
+    if (item.engines?.length) parts.push(`${item.engines.length} 个引擎`);
+    if (item.path) parts.push(item.path);
+  } else if (item.device) {
+    parts.push(item.device);
+  }
+  return parts.join(" · ");
+}
+function percentBarWidth(value) {
+  const number = Number(value);
+  return `${Math.max(2, Math.min(100, Number.isFinite(number) ? number : 0))}%`;
+}
 const filteredProcesses = computed(() => {
   const keyword = processSearch.value.trim().toLowerCase();
   return (processes.value || []).filter((item) => !keyword || `${item.name} ${item.pid} ${item.cmdline}`.toLowerCase().includes(keyword)).slice(0, 30);

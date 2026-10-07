@@ -42,7 +42,7 @@ Windows / macOS 另有 **Traffic Lens 桌面预览版**：无需 Docker，可查
 - 监控中心展示上传速率、连接数、每日流量等规则的运行状态。
 - 通知渠道模块，支持 Webhook、IYUU、MeoW，并支持消息模板变量。
 - 历史统计折线图，支持今日、本周、本月等时间范围。
-- 系统状态页面，展示 CPU、内存、磁盘、温度、GPU/NPU 可见性。
+- 系统状态页面，展示 CPU、内存、磁盘、温度风扇，以及 Intel 核显与 NPU 的实时利用率（核显按引擎细分，NPU 含频率和常驻显存）。
 - AI 中心支持 OpenAI、Claude、DeepSeek、Kimi、Qwen、MiniMax 和自定义接口的按需分析与对话；首页、历史、监控中心都有快捷分析入口。
 - AI 中心包含“设置助手”：可以用自然语言同时调整运行参数、监控规则、通知模板非敏感字段、容器保护、Docker 备注/内置图标和 AI 偏好；AI 先生成差异预览，点击一次确认后才写入 SQLite。
 - AI 设置助手不会读取或修改密码、API Key、Webhook/IYUU/MeoW Token、Docker socket、数据库/日志路径，也不会执行 SQL、宿主命令或 Docker 命令。
@@ -518,7 +518,13 @@ devices:
   - /dev/accel:/dev/accel
 ```
 
-容器能看到设备，不代表一定能读取利用率。Intel 核显/NPU 的利用率通常依赖宿主内核、驱动和 sysfs/debugfs 指标。读不到时，页面会显示设备可用但利用率未暴露。
+`privileged: true` 已经包含全部设备节点，不需要再写 `devices`；用 `devices` 时请把上面两行取消注释。
+
+利用率读取方式：
+
+- **Intel 核显（i915）**：读取内核 i915 PMU 的 `*-busy` 事件（`intel_gpu_top` 用的是同一来源），按两次采样之间各引擎的忙碌时间算出利用率，服务端每 2 秒采一次；未映射 PMU 时回退到 `amdgpu` 的 `gpu_busy_percent`。系统页会列出 Render/3D、Video、Video Enhance、Blitter、Compute 每个引擎的占比，以及核心频率和空闲驻留（RC6）。
+- **Intel NPU（intel_vpu）**：读取 `/sys/class/accel/*/device/npu_busy_time_us`（内核 6.11+ 提供，官方文档说明它就是用来算 NPU 利用率的），同时显示当前/最高频率、常驻显存、电源状态和调度模式。
+- 读取 PMU 需要容器具备 `privileged` 或 `CAP_PERFMON`；只映射设备节点时页面会显示设备可用并给出具体原因，而不是显示错误的百分比。
 
 温度会把 `coretemp`、`acpitz`、`nvme`、`drivetemp` 等传感器名整理为 CPU、主板/机箱、NVMe、硬盘等更容易看的名称。
 

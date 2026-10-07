@@ -6,20 +6,20 @@
 :root .app-shell,
 :root .app-shell.nas-native-content {
   color-scheme: light;
-  --bg: #f4f3ef;
-  --side: #252d2e;
-  --panel: #fffefb;
-  --panel-soft: #f0f2ee;
-  --text: #202d29;
-  --muted: #5c6862;
-  --line: #d7ded8;
-  --control-line: #7f8f83;
-  --accent: #176a58;
-  --accent-hover: #115444;
-  --accent-soft: #e8f2eb;
+  --bg: #f3f5f8;
+  --side: #222b35;
+  --panel: #ffffff;
+  --panel-soft: #eef2f7;
+  --text: #1f2a37;
+  --muted: #5b6878;
+  --line: #d9e0e9;
+  --control-line: #8592a3;
+  --accent: #2578b8;
+  --accent-hover: #1f689f;
+  --accent-soft: #e6f1fa;
   --blue: var(--accent);
-  --cyan: #256c78;
-  --green: #276746;
+  --cyan: #2f8fbf;
+  --green: #1f7a55;
   --orange: #87591e;
   --red: #aa3e35;
   --teal: var(--accent);
@@ -43,19 +43,19 @@
 :root[data-theme="dark"] .app-shell,
 :root[data-theme="dark"] .app-shell.nas-native-content {
   color-scheme: dark;
-  --bg: #171d1b;
-  --side: #171c1d;
-  --panel: #212925;
-  --panel-soft: #28322d;
-  --text: #e6ede7;
-  --muted: #aab7ac;
-  --line: #3a4740;
-  --control-line: #6c7d70;
-  --accent: #8ecbb3;
-  --accent-hover: #b1ddc7;
-  --accent-soft: #2b4135;
-  --cyan: #95c8d1;
-  --green: #97c7a4;
+  --bg: #141a21;
+  --side: #131920;
+  --panel: #1e2732;
+  --panel-soft: #26313d;
+  --text: #e6ecf4;
+  --muted: #a3b0c0;
+  --line: #34404e;
+  --control-line: #6d7d8f;
+  --accent: #7db8e8;
+  --accent-hover: #a1cdf0;
+  --accent-soft: #1f3548;
+  --cyan: #6cc0dd;
+  --green: #7fc9a2;
   --orange: #ddba7d;
   --red: #f0a99e;
 }
@@ -488,16 +488,28 @@
 :root .app-shell .temp-reading-label strong { font-size: .8125rem; font-weight: 550; }
 :root .app-shell .temp-reading-label small { color: var(--muted); font-size: .6875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :root .app-shell :is(.temp-reading-bar, .fan-speed-bar) { display: block; height: 5px; border-radius: 999px; background: color-mix(in srgb, var(--text) 9%, var(--panel)); overflow: hidden; }
-:root .app-shell :is(.temp-reading-bar, .fan-speed-bar) i { display: block; height: 100%; border-radius: 999px; background: var(--green); transition: width .2s ease; }
+:root .app-shell :is(.temp-reading-bar, .fan-speed-bar) i { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width .2s ease; }
 :root .app-shell .temp-reading-bar i.warning { background: var(--orange); }
 :root .app-shell .temp-reading-bar i.critical { background: var(--red); }
 :root .app-shell .temp-reading-bar i.unknown { background: var(--muted); }
 :root .app-shell .fan-speed-bar i { background: var(--accent); }
+/* Normal readings stay a calm accent chip; warning and critical keep their own colors. */
+:root .app-shell .temp-value:not(.warning):not(.critical) { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--accent); }
+:root .app-shell .temp-value.warning { background: color-mix(in srgb, var(--orange) 14%, var(--panel)); color: var(--orange); }
+:root .app-shell .temp-value.critical { background: color-mix(in srgb, var(--red) 14%, var(--panel)); color: var(--red); }
 :root .app-shell .fan-detail { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
 :root .app-shell .fan-detail span { color: var(--muted); font-size: .75rem; }
 :root .app-shell .fan-detail b { font-size: .8125rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 :root .app-shell .fan-speed { display: grid; gap: 8px; padding: 12px 0 0; }
 :root .app-shell .fan-speed small { color: var(--muted); font-size: .6875rem; }
+:root .app-shell .system-card-note { margin: 10px 0 0; color: var(--muted); font-size: .6875rem; line-height: 1.6; }
+:root .app-shell .accel-badge { display: inline-flex; align-items: center; padding: 4px 9px; border-radius: 999px; font-size: .6875rem; font-weight: 600; white-space: nowrap; }
+:root .app-shell .accel-badge.busy { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
+:root .app-shell .accel-badge.idle { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, var(--panel)); }
+:root .app-shell .accel-badge.unknown { color: var(--muted); background: color-mix(in srgb, var(--muted) 9%, var(--panel)); }
+:root .app-shell .system-card-metric .accel-value.busy { color: var(--accent); }
+:root .app-shell .system-card-metric .accel-value.idle,
+:root .app-shell .system-card-metric .accel-value.unknown { color: var(--text); }
 :root .app-shell .process-card { min-height: 130px; border-radius: 8px; }
 :root .app-shell .avatar { background: var(--panel-soft); color: var(--muted); font-weight: 600; }
 :root .app-shell .bars i { height: 4px; }

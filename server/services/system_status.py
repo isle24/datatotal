@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 
 import psutil
 
+from . import accelerator_stats
+
 
 SYSTEM_STATUS_CACHE_SECONDS = float(os.getenv("SYSTEM_STATUS_CACHE_SECONDS", "5"))
 _SYSTEM_STATUS_CACHE = {"timestamp": 0.0, "data": None}
@@ -28,25 +30,6 @@ def _read_number(path: str) -> Optional[float]:
         return float(value)
     except ValueError:
         return None
-
-
-def read_intel_dri_stats() -> dict:
-    engines = []
-    busy_values = []
-    for card in sorted(name for name in os.listdir("/sys/class/drm") if name.startswith("card")) if os.path.isdir("/sys/class/drm") else []:
-        engine_root = os.path.join("/sys/class/drm", card, "engine")
-        if not os.path.isdir(engine_root):
-            continue
-        for engine in sorted(os.listdir(engine_root)):
-            busy = _read_number(os.path.join(engine_root, engine, "busy"))
-            if busy is None:
-                continue
-            busy_values.append(busy)
-            engines.append({"card": card, "name": engine, "busyPercent": round(busy, 2)})
-    return {
-        "engines": engines,
-        "utilPercent": round(max(busy_values), 2) if busy_values else None,
-    }
 
 
 def read_gpu_stats() -> List[dict]:
@@ -88,28 +71,35 @@ def read_gpu_stats() -> List[dict]:
     if os.path.isdir(dri_path):
         devices = sorted(name for name in os.listdir(dri_path) if name.startswith(("card", "renderD")))
         if devices and not gpus:
-            intel_stats = read_intel_dri_stats()
+            accelerator = accelerator_stats.read_accelerator_stats()
+            intel = (accelerator.get("gpus") or [{}])[0]
             gpus.append(
                 {
                     "index": 0,
-                    "name": "Intel/DRI 核显",
+                    "name": intel.get("name") or "Intel/DRI 核显",
                     "type": "dri",
                     "available": True,
+                    "driver": intel.get("driver") or "",
                     "devices": devices,
-                    "utilPercent": intel_stats.get("utilPercent"),
-                    "engines": intel_stats.get("engines") or [],
+                    "utilPercent": intel.get("utilPercent"),
+                    "engines": intel.get("engines") or [],
+                    "frequencyMhz": intel.get("frequencyMhz"),
+                    "idleResidencyPercent": intel.get("idleResidencyPercent"),
                     "memoryUsedMB": None,
                     "memoryTotalMB": None,
                     "temperatureC": None,
-                    "status": "ok" if intel_stats.get("utilPercent") is not None else "mapped-no-utilization",
-                    "hint": "已映射 /dev/dri；当前内核未暴露 i915 engine busy 指标" if intel_stats.get("utilPercent") is None else "",
+                    "status": intel.get("status") or "mapped-no-utilization",
+                    "hint": intel.get("hint") or "",
                 }
             )
     return gpus
 
 
 def read_npu_stats() -> List[dict]:
-    npus = []
+    npus = accelerator_stats.read_accelerator_stats().get("npus") or []
+    if npus:
+        return npus
+
     sys_accel = "/sys/class/accel"
     if os.path.isdir(sys_accel):
         for index, name in enumerate(sorted(os.listdir(sys_accel))):

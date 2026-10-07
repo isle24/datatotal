@@ -27,4 +27,21 @@
 - 温度条按 `critical`、`high` 中较小者归一；hwmon 的 `65261.85` 这类哨兵上限会被忽略并回退到 100°C，避免所有读数都贴在最左侧。
 - 风扇卡片收起时显示名称、运行状态和转速，展开后显示传感器标识与相对最高转速的比例条。
 - 卡片顺序保持服务端返回的稳定顺序，仅在首次加载时默认展开最热的一组，避免 5 秒轮询下卡片因温度波动互相换位。
-- 纯函数集中在 `front-end/src/utils/system-cards.js`，回归用例在 `front-end/tests/system-accordion.test.mjs` 与 `front-end/tests/ui-contract.test.mjs`。
+- 纯函数集中在 `front-end/src/utils/system-cards.js`，回归用例在 `front-end/tests/system-accordion.test.mjs` 与 `front-end/ui-contract` 相关断言。
+
+## 主色改为浅蓝
+
+原主题的主色（`--accent`）是深绿 `#176a58`，中性色也偏绿（`--bg: #f4f3ef`、`--line: #d7ded8`、深色主题 `#171d1b/#212925`），整体偏绿。现在：
+
+- 浅色主题主色 `--accent: #2578b8`、悬浮 `#1f689f`、浅底 `#e6f1fa`；深色主题 `--accent: #7db8e8`、浅底 `#1f3548`。
+- 中性色改为冷灰蓝：浅色 `--bg: #f3f5f8`、`--panel: #ffffff`、`--line: #d9e0e9`、侧边栏 `#222b35`；深色 `--bg: #141a21`、`--panel: #1e2732`、`--line: #34404e`。
+- `--cyan`、`--teal`、`--blue` 跟随主色；`--green` 只保留给状态语义（运行中、成功反馈、活跃指示）。
+- 温度读数：正常值改为浅蓝底片（`--accent` 12% 混合），`warning`/`critical` 保持橙/红；温度条和风扇相对转速条也改为主色。桌面端 `--ds-accent` 同步为 `#2578b8` / `#7db8e8`。
+- 回归在 `front-end/tests/accelerator-panel.test.mjs` 中断言浅色/深色主色值、中性色不再偏绿，以及异常状态仍使用橙/红。
+
+## GPU 与 NPU 利用率
+
+- 系统页新增「GPU 与 NPU」手风琴卡片：收起时显示设备名、驱动/节点、空闲或使用中、利用率；展开后核显按引擎列出 Render/3D、Video、Video Enhance、Blitter、Compute 的占比条，并显示驱动、核心频率、空闲驻留（RC6）。
+- NPU 卡片展开后显示驱动、当前/最高频率、常驻显存、电源状态、调度模式和累计忙碌时间。
+- 采集实现见 `server/services/accelerator_stats.py`：i915 走 PMU（`perf_event_open`），NPU 走 `npu_busy_time_us`，两者都是累计计数，因此用后台线程每 2 秒采样一次求差值，接口不做阻塞采样；硬件「信息」区的 GPU/NPU 行同步显示利用率。
+- 读不到计数器时给出可执行的原因（缺 PMU、缺权限、缺设备节点、内核版本），不再统一显示“未暴露利用率”。

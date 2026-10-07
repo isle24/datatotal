@@ -27,9 +27,9 @@
 - 支持在页面可视化保存监控规则、通知渠道、消息模板和可热更新运行参数，配置写入 SQLite，重启后保留。
 - 支持网卡/进程/连接筛选，连接表可按公网/内网、网卡、协议、方向、关键词、流量和时长过滤。
 - 历史统计按今日、本周、本月、今年自然时间段聚合，用平滑曲线区分公网/内网、上行/下行。
-- 系统页展示 CPU、内存、磁盘、温度和可用 GPU 信息；无法读取的硬件项会显示不可用。
-- Intel 核显通常不会被 `nvidia-smi` 识别；容器能看到 `/dev/dri` 时会显示 DRI/核显可用，并尽量读取 i915 engine busy 指标，读取不到时会明确显示“已映射但未暴露利用率”。
-- NPU 检测会读取 `/sys/class/accel`、`/dev/accel` 和 PCI 信息；Intel NPU 如果没有映射到容器内，会显示未检测到或仅 PCI 可见。
+- 系统页展示 CPU、内存、磁盘、温度和可用 GPU/NPU 信息；无法读取的硬件项会显示原因而不是猜测数值。
+- Intel 核显通常不会被 `nvidia-smi` 识别；容器能看到 `/dev/dri` 时读取 i915 PMU 的各引擎 `*-busy` 事件算出利用率（`intel_gpu_top` 同源），并按引擎列出 Render/3D、Video、Video Enhance、Blitter、Compute。缺少 PMU 或 `perf_event_open` 权限时显示具体原因，`amdgpu` 则回退到 `gpu_busy_percent`。
+- NPU 检测会读取 `/sys/class/accel`、`/dev/accel` 和 PCI 信息；Intel NPU 通过 `npu_busy_time_us` 计算利用率，并显示当前/最高频率、常驻显存、电源状态和调度模式。
 - 温度会把 `coretemp`、`acpitz`、`nvme`、`drivetemp` 等原始传感器名整理成 CPU、主板/机箱、NVMe、硬盘等友好名称。
 - 前端使用 Vue/Vite 构建为静态文件，后端只提供 API 和静态托管。
 - 默认只返回并展示物理/主接口数据，切换到“全部接口”时才加载 Docker/veth/bridge 等虚拟接口。
@@ -401,7 +401,15 @@ devices:
   - /dev/dri:/dev/dri
 ```
 
-如果宿主内核同时暴露 `/sys/class/drm/card*/engine/*/busy`，系统页会显示 Intel 核显利用率；如果只映射了 `/dev/dri` 但没有 busy 指标，会显示设备可用但利用率未暴露。
+`privileged: true` 已经包含全部设备节点，不需要重复写 `devices`。
+
+核显利用率来自内核 i915 PMU：服务端用 `perf_event_open` 打开 `/sys/bus/event_source/devices/i915/events/*-busy`，每 2 秒采样一次，用两次采样之间的忙碌时间除以硬件计时得出百分比。这条路径和 `intel_gpu_top` 完全一致，因此需要：
+
+- 内核带 i915 PMU（5.8+ 常见），
+- 容器能看到 `/sys` 和 `/dev/dri`，
+- `privileged: true` 或至少 `CAP_PERFMON`，否则 `perf_event_open` 会被拒绝。
+
+任一条件不满足时会显示对应原因（未找到 PMU / 权限被拒绝 / 未见 `/dev/dri`），`amdgpu` 与 `radeon` 则回退到驱动自带的 `gpu_busy_percent`。
 
 NPU/AI Boost 取决于宿主机驱动和设备节点。若宿主存在 `/dev/accel`，可尝试增加：
 
@@ -410,7 +418,9 @@ devices:
   - /dev/accel:/dev/accel
 ```
 
-部分系统即使能在 PCI 中看到 NPU，也不会向容器暴露利用率统计，这时页面会显示“PCI 可见但设备节点未映射”或“已识别但利用率取决于宿主驱动”。
+Intel NPU（`intel_vpu` 驱动）利用率来自 `/sys/class/accel/*/device/npu_busy_time_us`，内核文档说明该计数即用于计算 NPU 利用率，推荐 1 秒左右读取一次；系统页同时显示 `npu_current_frequency_mhz`、`npu_max_frequency_mhz`、`npu_memory_utilization`（单位字节）、`power_state` 和 `sched_mode`。内核低于 6.11 或未暴露该属性时会给出提示；只在 PCI 中可见的 NPU 会显示“PCI 可见但设备节点未映射”。
+
+利用率由后台采样线程每 2 秒更新一次，接口本身不做阻塞采样，因此 `/api/system` 的响应时间不受影响；第一次请求会等待一个约 300 毫秒的采样窗口以给出即时读数。
 
 温度显示优先使用宿主暴露给容器的 `psutil.sensors_temperatures()`。页面会把常见原始名转换为更容易看的名称：
 
