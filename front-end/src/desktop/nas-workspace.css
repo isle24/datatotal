@@ -178,12 +178,6 @@
 .nas-native-content table td {
   padding: 14px 12px;
 }
-.nas-native-content .temperature-card,
-.nas-native-content .fan-card {
-  padding: 20px;
-  background: var(--ds-surface);
-  border-radius: 8px;
-}
 .nas-native-content .monitor-hero {
   background: transparent;
   color: var(--ds-text);

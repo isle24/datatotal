@@ -260,40 +260,70 @@
             </div>
           </section>
           <section class="card">
-            <CardHead title="温度" meta="psutil / sensors" />
-            <div class="temp-grid">
-              <div v-for="group in temperatureGroups" :key="group.rawName || group.name" class="temp-card">
-                <div class="temp-title">
-                  <div>
+            <CardHead title="温度" :meta="temperatureGroups.length ? `${temperatureGroups.length} 组传感器 · 点击展开` : 'psutil / sensors'" />
+            <div v-if="temperatureGroups.length" class="accordion-stack system-stack">
+              <article
+                v-for="group in temperatureGroups"
+                :key="temperatureGroupKey(group)"
+                :class="['system-card', 'temp-stack-card', { expanded: isSystemCardExpanded('temp', temperatureGroupKey(group)) }]"
+              >
+                <button class="system-card-trigger" type="button" :aria-expanded="isSystemCardExpanded('temp', temperatureGroupKey(group))" @click="toggleSystemCard('temp', temperatureGroupKey(group))">
+                  <span class="system-card-icon"><Thermometer :size="17" /></span>
+                  <span class="system-card-copy">
                     <strong>{{ group.name }}</strong>
-                    <span>{{ group.rawName }}</span>
-                  </div>
-                  <b>{{ formatTemperature(maxTemperature(group)) }}</b>
-                </div>
-                <div class="temp-readings">
-                  <p v-for="item in group.items" :key="`${group.rawName}-${item.rawLabel}`">
-                    <span>{{ item.label }}</span>
+                    <small>{{ group.rawName }} · {{ group.items.length }} 个传感器</small>
+                  </span>
+                  <span class="system-card-metric">
+                    <b :class="['temp-value', hottestTemperatureItem(group)?.level]">{{ formatTemperature(maxTemperature(group)) }}</b>
+                    <small>最高</small>
+                  </span>
+                  <component :is="isSystemCardExpanded('temp', temperatureGroupKey(group)) ? ChevronUp : ChevronDown" class="accordion-chevron" :size="18" />
+                </button>
+                <div v-if="isSystemCardExpanded('temp', temperatureGroupKey(group))" class="system-card-body">
+                  <div v-for="item in group.items" :key="`${group.rawName}-${item.rawLabel}`" class="temp-reading">
+                    <span class="temp-reading-label">
+                      <strong>{{ item.label }}</strong>
+                      <small>{{ item.rawLabel }}<template v-if="temperatureLimit(item.high)"> · 上限 {{ formatTemperature(item.high) }}</template></small>
+                    </span>
+                    <span class="temp-reading-bar" role="presentation"><i :class="item.level" :style="{ width: temperatureBarWidth(item) }"></i></span>
                     <b :class="['temp-value', item.level]">{{ formatTemperature(item.current) }}</b>
-                  </p>
+                  </div>
                 </div>
-              </div>
-              <div v-if="!temperatureGroups.length" class="empty">当前环境未暴露温度传感器</div>
+              </article>
             </div>
+            <div v-else class="empty">当前环境未暴露温度传感器</div>
           </section>
         </div>
         <section class="card">
-          <CardHead title="风扇转速" :meta="system?.fans?.length ? `${system.fans.length} 个传感器 · RPM` : 'psutil / hwmon'" />
-          <div v-if="system?.fans?.length" class="fan-grid">
-            <article v-for="fan in system.fans" :key="fan.id || `${fan.rawName}-${fan.rawLabel}`" class="fan-card">
-              <div class="fan-card-head">
-                <div class="fan-icon" :class="{ stopped: fan.status === 'stopped' }"><Gauge :size="18" /></div>
-                <div>
+          <CardHead title="风扇转速" :meta="systemFans.length ? `${systemFans.length} 个传感器 · 点击展开` : 'psutil / hwmon'" />
+          <div v-if="systemFans.length" class="accordion-stack system-stack">
+            <article
+              v-for="fan in systemFans"
+              :key="fanCardKey(fan)"
+              :class="['system-card', 'fan-stack-card', { expanded: isSystemCardExpanded('fan', fanCardKey(fan)) }]"
+            >
+              <button class="system-card-trigger" type="button" :aria-expanded="isSystemCardExpanded('fan', fanCardKey(fan))" @click="toggleSystemCard('fan', fanCardKey(fan))">
+                <span class="system-card-icon" :class="{ stopped: fan.status === 'stopped' }"><Fan :size="17" /></span>
+                <span class="system-card-copy">
                   <strong>{{ fan.name }}</strong>
-                  <span>{{ fan.rawLabel || fan.rawName || "风扇传感器" }}</span>
-                </div>
+                  <small>{{ fan.rawLabel || fan.rawName || "风扇传感器" }}</small>
+                </span>
                 <span :class="['fan-status', fan.status === 'running' ? 'running' : 'stopped']">{{ fan.status === 'running' ? "运行中" : "已停止" }}</span>
+                <span class="system-card-metric">
+                  <b>{{ formatFanRpm(fan.rpm) }}</b>
+                  <small>转/分</small>
+                </span>
+                <component :is="isSystemCardExpanded('fan', fanCardKey(fan)) ? ChevronUp : ChevronDown" class="accordion-chevron" :size="18" />
+              </button>
+              <div v-if="isSystemCardExpanded('fan', fanCardKey(fan))" class="system-card-body">
+                <div class="fan-detail"><span>传感器</span><b>{{ fan.rawName || "-" }}</b></div>
+                <div class="fan-detail"><span>标识</span><b>{{ fan.rawLabel || "-" }}</b></div>
+                <div class="fan-detail"><span>转速</span><b>{{ formatFanRpm(fan.rpm) }} 转/分</b></div>
+                <div class="fan-speed">
+                  <span class="fan-speed-bar" role="presentation"><i :style="{ width: fanSpeedBarWidth(fan, systemFans) }"></i></span>
+                  <small>相对最高转速 {{ formatFanRpm(fanPeakRpm(systemFans)) }} 转/分</small>
+                </div>
               </div>
-              <div class="fan-rpm"><b>{{ formatFanRpm(fan.rpm) }}</b><span>转/分</span></div>
             </article>
           </div>
           <div v-else class="empty fan-empty">当前环境未暴露风扇转速传感器</div>
@@ -937,6 +967,9 @@ import { GridComponent, LegendComponent, TooltipComponent } from "echarts/compon
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { renderMarkdown } from "./utils/markdown.js";
+import { temperatureGroupKey, fanCardKey, maxTemperature, hottestTemperatureItem, temperatureLimit,
+  temperatureBarWidth, hottestTemperatureGroup, fanPeakRpm,
+  fanSpeedBarWidth } from "./utils/system-cards.js";
 import {
   Activity,
   ArrowDown,
@@ -953,6 +986,7 @@ import {
   Cpu,
   Database,
   ExternalLink,
+  Fan,
   Gauge,
   HardDrive,
   HelpCircle,
@@ -972,6 +1006,7 @@ import {
   Settings,
   Sparkles,
   Sun,
+  Thermometer,
   Trash2,
   UserRound,
   X,
@@ -1181,6 +1216,7 @@ const diagnosticDate = ref(new Date().toLocaleDateString("en-CA"));
 const diagnosticLoading = ref(false);
 const expandedMonitorCards = reactive(new Set());
 const expandedDockerCards = reactive(new Set());
+const expandedSystemCards = reactive(new Set());
 const runtimeForm = reactive({});
 const aiForm = reactive({
   enabled: false,
@@ -1277,6 +1313,7 @@ const dockerContainerOptions = computed(() => (dockerData.value?.containers || [
   };
 }));
 const temperatureGroups = computed(() => system.value?.temperatureGroups || []);
+const systemFans = computed(() => system.value?.fans || []);
 const gpuSummary = computed(() => {
   const gpus = system.value?.gpu || [];
   if (!gpus.length) return "未检测到或未映射 /dev/dri";
@@ -1396,10 +1433,6 @@ function formatFanRpm(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number.toLocaleString("zh-CN", { maximumFractionDigits: 1 }) : "-";
 }
-function maxTemperature(group) {
-  const values = (group?.items || []).map((item) => Number(item.current)).filter((value) => Number.isFinite(value));
-  return values.length ? Math.max(...values) : null;
-}
 function processBar(value) {
   return `${Math.max(3, ((value || 0) / processMax.value) * 100)}%`;
 }
@@ -1494,6 +1527,29 @@ function toggleMonitorCard(type, id) {
 function expandMonitorCard(type, id) {
   expandedMonitorCards.add(monitorCardKey(type, id));
 }
+function systemCardKey(type, id) {
+  return id ? `${type}:${id}` : "";
+}
+function isSystemCardExpanded(type, id) {
+  const key = systemCardKey(type, id);
+  return Boolean(key) && expandedSystemCards.has(key);
+}
+function toggleSystemCard(type, id) {
+  const key = systemCardKey(type, id);
+  if (!key) return;
+  if (expandedSystemCards.has(key)) expandedSystemCards.delete(key);
+  else expandedSystemCards.add(key);
+}
+// Temperature groups arrive with the first system snapshot; open the hottest one once and keep the
+// sensor order stable afterwards so the cards do not swap places on every 5 秒 refresh.
+let temperatureDefaultSeeded = false;
+watch(temperatureGroups, (groups) => {
+  if (temperatureDefaultSeeded || !groups.length) return;
+  temperatureDefaultSeeded = true;
+  const group = hottestTemperatureGroup(groups);
+  const key = systemCardKey("temp", group ? temperatureGroupKey(group) : "");
+  if (key) expandedSystemCards.add(key);
+});
 function monitorRuleSummary(rule = {}) {
   const metric = metricLabels[rule.metric] || "未选择指标";
   const duration = Number(rule.durationSeconds || 0);

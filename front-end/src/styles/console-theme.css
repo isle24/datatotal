@@ -196,7 +196,7 @@
 :root .app-shell .card-head p { margin-top: 4px; max-width: 72ch; color: var(--muted); font-size: .75rem; line-height: 1.6; }
 :root .app-shell :is(.card-actions, .controls, .edit-actions) { gap: 8px; }
 :root .app-shell .card-actions { justify-content: flex-end; }
-:root .app-shell :is(.info-grid, .history-cards, .temp-grid, .fan-grid) { gap: 8px 20px; padding: 16px 20px 20px; }
+:root .app-shell :is(.info-grid, .history-cards) { gap: 8px 20px; padding: 16px 20px 20px; }
 :root .app-shell .info-item {
   padding: 12px 0;
   border: 0;
@@ -226,7 +226,6 @@
   box-shadow: none;
 }
 :root .app-shell .dashboard-board::after,
-:root .app-shell .temp-card::before,
 :root .app-shell .monitor-stat::before { display: none; }
 :root .app-shell .dashboard-kicker { display: none; }
 :root .app-shell .dashboard-board-header { padding: 18px 20px; gap: 20px; border-color: var(--line); }
@@ -390,10 +389,11 @@
 :root .app-shell .container-picker-selection button { min-height: 36px; width: 36px; max-width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }
 
 /* Expandable editors are divided sections rather than elevated nested cards. */
-:root .app-shell :is(.accordion-stack, .docker-stack) { gap: 10px; padding: 16px 20px 20px; }
+:root .app-shell :is(.accordion-stack, .docker-stack) { gap: 8px; padding: 16px 20px 20px; }
 :root .app-shell :is(.docker-card, .collapsible-card, .monitor-status-card) { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: none; transform: none; }
 :root .app-shell :is(.docker-card, .collapsible-card, .monitor-status-card):hover { border-color: var(--control-line); transform: none; box-shadow: none; }
 :root .app-shell :is(.docker-card, .collapsible-card, .monitor-status-card).expanded { border: 1px solid var(--control-line); box-shadow: none; }
+:root .app-shell .docker-card.expanded { border-color: var(--accent); }
 :root .app-shell .accordion-stack .collapsible-card.expanded { border-left: 1px solid var(--control-line); }
 :root .app-shell .card-summary-row { min-height: 72px; padding: 10px 14px; }
 :root .app-shell .collapse-toggle { min-height: 48px; padding: 0; border: 0; background: transparent; }
@@ -426,10 +426,78 @@
 :root .app-shell .monitor-card-body { padding: 14px 16px 16px; border-color: var(--line); }
 :root .app-shell .monitor-card-icon { background: var(--panel-soft); color: var(--muted); }
 :root .app-shell .monitor-card-body span { font-size: .75rem; }
-:root .app-shell :is(.temp-card, .fan-card, .diagnostic-panel) { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 0; background: transparent; box-shadow: none; }
-:root .app-shell .temp-readings p { padding: 8px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
-:root .app-shell .fan-icon { background: var(--panel-soft); color: var(--muted); }
-:root .app-shell .fan-rpm b { font-size: 1.5rem; color: var(--text); }
+:root .app-shell .diagnostic-panel { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 0; background: transparent; box-shadow: none; }
+
+/* System sensors (temperature groups and fans) use the same stacked accordion as Docker. */
+:root .app-shell .system-stack { gap: 8px; padding: 16px 20px 20px; }
+:root .app-shell .system-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+  transition: border-color .18s ease, background-color .18s ease;
+}
+:root .app-shell .system-card:hover { border-color: var(--control-line); }
+:root .app-shell .system-card.expanded { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 32%, var(--panel)); }
+:root .app-shell .system-card-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+:root .app-shell .system-card-trigger:hover { background: color-mix(in srgb, var(--panel-soft) 70%, transparent); }
+:root .app-shell .system-card-copy + * { margin-left: auto; }
+:root .app-shell .system-card-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+:root .app-shell .system-card-icon.stopped { color: var(--orange); }
+:root .app-shell .system-card-copy { display: grid; gap: 4px; min-width: 0; }
+:root .app-shell .system-card-copy strong { font-size: .875rem; font-weight: 600; }
+:root .app-shell .system-card-copy small { color: var(--muted); font-size: .75rem; }
+:root .app-shell :is(.system-card-copy strong, .system-card-copy small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root .app-shell .system-card-metric { display: grid; justify-items: end; gap: 3px; text-align: right; }
+:root .app-shell .system-card-metric b { color: var(--text); font-size: .9375rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+:root .app-shell .system-card-metric small { color: var(--muted); font-size: .6875rem; }
+:root .app-shell .system-card-body {
+  display: grid;
+  gap: 2px;
+  padding: 4px 16px 14px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-soft) 55%, transparent);
+  animation: accordion-body-in .16s ease-out;
+}
+:root .app-shell :is(.docker-card-body, .monitor-card-body) { animation: accordion-body-in .16s ease-out; }
+@keyframes accordion-body-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+:root .app-shell .temp-reading { display: grid; grid-template-columns: minmax(0, 1fr) 96px auto; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+:root .app-shell .temp-reading:last-child { border-bottom: 0; }
+:root .app-shell .temp-reading-label { display: grid; gap: 3px; min-width: 0; }
+:root .app-shell .temp-reading-label strong { font-size: .8125rem; font-weight: 550; }
+:root .app-shell .temp-reading-label small { color: var(--muted); font-size: .6875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root .app-shell :is(.temp-reading-bar, .fan-speed-bar) { display: block; height: 5px; border-radius: 999px; background: color-mix(in srgb, var(--text) 9%, var(--panel)); overflow: hidden; }
+:root .app-shell :is(.temp-reading-bar, .fan-speed-bar) i { display: block; height: 100%; border-radius: 999px; background: var(--green); transition: width .2s ease; }
+:root .app-shell .temp-reading-bar i.warning { background: var(--orange); }
+:root .app-shell .temp-reading-bar i.critical { background: var(--red); }
+:root .app-shell .temp-reading-bar i.unknown { background: var(--muted); }
+:root .app-shell .fan-speed-bar i { background: var(--accent); }
+:root .app-shell .fan-detail { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+:root .app-shell .fan-detail span { color: var(--muted); font-size: .75rem; }
+:root .app-shell .fan-detail b { font-size: .8125rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+:root .app-shell .fan-speed { display: grid; gap: 8px; padding: 12px 0 0; }
+:root .app-shell .fan-speed small { color: var(--muted); font-size: .6875rem; }
 :root .app-shell .process-card { min-height: 130px; border-radius: 8px; }
 :root .app-shell .avatar { background: var(--panel-soft); color: var(--muted); font-weight: 600; }
 :root .app-shell .bars i { height: 4px; }
@@ -543,9 +611,9 @@
   :root .app-shell .metric-card strong { font-size: 1.25rem; }
   :root .app-shell .dn-stat-grid .dn-stat { min-height: 124px; padding: 16px; }
   :root .app-shell .dn-bottom-grid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  :root .app-shell :is(.form-grid, .form-grid.mini, .info-grid, .temp-grid, .fan-grid, .ai-form-grid) { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 16px; }
+  :root .app-shell :is(.form-grid, .form-grid.mini, .info-grid, .ai-form-grid) { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 16px; }
   :root .app-shell .form-grid.mini { padding: 0; }
-  :root .app-shell :is(.accordion-stack, .docker-stack, .process-grid, .rule-grid, .channel-grid, .docker-grid) { padding: 12px 16px 16px; }
+  :root .app-shell :is(.accordion-stack, .docker-stack, .system-stack, .process-grid, .rule-grid, .channel-grid, .docker-grid) { padding: 12px 16px 16px; }
   :root .app-shell :is(.process-grid, .docker-grid) { grid-template-columns: minmax(0, 1fr); }
   :root .app-shell .card-summary-row { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; }
   :root .app-shell .summary-actions { justify-content: flex-end; }
@@ -562,6 +630,13 @@
   :root .app-shell .inline-field { grid-template-columns: minmax(0, 1fr); }
   :root .app-shell .docker-card-summary { padding-left: 54px; }
   :root .app-shell .docker-card-body { padding: 16px; }
+  :root .app-shell .system-stack { padding: 12px 16px 16px; }
+  :root .app-shell .system-card-trigger { gap: 10px; padding: 12px 14px; }
+  :root .app-shell .system-card-icon { flex-basis: 30px; width: 30px; height: 30px; }
+  :root .app-shell .temp-reading { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label value" "bar bar"; row-gap: 8px; }
+  :root .app-shell .temp-reading-label { grid-area: label; }
+  :root .app-shell .temp-reading-bar { grid-area: bar; }
+  :root .app-shell .temp-reading > .temp-value { grid-area: value; }
   :root .app-shell .docker-stats { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   :root .app-shell .port-row { grid-template-columns: minmax(0, 1fr); }
   :root .app-shell .monitor-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
