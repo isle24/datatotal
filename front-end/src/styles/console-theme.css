@@ -1229,7 +1229,7 @@
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='160' height='160' filter='url(%23g)'/></svg>");
 }
 :root[data-theme="dark"] .app-shell::after { opacity: .05; }
-:root .app-shell > .sidebar,
+:root .app-shell > .sidebar { z-index: 2; }        /* keep position: sticky */
 :root .app-shell > .main { position: relative; z-index: 2; }
 
 /* Layout: keep content readable on ultra-wide screens -------------------- */
@@ -1435,4 +1435,79 @@
 :root .app-shell .agent-usage { margin: 0; color: color-mix(in srgb, var(--muted) 85%, transparent); font-size: .6875rem; }
 @media (max-width: 720px) {
   :root .app-shell .agent-ask { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Structured rendering of agent tool results: grouped tiles plus ranked rows. */
+:root .app-shell .agent-data { display: grid; gap: 14px; }
+:root .app-shell .agent-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+:root .app-shell .agent-datum {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+}
+:root .app-shell .agent-datum small { color: var(--muted); font-size: .6875rem; }
+:root .app-shell .agent-datum b {
+  color: var(--text);
+  font-size: .875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+:root .app-shell .agent-block > h5 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 550;
+  letter-spacing: .02em;
+}
+:root .app-shell .agent-block > h5 span {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  font-size: .6875rem;
+}
+:root .app-shell .agent-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+:root .app-shell .agent-rows li {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(110px, 32%) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+:root .app-shell .agent-rows li:nth-child(odd) { background: color-mix(in srgb, var(--panel-soft) 55%, transparent); }
+:root .app-shell .agent-row-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, transparent), color-mix(in srgb, var(--accent) 8%, transparent));
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+:root .app-shell .agent-row-title,
+:root .app-shell .agent-row-meta { position: relative; min-width: 0; }
+:root .app-shell .agent-row-title {
+  color: var(--text);
+  font-size: .8125rem;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root .app-shell .agent-row-meta {
+  color: var(--muted);
+  font-size: .75rem;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

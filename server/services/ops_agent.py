@@ -190,6 +190,8 @@ def _tool_traffic_history(args: Dict[str, Any], ctx: Any) -> dict:
                 "时段": bucket.get("label"),
                 "公网下行": format_bytes((bucket.get("wan") or {}).get("rxBytes")),
                 "公网上行": format_bytes((bucket.get("wan") or {}).get("txBytes")),
+                "公网下行字节": int((bucket.get("wan") or {}).get("rxBytes") or 0),
+                "公网上行字节": int((bucket.get("wan") or {}).get("txBytes") or 0),
             }
             for bucket in buckets[-5:]
         ],
@@ -217,6 +219,8 @@ def _tool_traffic_processes(args: Dict[str, Any], ctx: Any) -> dict:
                 "PID": row.get("pid"),
                 "上传": format_bytes(row.get("txBytes")),
                 "下载": format_bytes(row.get("rxBytes")),
+                "上传字节": int(row.get("txBytes") or 0),
+                "下载字节": int(row.get("rxBytes") or 0),
                 "命令": (row.get("cmdline") or "")[:120],
             }
             for row in ordered
@@ -257,14 +261,28 @@ def _tool_system_status(args: Dict[str, Any], ctx: Any) -> dict:
     hottest = None
     if isinstance(groups, list):
         for group in groups:
-            for reading in (group or {}).get("readings") or []:
+            # The API exposes per-sensor readings as `items`; older payloads used `readings`.
+            readings = (group or {}).get("items") or (group or {}).get("readings") or []
+            for reading in readings:
                 current = reading.get("current")
                 if current is None:
                     continue
                 if hottest is None or current > hottest[1]:
                     hottest = (f"{(group or {}).get('name')}/{reading.get('label')}", current)
+    elif isinstance(groups, dict):
+        for name, readings in groups.items():
+            for reading in readings or []:
+                current = reading.get("current")
+                if current is None:
+                    continue
+                if hottest is None or current > hottest[1]:
+                    hottest = (f"{name}/{reading.get('label')}", current)
     return {
-        "CPU": {"占用": f"{cpu.get('percent')}%", "核心": cpu.get("countLogical"), "负载": cpu.get("loadAverage")},
+        "CPU": {
+            "占用": f"{cpu.get('percent')}%",
+            "核心": cpu.get("countLogical"),
+            "负载": " / ".join(f"{round(float(value), 2)}" for value in (cpu.get("loadAverage") or [])[:3]) or None,
+        },
         "内存": {"占用": f"{memory.get('percent')}%", "已用": format_bytes(memory.get("used")), "总量": format_bytes(memory.get("total"))},
         "磁盘": {"占用": f"{disk.get('percent')}%", "已用": format_bytes(disk.get("used")), "总量": format_bytes(disk.get("total"))},
         "最高温度": {"传感器": hottest[0], "温度": f"{hottest[1]:.1f}°C"} if hottest else None,
@@ -414,6 +432,11 @@ def _tool_docker_top_consumers(args: Dict[str, Any], ctx: Any) -> dict:
             "CPU": f"{stats.get('cpuPercent')}%",
             "内存": format_bytes(stats.get("memoryUsedBytes")),
             "网络": f"↓{format_rate(network.get('rxBps'))} ↑{format_rate(network.get('txBps'))}",
+            "数值": values[metric],
+            "磁盘写入Bps": int(blkio.get("writeBps") or 0),
+            "磁盘读取Bps": int(blkio.get("readBps") or 0),
+            "内存字节": int(stats.get("memoryUsedBytes") or 0),
+            "网络Bps": int(float(network.get("rxBps") or 0) + float(network.get("txBps") or 0)),
         })
     scanned.sort(key=lambda entry: entry["_value"], reverse=True)
     ranked = []

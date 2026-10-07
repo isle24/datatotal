@@ -56,8 +56,8 @@ class FakeContext:
             "memory": {"percent": 41.0, "used": 8 * 1024 ** 3, "total": 23 * 1024 ** 3},
             "disk": {"percent": 9.2, "used": 173 * 1024 ** 3, "total": 1800 * 1024 ** 3},
             "temperatureGroups": [
-                {"name": "CPU", "readings": [{"label": "CPU 封装", "current": 51.0}]},
-                {"name": "NVMe 1", "readings": [{"label": "控制器", "current": 50.9}]},
+                {"name": "CPU", "items": [{"label": "CPU 封装", "current": 51.0}]},
+                {"name": "NVMe 1", "items": [{"label": "控制器", "current": 50.9}]},
             ],
             "fans": [{"name": "风扇 1", "rpm": 1200}],
             "gpu": [{"name": "Intel 核显", "utilPercent": 0.0, "driver": "i915"}],
@@ -391,6 +391,23 @@ class RankingAndMappingTests(unittest.TestCase):
 
     def setUp(self):
         self.ctx = FakeContext()
+
+    def test_system_tool_reads_the_live_temperature_shape(self):
+        result = ops_agent.run_tool("system_status", {}, self.ctx)
+        self.assertEqual(result["data"]["最高温度"]["传感器"], "CPU/CPU 封装")
+        self.assertEqual(result["data"]["最高温度"]["温度"], "51.0°C")
+        self.assertNotIn("[", result["data"]["CPU"]["负载"])
+
+    def test_system_tool_still_accepts_the_legacy_dict_shape(self):
+        class Legacy(FakeContext):
+            def system(self):
+                data = dict(super().system())
+                data.pop("temperatureGroups")
+                data["temperatures"] = {"coretemp": [{"label": "Package id 0", "current": 60.5}]}
+                return data
+
+        result = ops_agent.run_tool("system_status", {}, Legacy())
+        self.assertEqual(result["data"]["最高温度"]["温度"], "60.5°C")
 
     def test_container_ranking_sorts_by_disk_write(self):
         class Context(FakeContext):

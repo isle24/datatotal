@@ -691,6 +691,33 @@
                 <span v-if="agentAnswer.args && Object.keys(agentAnswer.args).length">· {{ JSON.stringify(agentAnswer.args) }}</span>
                 · {{ agentAnswer.durationMs }} ms · {{ agentAnswer.calls }} 次模型调用 · 约 {{ agentAnswer.tokensEstimate }} tokens
               </p>
+              <div v-if="agentAnswer.data" class="agent-data">
+                <div v-if="agentScalarEntries(agentAnswer.data).length" class="agent-tiles">
+                  <div v-for="[key, value] in agentScalarEntries(agentAnswer.data)" :key="`scalar-${key}`" class="agent-datum">
+                    <small>{{ key }}</small><b>{{ agentValueText(value) }}</b>
+                  </div>
+                </div>
+                <template v-for="(value, key) in agentAnswer.data" :key="key">
+                  <section v-if="isAgentObject(value)" class="agent-block">
+                    <h5>{{ key }}</h5>
+                    <div class="agent-tiles">
+                      <div v-for="(inner, innerKey) in value" :key="innerKey" class="agent-datum">
+                        <small>{{ innerKey }}</small><b>{{ agentValueText(inner) }}</b>
+                      </div>
+                    </div>
+                  </section>
+                  <section v-else-if="Array.isArray(value) && value.length" class="agent-block">
+                    <h5>{{ key }}<span>{{ value.length }}</span></h5>
+                    <ul class="agent-rows">
+                      <li v-for="(row, index) in value" :key="`${key}-${index}`">
+                        <span class="agent-row-bar" :style="{ width: agentRowBar(row, value) }" aria-hidden="true"></span>
+                        <span class="agent-row-title">{{ agentRowTitle(row) }}</span>
+                        <span class="agent-row-meta">{{ agentRowMeta(row) }}</span>
+                      </li>
+                    </ul>
+                  </section>
+                </template>
+              </div>
               <details v-if="agentAnswer.data">
                 <summary>查看原始数据</summary>
                 <pre>{{ JSON.stringify(agentAnswer.data, null, 2) }}</pre>
@@ -2199,6 +2226,56 @@ async function askAgent(question) {
   } finally {
     agentLoading.value = false;
   }
+}
+const AGENT_RAW_KEYS = [
+  "上传字节", "下载字节", "数值", "磁盘写入Bps", "磁盘读取Bps", "内存字节", "网络Bps",
+  "公网下行字节", "公网上行字节",
+];
+const AGENT_TITLE_KEYS = ["进程", "名称", "时段", "容器", "规则", "传感器", "类型", "渠道"];
+function isAgentScalar(value) {
+  return value === null || value === undefined || ["string", "number", "boolean"].includes(typeof value);
+}
+function isAgentObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function agentValueText(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+function agentScalarEntries(data) {
+  if (!isAgentObject(data)) return [];
+  return Object.entries(data).filter(([, value]) => isAgentScalar(value) && value !== "" && value !== null);
+}
+function agentTitleKey(row) {
+  if (!isAgentObject(row)) return "";
+  return AGENT_TITLE_KEYS.find((key) => typeof row[key] === "string" && row[key])
+    || Object.keys(row).find((key) => typeof row[key] === "string" && row[key])
+    || "";
+}
+function agentRowTitle(row) {
+  if (!isAgentObject(row)) return agentValueText(row);
+  const key = agentTitleKey(row);
+  return key ? agentValueText(row[key]) : "记录";
+}
+function agentRowMeta(row) {
+  if (!isAgentObject(row)) return "";
+  const titleKey = agentTitleKey(row);
+  return Object.entries(row)
+    .filter(([key, value]) => key !== titleKey && !AGENT_RAW_KEYS.includes(key) && isAgentScalar(value))
+    .map(([key, value]) => {
+      const text = agentValueText(value);
+      return `${key} ${text.length > 48 ? `${text.slice(0, 46)}…` : text}`;
+    })
+    .slice(0, 5)
+    .join(" · ");
+}
+function agentRowBar(row, rows) {
+  if (!isAgentObject(row)) return "0%";
+  const key = AGENT_RAW_KEYS.find((name) => Number(row[name]) > 0);
+  if (!key) return "0%";
+  const peak = Math.max(1, ...(rows || []).map((item) => Number(item?.[key]) || 0));
+  return `${Math.max(3, Math.round((Number(row[key]) / peak) * 100))}%`;
 }
 function agentToolLabel(tool) {
   return agentTools.value.find((entry) => entry.name === tool)?.label || tool || "-";
