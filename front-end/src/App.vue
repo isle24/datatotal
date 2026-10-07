@@ -31,6 +31,7 @@
         </div>
         <div class="top-actions">
           <span v-if="toast" class="toast" role="status" aria-live="polite">{{ toast }}</span>
+          <span class="quiet-more" aria-hidden="true"><MoreHorizontal :size="18" /></span>
           <button class="icon-button menu-toggle" type="button" :aria-expanded="menuOpen" :title="menuOpen ? '收起菜单（m）' : '打开菜单（m）'" @click="toggleMenu">
             <X v-if="menuOpen" :size="18" />
             <Menu v-else :size="18" />
@@ -61,17 +62,50 @@
               {{ portalStatusLine }}
             </p>
           </div>
-          <div class="portal-cards">
-            <button v-for="card in portalCards" :key="card.key" class="portal-card" type="button" @click="navigate(card.key)">
-              <span class="portal-card-icon"><component :is="card.icon" :size="22" /></span>
-              <strong>{{ card.label }}</strong>
-              <small>{{ card.meta }}</small>
+
+          <label class="portal-search">
+            <Search :size="18" />
+            <input
+              ref="portalSearchInput"
+              v-model="portalQuery"
+              type="search"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="搜索服务或页面，回车直达"
+              aria-label="搜索服务或页面"
+              @keydown.enter.prevent="submitPortalSearch"
+              @keydown.esc="portalQuery = ''"
+            />
+            <kbd v-if="!portalSearching">/</kbd>
+            <button v-else class="portal-search-clear" type="button" title="清除" @click="portalQuery = ''"><X :size="15" /></button>
+          </label>
+
+          <div v-if="portalServiceMatches.length" class="portal-services">
+            <button
+              v-for="entry in portalServiceMatches"
+              :key="entry.id"
+              class="portal-service"
+              type="button"
+              :title="entry.url"
+              @click="openPortalService(entry)"
+            >
+              <span class="portal-service-logo">
+                <img v-if="entry.icon" :src="entry.icon" alt="" loading="lazy" />
+                <Globe v-else :size="22" />
+              </span>
+              <strong>{{ entry.name }}</strong>
+              <small>{{ entry.notes || portalAddress(entry.url) }}</small>
             </button>
           </div>
+          <p v-else-if="portalSearching" class="portal-empty">没有匹配的服务，页面入口见下方</p>
+          <p v-else-if="portalError" class="portal-empty">{{ portalError }}</p>
+          <p v-else-if="portalLoading" class="portal-empty">正在加载服务…</p>
+          <button v-else class="portal-add" type="button" @click="navigate('navigation')"><Plus :size="16" />添加常用服务</button>
+
           <div class="portal-links">
-            <button v-for="item in portalLinks" :key="item.key" type="button" @click="navigate(item.key)">{{ item.label }}</button>
+            <button v-for="item in portalPageMatches" :key="item.key" type="button" @click="navigate(item.key)">{{ item.label }}</button>
           </div>
-          <p class="portal-hint">按 <kbd>m</kbd> 打开全部页面</p>
+          <p class="portal-hint">按 <kbd>/</kbd> 搜索 · <kbd>m</kbd> 打开全部页面</p>
         </div>
       </section>
 
@@ -1084,6 +1118,7 @@ import {
   ExternalLink,
   Fan,
   Gauge,
+  Globe,
   HardDrive,
   HelpCircle,
   History,
@@ -1091,6 +1126,7 @@ import {
   ImagePlus,
   Menu,
   Moon,
+  MoreHorizontal,
   Pin,
   Monitor,
   Network,
@@ -1099,6 +1135,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Send,
   Server,
   ShieldCheck,
@@ -1238,13 +1275,14 @@ watch(() => props.native, () => nextTick(handleResize));
 defineExpose({ refresh: refreshActive });
 import NavigationView from './components/NavigationView.vue';
 import { navigationRepository } from './api/navigation.js';
-import { dockerBookmark, navigationIcon, serviceUrl } from './utils/navigation.js';
+import { dockerBookmark, navigationIcon, safeNavigationUrl, serviceUrl } from './utils/navigation.js';
 const bookmarks = navigationRepository(api, transport);
 const toast = ref("");
 watch(toast, value => emit('toast', value));
 const requestError = ref("");
 let requestErrorUrl = "";
 const theme = ref(localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+const DEFAULT_PORTAL_PAGES = ["overview", "docker", "monitor", "history", "system", "navigation"];
 const menuOpen = ref(false);
 const menuPinned = ref(localStorage.getItem("ntl-menu-pinned") === "true");
 const overview = ref(null);
@@ -1417,20 +1455,73 @@ const dockerContainerOptions = computed(() => (dockerData.value?.containers || [
 }));
 const temperatureGroups = computed(() => system.value?.temperatureGroups || []);
 const systemFans = computed(() => system.value?.fans || []);
-const portalCards = computed(() => [
-  { key: "overview", label: "流量总览", meta: "实时速率与公网累计", icon: Activity },
-  { key: "docker", label: "Docker", meta: overview.value?.containerStatus?.enabled ? `${overview.value?.containerStatus?.count ?? 0} 个容器` : "容器与端口", icon: Server },
-  { key: "monitor", label: "监控中心", meta: "规则与上传异常", icon: Bell },
-  { key: "history", label: "历史统计", meta: "今日 / 本周 / 本月", icon: History },
-  { key: "system", label: "系统状态", meta: "资源、温度与 GPU", icon: Cpu },
-  { key: "navigation", label: "服务导航", meta: "常用服务入口", icon: Compass },
-]);
-const portalLinks = computed(() => [
-  { key: "interfaces", label: "网卡" },
-  { key: "processes", label: "进程" },
-  { key: "ai", label: "AI 中心" },
-  { key: "settings", label: "设置" },
-]);
+const portalQuery = ref("");
+const portalEntries = ref([]);
+const portalError = ref("");
+const portalLoading = ref(false);
+const portalSearchInput = ref(null);
+let portalLoaded = false;
+
+async function loadPortalServices() {
+  if (portalLoaded || portalLoading.value) return;
+  portalLoading.value = true;
+  try {
+    portalEntries.value = await bookmarks.list();
+    portalError.value = "";
+    portalLoaded = true;
+  } catch (error) {
+    portalError.value = error.message || "服务导航暂不可用";
+  } finally {
+    portalLoading.value = false;
+  }
+}
+function portalAddress(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return String(url || "").replace(/^https?:\/\//, "");
+  }
+}
+async function openPortalService(entry) {
+  const url = safeNavigationUrl(entry?.url);
+  if (!url) {
+    showToast("服务地址无效，请在服务导航里修改");
+    return;
+  }
+  try {
+    await bookmarks.open(url);
+  } catch (error) {
+    showToast(error.message || String(error));
+  }
+}
+const portalServiceMatches = computed(() => {
+  const keyword = portalQuery.value.trim().toLowerCase();
+  const list = portalEntries.value || [];
+  if (!keyword) return list;
+  return list.filter((entry) => `${entry.name} ${entry.url} ${entry.notes} ${entry.group}`.toLowerCase().includes(keyword));
+});
+const portalPages = computed(() => navItems.filter((item) => item.key !== "home"));
+const portalPageMatches = computed(() => {
+  const keyword = portalQuery.value.trim().toLowerCase();
+  if (!keyword) {
+    return portalPages.value.filter((item) => DEFAULT_PORTAL_PAGES.includes(item.key));
+  }
+  return portalPages.value.filter((item) => `${item.label} ${item.key}`.toLowerCase().includes(keyword));
+});
+const portalSearching = computed(() => portalQuery.value.trim().length > 0);
+const portalFirstResult = computed(() => {
+  const service = portalServiceMatches.value[0];
+  if (service) return { type: "service", entry: service };
+  const page = portalPageMatches.value[0];
+  if (page) return { type: "page", page };
+  return null;
+});
+function submitPortalSearch() {
+  const first = portalFirstResult.value;
+  if (!first) return;
+  if (first.type === "service") openPortalService(first.entry);
+  else navigate(first.page.key);
+}
 const portalStatusLine = computed(() => {
   const wan = summary.value.wan || {};
   const parts = [overviewStatusLabel.value];
@@ -2343,9 +2434,15 @@ function setMenuPinned(value) {
 }
 function handleMenuKeydown(event) {
   if (event.key === "Escape" && menuOpen.value) closeMenu();
+  const target = event.target;
+  const typing = target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+  if (activeView.value === "home" && !typing && !target?.isContentEditable
+    && (event.key === "/" || (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)))) {
+    event.preventDefault();
+    portalSearchInput.value?.focus();
+    return;
+  }
   if (event.key.toLowerCase() === "m" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-    const target = event.target;
-    const typing = target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
     if (!typing && !target?.isContentEditable) {
       event.preventDefault();
       toggleMenu();
@@ -2373,6 +2470,7 @@ function setView(view) {
 async function refreshActive() {
   try {
   if (activeView.value === "overview" || activeView.value === "home") await refreshOverview();
+  if (activeView.value === "home") loadPortalServices();
   if (activeView.value === "interfaces") await refreshInterfaces();
   if (activeView.value === "history") await refreshHistory();
   if (activeView.value === "processes") await refreshProcesses();

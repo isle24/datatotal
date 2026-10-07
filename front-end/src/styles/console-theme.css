@@ -970,43 +970,116 @@
   color: var(--muted);
   font-size: .8125rem;
 }
-:root .app-shell .portal-cards {
-  width: 100%;
+:root .app-shell .portal-search {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-:root .app-shell .portal-card {
-  display: grid;
-  justify-items: start;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 10px;
-  min-height: 132px;
-  padding: 20px;
+  width: min(520px, 100%);
+  padding: 0 14px;
+  min-height: 48px;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 97%, var(--accent) 3%), var(--panel));
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--muted);
   text-align: left;
-  transition: transform .22s cubic-bezier(.22, .61, .36, 1), border-color .2s ease, box-shadow .26s ease;
+  transition: border-color .2s ease, box-shadow .24s ease;
 }
-@media (max-width: 900px) and (min-width: 721px) {
-  :root .app-shell .portal-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-:root .app-shell .portal-card:hover {
-  transform: translateY(-3px);
+:root .app-shell .portal-search:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 26px 44px -30px rgba(15, 30, 51, .6);
+  box-shadow: 0 16px 34px -26px color-mix(in srgb, var(--accent) 70%, transparent);
 }
-:root .app-shell .portal-card-icon {
+:root .app-shell .portal-search input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: .9375rem;
+  outline: none;
+}
+:root .app-shell .portal-search input::placeholder { color: color-mix(in srgb, var(--muted) 85%, transparent); }
+:root .app-shell .portal-search input::-webkit-search-cancel-button { display: none; }
+:root .app-shell .portal-search kbd {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 7px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: .6875rem;
+}
+:root .app-shell .portal-search-clear {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-  color: var(--accent);
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
 }
-:root .app-shell .portal-card strong { color: var(--text); font-size: 1rem; font-weight: 600; }
-:root .app-shell .portal-card small { color: var(--muted); font-size: .75rem; }
+:root .app-shell .portal-search-clear:hover { background: var(--panel-soft); color: var(--text); }
+
+:root .app-shell .portal-services {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  text-align: left;
+}
+:root .app-shell .portal-service {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 12px;
+  min-height: 68px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 97%, var(--accent) 3%), var(--panel));
+  text-align: left;
+  transition: transform .2s cubic-bezier(.22, .61, .36, 1), border-color .2s ease, box-shadow .24s ease;
+}
+:root .app-shell .portal-service:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: 0 20px 34px -28px rgba(15, 30, 51, .6);
+}
+:root .app-shell .portal-service-logo {
+  grid-row: span 2;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-soft));
+  color: var(--accent);
+  overflow: hidden;
+}
+:root .app-shell .portal-service-logo img { width: 26px; height: 26px; object-fit: contain; }
+:root .app-shell .portal-service strong { color: var(--text); font-size: .875rem; font-weight: 600; }
+:root .app-shell .portal-service small {
+  color: var(--muted);
+  font-size: .75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root .app-shell .portal-empty { margin: 0; color: var(--muted); font-size: .8125rem; }
+:root .app-shell .portal-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px dashed var(--control-line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: .8125rem;
+}
+:root .app-shell .portal-add:hover { border-color: var(--accent); color: var(--accent); }
 :root .app-shell .portal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; }
 :root .app-shell .portal-links button {
   border: 0;
@@ -1039,15 +1112,36 @@
   background: transparent;
 }
 :root .app-shell .topbar.quiet > div:first-child { display: none; }
-:root .app-shell .topbar.quiet .top-actions { opacity: .16; transition: opacity .22s ease; }
+:root .app-shell .topbar.quiet .top-actions {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .22s ease;
+}
 :root .app-shell .topbar.quiet:hover .top-actions,
-:root .app-shell .topbar.quiet:focus-within .top-actions { opacity: 1; }
+:root .app-shell .topbar.quiet:focus-within .top-actions { opacity: 1; visibility: visible; }
+:root .app-shell .topbar.quiet .quiet-more {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--muted);
+  opacity: .2;
+  transition: opacity .2s ease;
+}
+:root .app-shell .topbar.quiet:hover .quiet-more,
+:root .app-shell .topbar.quiet:focus-within .quiet-more { opacity: 0; visibility: hidden; }
+/* Touch devices have no hover, so the controls stay reachable at low emphasis. */
+@media (hover: none) {
+  :root .app-shell .topbar.quiet .top-actions { opacity: .35; visibility: visible; }
+  :root .app-shell .topbar.quiet .quiet-more { display: none; }
+}
 @media (max-width: 720px) {
   :root .app-shell .view.portal { min-height: calc(100dvh - 40px); padding: 16px 0 40px; }
   :root .app-shell .portal-inner { gap: 22px; }
-  :root .app-shell .portal-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  :root .app-shell .portal-card { min-height: 112px; padding: 14px; gap: 8px; }
-  :root .app-shell .portal-card-icon { width: 36px; height: 36px; border-radius: 10px; }
-  :root .app-shell .portal-card strong { font-size: .875rem; }
+  :root .app-shell .portal-services { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  :root .app-shell .portal-service { grid-template-columns: 34px minmax(0, 1fr); min-height: 62px; padding: 10px 12px; gap: 2px 10px; }
+  :root .app-shell .portal-service-logo { width: 34px; height: 34px; border-radius: 10px; }
+  :root .app-shell .portal-search { min-height: 44px; }
   :root .app-shell .topbar.quiet .top-actions { opacity: .22; }
 }
