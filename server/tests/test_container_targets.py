@@ -26,7 +26,10 @@ class ContainerTargetTests(unittest.TestCase):
                              "cpu_usage": {"total_usage": 200}},
                "precpu_stats": {"system_cpu_usage": 100, "cpu_usage": {"total_usage": 100}}}
         with patch.object(main, "docker_api_get", return_value=raw):
-            self.assertEqual(main.docker_container_stats("demo")["cpuPercent"], 100)
+            stats = main.docker_container_stats("demo")
+        self.assertEqual(stats["cpuPercent"], 25.0)
+        self.assertEqual(stats["cpuPercentSingleCore"], 100.0)
+        self.assertEqual(stats["cpuCount"], 4)
 
     def test_selected_containers_act_independently(self):
         c = self.make_collector()

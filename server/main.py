@@ -2132,7 +2132,13 @@ def docker_container_stats(container_id: str) -> dict:
     cpu_delta = max(0, int(cpu_usage.get("total_usage") or 0) - int(precpu_usage.get("total_usage") or 0))
     system_delta = max(0, int(cpu_stats.get("system_cpu_usage") or 0) - int(precpu_stats.get("system_cpu_usage") or 0))
     cpu_count = int(cpu_stats.get("online_cpus") or 0) or len(cpu_usage.get("percpu_usage") or []) or 1
-    cpu_percent = round((cpu_delta / system_delta) * cpu_count * 100.0, 2) if cpu_delta and system_delta else 0.0
+    cpu_ratio = (cpu_delta / system_delta) if cpu_delta and system_delta else 0.0
+    # Whole-machine CPU %: the ratio of busy CPU time to total wall time, all cores summed.
+    # A container saturating every core reports 100 here, exactly like the host CPU meter.
+    cpu_percent = round(cpu_ratio * 100.0, 2)
+    # Docker's historical convention (100% = one fully busy core), kept for compatibility
+    # with clients and dashboards that expect the per-single-core scale.
+    cpu_percent_single_core = round(cpu_ratio * cpu_count * 100.0, 2)
 
     memory_stats = stats.get("memory_stats") if isinstance(stats.get("memory_stats"), dict) else {}
     memory_usage = int(memory_stats.get("usage") or 0)
@@ -2166,6 +2172,8 @@ def docker_container_stats(container_id: str) -> dict:
 
     return {
         "cpuPercent": cpu_percent,
+        "cpuPercentSingleCore": cpu_percent_single_core,
+        "cpuCount": cpu_count,
         "memoryUsedBytes": memory_working_set,
         "memoryUsageBytes": memory_usage,
         "memoryLimitBytes": memory_limit,
@@ -2735,6 +2743,8 @@ def unique_containers(items: List[dict]) -> List[dict]:
 
 DOCKER_STATS_FIELDS = {
     "cpuPercent",
+    "cpuPercentSingleCore",
+    "cpuCount",
     "memoryUsedBytes",
     "memoryUsageBytes",
     "memoryLimitBytes",
@@ -3224,7 +3234,7 @@ class TrafficCollector:
         blk_read = max(0, int(stats.get("blkReadBytes") or 0))
         blk_write = max(0, int(stats.get("blkWriteBytes") or 0))
         blk_io = max(0, int(stats.get("blkIoBytes") or 0)) or (blk_read + blk_write)
-        return {
+        normalized = {
             "cpuPercent": float(stats.get("cpuPercent") or 0),
             "memoryUsedBytes": memory_used,
             "memoryUsageBytes": memory_usage,
@@ -3237,9 +3247,18 @@ class TrafficCollector:
             "blkIoBytes": blk_io,
             **{key: float(stats[key]) for key in ("blkReadBps", "blkWriteBps", "blkIoBps") if stats.get(key) is not None},
         }
+        # cpuPercent is whole-machine CPU %; these two keep the previous Docker-style
+        # per-single-core scale and the core count available for display when sampled.
+        if stats.get("cpuPercentSingleCore") is not None:
+            normalized["cpuPercentSingleCore"] = float(stats["cpuPercentSingleCore"])
+        if stats.get("cpuCount") is not None:
+            normalized["cpuCount"] = int(stats["cpuCount"])
+        return normalized
 
     def container_protection_metric_value(self, state: dict, stats: dict, metric: str, timestamp: float) -> float:
         if metric == "cpuPercent":
+            # Protection thresholds are whole-machine CPU % (all cores summed), matching
+            # the host CPU meter rather than Docker's per-single-core convention.
             return float(stats.get("cpuPercent") or 0)
         if metric == "memoryPercent":
             return float(stats.get("memoryPercent") or 0)

@@ -494,7 +494,7 @@
                   <span v-if="container.protection?.enabled"><ShieldCheck :size="15" />{{ container.protection.rules?.length || 0 }} 条保护规则</span>
                 </div>
                 <div v-if="container.showStats" class="docker-stats">
-                  <span>CPU {{ formatPercent(container.stats?.cpuPercent) }}</span>
+                  <span>CPU {{ formatDockerCpu(container.stats) }}</span>
                   <span>内存 {{ formatBytes(container.stats?.memoryUsedBytes) }}</span>
                   <span>↓ {{ formatBytes(container.stats?.netRxBytes) }} / ↑ {{ formatBytes(container.stats?.netTxBytes) }}</span>
                 </div>
@@ -1005,6 +1005,7 @@
                     </div>
                     <button type="button" class="subtle-button" @click="addContainerCondition(rule)"><Plus :size="16" />添加条件</button>
                   </div>
+                  <p class="field-hint">CPU 占用按整机所有核心合计计算，100% = 全部 CPU 核心之和；阈值 5 表示整机 5%，不是单核 5%，也不是容器限额占比。</p>
                 </div>
               </div>
                 <button class="danger" type="button" @click="removeContainerRule(rule.id)"><Trash2 :size="16" />删除规则</button>
@@ -1288,7 +1289,7 @@ const metricLabels = {
 const transferUnitBytes = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, "B/s": 1, "KB/s": 1024, "MB/s": 1024 ** 2, "GB/s": 1024 ** 3 };
 import { providerPresets } from "./utils/ai-providers.js";
 import { normalizeProtectionRule, normalizeProtectionCondition, protectionRulePayload, protectionUnitOptions,
-  hasProtectionTarget, toggleProtectionTarget, newUploadRule, monitorWindow } from "./utils/container-protection.js";
+  hasProtectionTarget, toggleProtectionTarget, newUploadRule, monitorWindow, formatDockerCpu } from "./utils/container-protection.js";
 const templateVariables = [
   ["app", "应用名"],
   ["version", "版本"],
@@ -1314,7 +1315,7 @@ const templateVariables = [
   ["container_metrics", "指标详情"],
 ];
 const containerProtectionMetricLabels = {
-  cpuPercent: "CPU 占用",
+  cpuPercent: "CPU 占用（整机）",
   memoryPercent: "内存占用比例",
   memoryUsedBytes: "内存用量",
   blkReadBps: "磁盘读取速度",

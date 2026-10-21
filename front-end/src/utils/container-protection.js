@@ -58,3 +58,17 @@ export function newUploadRule(id) {
   return { id, name: "每日公网上传超限", metric: "daily_wan_tx_bytes", operator: "gte", threshold: 0,
     durationSeconds: 0, scope: "wan", direction: "tx", window: "day", enabled: false, channelIds: [] };
 }
+
+// Docker stats 的 cpuPercent 已按整机口径返回：100% = 所有核心之和。
+// 展示时突出整机口径，并在后端提供旧口径（单核 100%）时作为参照附上。
+export function formatDockerCpu(stats = {}) {
+  const whole = stats?.cpuPercent;
+  if (whole === null || whole === undefined || whole === "") return "-";
+  const wholeNumber = Number(whole);
+  if (!Number.isFinite(wholeNumber)) return "-";
+  const text = `整机 ${wholeNumber.toFixed(1)}%`;
+  const single = stats?.cpuPercentSingleCore;
+  if (single === null || single === undefined || single === "") return text;
+  const singleNumber = Number(single);
+  return Number.isFinite(singleNumber) ? `${text}（单核 ${singleNumber.toFixed(1)}%）` : text;
+}

@@ -365,11 +365,11 @@ def _tool_docker_container_stats(args: Dict[str, Any], ctx: Any) -> dict:
     stats = payload.get("stats") or {}
     blkio = stats.get("blkio") or {}
     network = stats.get("network") or {}
-    return {
+    result = {
         "容器": target.get("name"),
         "镜像": target.get("image"),
         "状态": stats.get("state") or target.get("state"),
-        "CPU": f"{stats.get('cpuPercent')}%",
+        "CPU": f"{stats.get('cpuPercent')}%（整机）",
         "内存": {"占用": f"{stats.get('memoryPercent')}%", "已用": format_bytes(stats.get("memoryUsedBytes"))},
         "磁盘": {"读": format_rate(blkio.get("readBps")), "写": format_rate(blkio.get("writeBps"))},
         "网络": {"下行": format_rate(network.get("rxBps")), "上行": format_rate(network.get("txBps"))},
@@ -378,6 +378,10 @@ def _tool_docker_container_stats(args: Dict[str, Any], ctx: Any) -> dict:
             for port in (target.get("ports") or [])[:8]
         ],
     }
+    single_core = stats.get("cpuPercentSingleCore")
+    if single_core is not None:
+        result["CPU单核"] = f"{single_core}%（单核）"
+    return result
 
 
 _CONTAINER_METRIC = {
@@ -429,7 +433,7 @@ def _tool_docker_top_consumers(args: Dict[str, Any], ctx: Any) -> dict:
             "_value": values[metric],
             "磁盘写入": format_rate(blkio.get("writeBps")),
             "磁盘读取": format_rate(blkio.get("readBps")),
-            "CPU": f"{stats.get('cpuPercent')}%",
+            "CPU": f"{stats.get('cpuPercent')}%（整机）",
             "内存": format_bytes(stats.get("memoryUsedBytes")),
             "网络": f"↓{format_rate(network.get('rxBps'))} ↑{format_rate(network.get('txBps'))}",
             "数值": values[metric],
@@ -446,7 +450,7 @@ def _tool_docker_top_consumers(args: Dict[str, Any], ctx: Any) -> dict:
         ranked.append(entry)
     return {
         "排序依据": metric,
-        "口径说明": "按实时速率排序；容器磁盘占用量（写入层大小）本接口未采集",
+        "口径说明": "按实时速率排序；CPU 为整机占比（全部核心合计，100% = 整机跑满）；容器磁盘占用量（写入层大小）本接口未采集",
         "已扫描容器": len(scanned),
         "跳过容器": failures,
         "容器总数": len(rows),
