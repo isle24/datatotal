@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSettingsDrafts, connectionDefaults, validateTimeRange, validateContainerRules,
-  notificationMode, monitorPayload, validateChannels } from "../src/utils/settings-ux.js";
+  notificationMode, monitorPayload, validateChannels, rulesPayloadWithRevision, settingsSaveError } from "../src/utils/settings-ux.js";
 import { selectionForRule, applyContainerSelection, addVisibleTargets, toggleContainerTarget,
   matchesContainerTarget, switchProtectionScope } from "../src/utils/container-selection.js";
 
@@ -29,6 +29,44 @@ test("a delayed save response preserves newer model and credential drafts", () =
   const result = drafts.applySaved("ai", response, newer, submitted);
   assert.deepEqual(result, newer);
   assert.equal(drafts.isDirty("ai", newer), true);
+});
+
+test("dirty rule drafts keep their original server revision across unrelated refreshes", () => {
+  const drafts = createSettingsDrafts();
+  const original = [{ id: 'a', name: 'before' }];
+  const edited = [{ id: 'a', name: 'draft' }];
+  const server = [{ id: 'a', name: 'before' }, { id: 'b', name: 'new elsewhere' }];
+  drafts.hydrate('monitor', original, [], false, 'revision-a');
+  drafts.hydrate('protection', [{ id: 'p' }], [], false, 'revision-p');
+  assert.deepEqual(drafts.hydrate('monitor', server, edited, false, 'revision-b'), edited);
+  drafts.hydrate('protection', [{ id: 'p2' }], [{ id: 'p' }], false, 'revision-q');
+  assert.equal(drafts.revision('monitor'), 'revision-a');
+  assert.equal(drafts.revision('protection'), 'revision-q');
+  assert.deepEqual(rulesPayloadWithRevision(edited, drafts.revision('monitor')), { rules: edited, expectedRevision: 'revision-a' });
+  assert.deepEqual(drafts.hydrate('monitor', server, edited, true, 'revision-b'), server);
+  assert.equal(drafts.revision('monitor'), 'revision-b');
+});
+
+test("a successful save advances its revision while preserving edits made during the request", () => {
+  const drafts = createSettingsDrafts();
+  const before = [{ id: 'a', threshold: 10 }];
+  const submitted = [{ id: 'a', threshold: 20 }];
+  const newer = [{ id: 'a', threshold: 30 }];
+  drafts.hydrate('monitor', before, [], false, 'revision-a');
+  assert.deepEqual(drafts.applySaved('monitor', submitted, newer, submitted, 'revision-b'), newer);
+  assert.equal(drafts.revision('monitor'), 'revision-b');
+  assert.equal(drafts.isDirty('monitor', newer), true);
+});
+
+test("older servers omit the revision and conflicts explain how to preserve and reload drafts", () => {
+  const drafts = createSettingsDrafts();
+  const rules = [{ id: 'a' }];
+  drafts.hydrate('monitor', rules, []);
+  assert.deepEqual(rulesPayloadWithRevision(rules, drafts.revision('monitor')), { rules });
+  assert.match(settingsSaveError({ status: 409 }, 'monitor'), /服务器.*变化/);
+  assert.match(settingsSaveError({ status: 409 }, 'monitor'), /草稿/);
+  assert.match(settingsSaveError({ status: 409 }, 'monitor'), /重新加载/);
+  assert.match(settingsSaveError({ status: 503, message: 'busy' }, 'monitor'), /busy/);
 });
 
 test("filtered bulk selection preserves unavailable and hidden selected containers", () => {

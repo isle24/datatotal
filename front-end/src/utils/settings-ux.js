@@ -3,24 +3,37 @@ const factors = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3,
 
 export function createSettingsDrafts() {
   const baselines = new Map();
+  const revisions = new Map();
   const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
   const signature = value => JSON.stringify(canonical(value));
   return {
-    capture(key, value) { baselines.set(key, signature(value)); },
+    capture(key, value, revision) { baselines.set(key, signature(value)); revisions.set(key, revision); },
+    revision(key) { return revisions.get(key); },
     isDirty(key, value) { return baselines.has(key) && baselines.get(key) !== signature(value); },
-    hydrate(key, incoming, current, force = false) {
+    hydrate(key, incoming, current, force = false, revision) {
       if (!force && this.isDirty(key, current)) return current;
       const result = JSON.parse(signature(incoming));
-      this.capture(key, result);
+      this.capture(key, result, revision);
       return result;
     },
-    applySaved(key, incoming, current, submitted) {
-      if (signature(current) === signature(submitted)) return this.hydrate(key, incoming, current, true);
-      this.capture(key, incoming);
+    applySaved(key, incoming, current, submitted, revision) {
+      if (signature(current) === signature(submitted)) return this.hydrate(key, incoming, current, true, revision);
+      this.capture(key, incoming, revision);
       return current;
     },
   };
+}
+
+export function rulesPayloadWithRevision(rules, revision) {
+  return typeof revision === 'string' && revision ? { rules, expectedRevision: revision } : { rules };
+}
+
+export function settingsSaveError(error, group, fallback = error?.message || '请求失败') {
+  if (error?.status === 409 && ['monitor', 'protection'].includes(group)) {
+    return '服务器上的规则已变化，当前草稿已保留。请重新加载当前分区后再检查并修改。';
+  }
+  return '保存失败：' + fallback;
 }
 
 export function notificationMode(rule) {

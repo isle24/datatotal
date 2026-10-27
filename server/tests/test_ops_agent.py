@@ -341,6 +341,7 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(mocked.call_args[0][0], "今天上传了多少")
 
     def test_audit_rows_are_persisted_and_listed(self):
+        from datetime import datetime
         from fastapi.testclient import TestClient
         from unittest.mock import patch
         import sqlite3
@@ -362,8 +363,11 @@ class AgentApiTests(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["tool"], "traffic_processes")
                 self.assertEqual(rows[0]["args"], {"metric": "upload"})
-                usage = database.agent_usage_summary()
-                # The sample row is stamped "today", so it counts towards the daily usage.
+                # Fix the local calendar date to the sample timestamp; the test must
+                # not depend on the wall-clock date or the host's time zone.
+                with patch.object(main, "datetime", wraps=datetime) as frozen_clock:
+                    frozen_clock.now.return_value = datetime.fromtimestamp(1791380000)
+                    usage = database.agent_usage_summary()
                 self.assertEqual(usage["questions"], 1)
                 self.assertEqual(usage["calls"], 2)
                 self.assertEqual(usage["tokensEstimate"], 180)

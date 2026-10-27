@@ -810,6 +810,7 @@
           <button v-if="sectionDirty(settingsSection)" type="button" :disabled="settingsSaving[currentSettingsGroup]" @click="discardSettingsDraft">放弃当前修改</button>
         </div>
         <p v-if="settingsErrors[currentSettingsGroup]" class="settings-feedback error" role="alert">{{ settingsErrors[currentSettingsGroup] }}</p>
+        <button v-if="settingsConflicts[currentSettingsGroup]" type="button" class="subtle-button" :disabled="settingsLoading || settingsSaving[currentSettingsGroup]" @click="discardSettingsDraft">重新加载当前分区</button>
         <section v-if="settings && settingsSection === 'maintenance'" class="card">
           <CardHead title="历史数据维护" meta="清理流量历史，保留规则、渠道、图标、AI 对话和告警证据">
             <button type="button" class="danger" @click="clearTrafficHistory"><Trash2 :size="16" />清理流量历史</button>
@@ -1172,7 +1173,8 @@ import ConfirmDialog from "./components/ConfirmDialog.vue";
 import "./styles/console-theme.css";
 import { selectionForRule, applyContainerSelection, switchProtectionScope } from "./utils/container-selection.js";
 import { createSettingsDrafts, notificationMode, monitorPayload, validateContainerRules,
-  validateMonitorRules, validateChannels, connectionDefaults, validateTimeRange } from "./utils/settings-ux.js";
+  validateMonitorRules, validateChannels, connectionDefaults, validateTimeRange,
+  rulesPayloadWithRevision, settingsSaveError } from "./utils/settings-ux.js";
 const transport = inject("trafficTransport", browserTransport);
 let disposed = false;
 import { createLatestRequest, createPollLoop } from "./utils/requests.js";
@@ -1411,6 +1413,7 @@ const settingsLoading = ref(false);
 const settingsSection = ref("runtime");
 const settingsSaving = reactive({ runtime: false, monitor: false, protection: false, channels: false, ai: false });
 const settingsErrors = reactive({});
+const settingsConflicts = reactive({});
 const settingsDrafts = createSettingsDrafts();
 const settingsDraftRevision = ref(0);
 const testingChannel = ref("");
@@ -2126,10 +2129,11 @@ function acceptSettings(data, forceGroups = [], submitted = {}) {
   if (data.monitor?.channels) incoming.channels = data.monitor.channels;
   if (data.runtime) incoming.runtime = data.runtime;
   if (data.ai) incoming.ai = { ...data.ai, apiKey: '' };
+  const revisions = { monitor: data.monitor?.rulesRevision, protection: data.monitor?.containerRulesRevision };
   for (const [group, value] of Object.entries(incoming)) {
     const result = submitted[group]
-      ? settingsDrafts.applySaved(group, value, settingsDraftValue(group), submitted[group])
-      : settingsDrafts.hydrate(group, value, settingsDraftValue(group), forceGroups.includes(group));
+      ? settingsDrafts.applySaved(group, value, settingsDraftValue(group), submitted[group], revisions[group])
+      : settingsDrafts.hydrate(group, value, settingsDraftValue(group), forceGroups.includes(group), revisions[group]);
     if (group === 'monitor') monitorRules.value = result;
     if (group === 'protection') containerRules.value = result;
     if (group === 'channels') channels.value = result;
@@ -2139,16 +2143,19 @@ function acceptSettings(data, forceGroups = [], submitted = {}) {
   settingsDraftRevision.value++;
 }
 async function refreshSettings(forceGroups = []) {
-  if (settingsLoading.value) return;
+  if (settingsLoading.value) return false;
   settingsLoading.value = true;
   try { acceptSettings(await api('/api/settings'), forceGroups); }
   finally { settingsLoading.value = false; }
   if (activeView.value === "settings") refreshDockerContainerOptions();
+  return true;
 }
 async function discardSettingsDraft() {
-  if (!await confirmAction('放弃当前分区尚未保存的修改，并重新读取服务器设置？')) return;
-  await refreshSettings([currentSettingsGroup.value]);
-  settingsErrors[currentSettingsGroup.value] = '';
+  const group = currentSettingsGroup.value;
+  if (sectionDirty(group) && !await confirmAction('放弃当前分区尚未保存的修改，并重新读取服务器设置？')) return;
+  try {
+    if (await refreshSettings([group])) { settingsErrors[group] = ''; settingsConflicts[group] = false; }
+  } catch (error) { settingsErrors[group] = '重新加载失败：' + formatValidationError(error); }
 }
 async function saveSettingsGroup(group, action, validation = '') {
   if (settingsSaving[group]) return false;
@@ -2156,8 +2163,8 @@ async function saveSettingsGroup(group, action, validation = '') {
   if (validation) { settingsErrors[group] = validation; return false; }
   settingsSaving[group] = true;
   const submitted = JSON.parse(JSON.stringify(settingsDraftValue(group)));
-  try { acceptSettings(await action(), [group], { [group]: submitted }); showToast(`${settingsSections.find(s => s.key === group)?.label || '设置'}已保存${sectionDirty(group) ? '，还有新的未保存修改' : ''}`); return true; }
-  catch (error) { settingsErrors[group] = '保存失败：' + formatValidationError(error); return false; }
+  try { acceptSettings(await action(), [group], { [group]: submitted }); settingsConflicts[group] = false; showToast(`${settingsSections.find(s => s.key === group)?.label || '设置'}已保存${sectionDirty(group) ? '，还有新的未保存修改' : ''}`); return true; }
+  catch (error) { settingsErrors[group] = settingsSaveError(error, group, formatValidationError(error)); settingsConflicts[group] = error?.status === 409 && ['monitor', 'protection'].includes(group); return false; }
   finally { settingsSaving[group] = false; }
 }
 async function refreshAlertHistory() {
@@ -2888,10 +2895,10 @@ function handleAiComposerKeydown(event) {
   sendAiChat();
 }
 async function saveRules() {
-  return saveSettingsGroup('monitor', () => api('/api/settings/monitor', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: monitorRules.value.map(monitorPayload) }) }), validateMonitorRules(monitorRules.value));
+  return saveSettingsGroup('monitor', () => api('/api/settings/monitor', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rulesPayloadWithRevision(monitorRules.value.map(monitorPayload), settingsDrafts.revision('monitor'))) }), validateMonitorRules(monitorRules.value));
 }
 async function saveContainerRules() {
-  return saveSettingsGroup('protection', () => api('/api/settings/container-protection', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: containerRules.value.map(protectionRulePayload) }) }), validateContainerRules(containerRules.value));
+  return saveSettingsGroup('protection', () => api('/api/settings/container-protection', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rulesPayloadWithRevision(containerRules.value.map(protectionRulePayload), settingsDrafts.revision('protection'))) }), validateContainerRules(containerRules.value));
 }
 async function saveChannels() {
   return saveSettingsGroup('channels', () => api('/api/settings/channels', { localError: true, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channels: channels.value }) }), validateChannels(channels.value));

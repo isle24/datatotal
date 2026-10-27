@@ -16,6 +16,38 @@ Windows / macOS 另有 **Traffic Lens 0.5.0 桌面预览版**：无需 Docker，
 - `docker-compose.yml`：本地构建测试用。
 - `docker-compose.nas.yml`：NAS 部署推荐模板。
 
+## Agent Skill 与查询 CLI
+
+仓库提供符合 Agent Skills 格式的 [`nas-traffic-lens`](.agents/skills/nas-traffic-lens/SKILL.md)。它让支持该格式的 Agent 按需查询流量、历史、进程、系统、容器和告警，也可按明确指令修改单条监控或容器保护规则，以及重启指定容器。查询和操作不调用内置 AI 模型。
+
+在安装了 Codex 的其他机器上，可让 Codex 使用 `$skill-installer` 安装 `isle24/datatotal` 中的 `.agents/skills/nas-traffic-lens`，也可以直接运行：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
+  --repo isle24/datatotal --path .agents/skills/nas-traffic-lens
+```
+
+安装完成后，在新的 Codex 对话或下一轮中使用 `$nas-traffic-lens`。查询需要 NAS 的访问地址和认证；修改规则或重启容器还需要支持 Agent 操作接口的 NAS 版本以及已启用的面板密码。已经存在同名技能时，安装器不会覆盖它。
+
+在仓库中可从项目技能目录发现；若希望在其他目录使用，可将技能目录链接到所用 Agent 的技能目录，例如：
+
+```bash
+mkdir -p ~/.agents/skills
+ln -s "$(pwd)/.agents/skills/nas-traffic-lens" ~/.agents/skills/nas-traffic-lens
+```
+
+然后可在支持技能调用的 Agent 中使用 `$nas-traffic-lens`。技能目录中的查询程序也可独立运行（需要 Python 3.9 或更新版本）：
+
+```bash
+python3 .agents/skills/nas-traffic-lens/scripts/ntl.py --url http://NAS-IP:8088 overview
+python3 .agents/skills/nas-traffic-lens/scripts/ntl.py --url http://NAS-IP:8088 history --period day
+python3 .agents/skills/nas-traffic-lens/scripts/ntl.py --help
+```
+
+可用 `NTL_URL` 提供服务地址。需要登录时，交互终端会隐藏密码输入；自动化可通过可信凭据提供程序经标准输入传入 `--password-stdin`，不要把密码写入命令行、文件或日志。也可使用 `ntl_sshbind.py --help` 查看已有 sshbind 和 Docker 权限下的查询方式，它仅在内存中读取密码。优先使用 HTTPS；HTTP 会在网络上传送明文密码与 Cookie，应限于可信网络。返回错误时程序以非零状态退出。`overview` 中的实时速率和累计字节与 `history --period day` 的今日累计是不同口径；历史数据可能有落库延迟或缺失。
+
+`rules --kind monitor|protection` 返回规则与版本，`rule-put` / `rule-delete` 使用该版本进行单条修改，发生并发冲突会拒绝写入；`container-restart <容器ID>` 重启明确指定的容器。写操作都需要 `--apply`，且服务端必须配置面板密码。更多参数可用各子命令的 `--help` 查看；请求结果未知时应先核对状态，再决定是否重试。
+
 ## 界面预览
 
 截图取自实际运行的极空间 NAS（NAS 镜像 2026.10.07-12）。

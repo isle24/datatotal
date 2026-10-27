@@ -1,0 +1,3 @@
+interface:
+  display_name: "NAS Traffic Lens"
+  short_description: "查询 NAS 状态并按指令操作规则和容器"

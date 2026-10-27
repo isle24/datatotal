@@ -17,6 +17,7 @@ import time
 import urllib.parse
 import urllib.request
 import traceback
+import unicodedata
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -658,6 +659,15 @@ class MonitorRule(BaseModel):
 
 class MonitorRulesPayload(BaseModel):
     rules: List[MonitorRule]
+    expectedRevision: Optional[str] = None
+
+
+class AgentRuleMutation(BaseModel):
+    model_config = {"extra": "forbid"}
+    expectedRevision: str
+    operation: Literal["put", "delete"]
+    rule: Optional[dict] = None
+    ruleId: Optional[str] = None
 
 
 class ContainerProtectionCondition(BaseModel):
@@ -692,6 +702,7 @@ class ContainerProtectionRule(ContainerProtectionTarget):
 
 class ContainerProtectionRulesPayload(BaseModel):
     rules: List[ContainerProtectionRule]
+    expectedRevision: Optional[str] = None
 
 
 class NotificationChannel(BaseModel):
@@ -3874,10 +3885,11 @@ class TrafficCollector:
             data = go_snapshot()
             if not data or not data.get("interfaces"):
                 self.last_go_sample = None
-                for metric in ("wan_tx_bps", "wan_rx_bps", "lan_tx_bps", "lan_rx_bps", "stage_wan_tx_bytes"):
-                    for rule in self.monitor_rules:
-                        if rule.get("metric") == metric:
-                            self.rule_states.pop(rule["id"], None)
+                with self.settings_lock:
+                    for metric in ("wan_tx_bps", "wan_rx_bps", "lan_tx_bps", "lan_rx_bps", "stage_wan_tx_bytes"):
+                        for rule in self.monitor_rules:
+                            if rule.get("metric") == metric:
+                                self.rule_states.pop(rule["id"], None)
                 return None
             self.last_go_sample = data
             return {"interfaces": data["interfaces"], "rates": data.get("rates") or {}}
@@ -4595,6 +4607,12 @@ class TrafficCollector:
         self.evaluate_monitor_rule("daily_wan_tx_bytes", totals["txBytes"], timestamp)
 
     def evaluate_monitor_rule(self, metric: str, value: float, timestamp: float) -> bool:
+        # Rule edits and sampling share this lock so an old sample cannot re-arm
+        # the state after a new threshold has been installed.
+        with self.settings_lock:
+            return self._evaluate_monitor_rule_locked(metric, value, timestamp)
+
+    def _evaluate_monitor_rule_locked(self, metric: str, value: float, timestamp: float) -> bool:
         triggered = False
         for rule in self.monitor_rules:
             if not rule.get("enabled") or rule.get("metric") != metric:
@@ -5397,8 +5415,10 @@ class TrafficCollector:
             "ai": public_ai_settings(ai_settings),
             "monitor": {
                 "rules": self.monitor_rules,
+                "rulesRevision": agent_rules_revision(self.monitor_rules),
                 "channels": self.notification_channels,
                 "containerRules": self.container_protection_rules,
+                "containerRulesRevision": agent_rules_revision(self.container_protection_rules),
                 "containerStates": copy.deepcopy(self.container_protection_states),
             },
             "runtime": {
@@ -5617,10 +5637,13 @@ class TrafficCollector:
         return self.get_settings()
 
     def update_monitor_rules(self, payload: MonitorRulesPayload) -> dict:
-        self.monitor_rules = [sanitize_monitor_rule(rule) for rule in payload.rules]
-        self.db.set_setting("monitor_rules", {"rules": self.monitor_rules})
-        self.sync_legacy_settings()
-        return self.get_settings()
+        with self.settings_lock, self.protection_lock:
+            if payload.expectedRevision is not None and payload.expectedRevision != agent_rules_revision(self.monitor_rules):
+                raise HTTPException(status_code=409, detail="rules changed; reload before retry")
+            self.monitor_rules = [sanitize_monitor_rule(rule) for rule in payload.rules]
+            self.db.set_setting("monitor_rules", {"rules": self.monitor_rules})
+            self.sync_legacy_settings()
+            return self.get_settings()
 
     def update_notification_channels(self, payload: NotificationChannelsPayload) -> dict:
         self.notification_channels = [sanitize_notification_channel(channel) for channel in payload.channels]
@@ -5629,8 +5652,10 @@ class TrafficCollector:
         return self.get_settings()
 
     def update_container_protection_rules(self, payload: ContainerProtectionRulesPayload) -> dict:
-        rows = [sanitize_container_protection_rule(rule) for rule in payload.rules]
-        with self.protection_lock:
+        with self.settings_lock, self.protection_lock:
+            if payload.expectedRevision is not None and payload.expectedRevision != agent_rules_revision(self.container_protection_rules):
+                raise HTTPException(status_code=409, detail="rules changed; reload before retry")
+            rows = [sanitize_container_protection_rule(rule) for rule in payload.rules]
             result = self.db.set_setting("container_protection_rules", {"rules": rows})
             if not result.get("ok"):
                 raise HTTPException(status_code=500, detail="容器保护规则保存失败")
@@ -5640,7 +5665,7 @@ class TrafficCollector:
                 {row["id"] for row in rows},
             )
             release_legacy_restart_limits(self.container_protection_states, rows)
-        return self.get_settings()
+            return self.get_settings()
 
     def update_runtime_settings(self, payload: RuntimeSettingsPayload) -> dict:
         previous_docker_discovery = ENABLE_DOCKER_DISCOVERY
@@ -6568,6 +6593,218 @@ async def agent_tools() -> dict:
         "configured": bool((collector.ai_settings or {}).get("model")),
         "usage": await asyncio.to_thread(collector.db.agent_usage_summary),
     }
+
+
+def require_agent_write_access(request: Request) -> None:
+    # The ordinary dashboard can be deployed without a password; remote mutations cannot.
+    if not DASHBOARD_PASSWORD:
+        raise HTTPException(status_code=403, detail="Agent writes require dashboard authentication")
+    if not valid_session_token(request.cookies.get(AUTH_COOKIE_NAME, "")):
+        raise HTTPException(status_code=401, detail="authentication required")
+    origin = request.headers.get("origin")
+    if origin:
+        try:
+            parsed = urllib.parse.urlsplit(origin)
+            requested = urllib.parse.urlsplit(str(request.base_url))
+            def origin_tuple(value):
+                return (value.scheme.lower(), (value.hostname or "").lower(), value.port or (443 if value.scheme.lower() == "https" else 80))
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or
+                    parsed.path not in {"", "/"} or parsed.query or parsed.fragment or origin_tuple(parsed) != origin_tuple(requested)):
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=403, detail="cross-origin write denied") from None
+
+
+def agent_rule_rows(kind: str) -> list:
+    if kind == "monitor":
+        return collector.monitor_rules
+    if kind == "protection":
+        return collector.container_protection_rules
+    raise HTTPException(status_code=404, detail="unknown rule kind")
+
+
+def agent_rules_revision(rows: list) -> str:
+    canonical = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def agent_rule_snapshot(kind: str) -> dict:
+    with collector.settings_lock, collector.protection_lock:
+        rows = copy.deepcopy(agent_rule_rows(kind))
+        return {"rules": rows, "revision": agent_rules_revision(rows)}
+
+
+def valid_agent_rule_id(value: str) -> bool:
+    if not (isinstance(value, str) and bool(value) and value == value.strip() and len(value) <= 64
+            and all(unicodedata.category(character) != "Cc" for character in value)):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def validate_agent_rule(kind: str, raw: dict) -> dict:
+    model = MonitorRule if kind == "monitor" else ContainerProtectionRule
+    if not isinstance(raw, dict) or set(raw) - set(model.model_fields):
+        raise HTTPException(status_code=422, detail="invalid rule fields")
+    if kind == "protection":
+        for key, nested_model in (("containers", ContainerProtectionTarget), ("conditions", ContainerProtectionCondition)):
+            items = raw.get(key, [])
+            if not isinstance(items, list) or any(not isinstance(item, dict) or set(item) - set(nested_model.model_fields) for item in items):
+                raise HTTPException(status_code=422, detail="invalid nested rule fields")
+    try:
+        rule = model.model_validate(raw, strict=True)
+        if not valid_agent_rule_id(rule.id) or not rule.name.strip() or len(rule.name) > 80:
+            raise ValueError
+        if any(not item.strip() or len(item.strip()) > 64 or item != item.strip() for item in rule.channelIds):
+            raise ValueError
+        if kind == "monitor":
+            if (rule.metric not in {"wan_tx_bps", "wan_rx_bps", "lan_tx_bps", "lan_rx_bps", "wan_connections", "total_connections", "stage_wan_tx_bytes", "daily_wan_tx_bytes"} or
+                rule.operator not in {"gte", "lte"} or rule.scope not in {"wan", "lan", "all"} or
+                rule.direction not in {"rx", "tx", "both"} or not 0 <= rule.threshold <= 2**53 - 1 or
+                (rule.enabled and rule.threshold == 0) or not 0 <= rule.durationSeconds <= 2**53 - 1):
+                raise ValueError
+            expected_window = "day" if rule.metric == "daily_wan_tx_bytes" else "stage" if rule.metric == "stage_wan_tx_bytes" else "realtime"
+            if "window" in raw and raw["window"] != expected_window:
+                raise ValueError
+            return sanitize_monitor_rule(rule)
+        if (rule.logic not in {"and", "or"} or rule.action not in {"restart", "stop"} or
+            not 0 <= rule.cooldownSeconds <= 2**53 - 1 or not 1 <= rule.maxActions <= 2**53 - 1 or
+            not rule.conditions or len(rule.conditions) > 20 or
+            any(c.metric not in {"cpuPercent", "memoryPercent", "memoryUsedBytes", "blkReadBps", "blkWriteBps", "blkIoBps"} or
+                c.operator not in {"gte", "lte"} or not 0 <= c.threshold <= 2**53 - 1 or
+                (rule.enabled and c.threshold == 0) or not 0 <= c.durationSeconds <= 2**53 - 1 for c in rule.conditions)):
+            raise ValueError
+        def valid_target(target):
+            return all(value == value.strip() and len(value) <= length for value, length in (
+                (target.containerId, 64), (target.containerName, 120),
+                (target.composeProject, 120), (target.composeService, 120),
+                (target.composeContainerNumber, 32)))
+        if not valid_target(rule) or any(not valid_target(target) for target in rule.containers):
+            raise ValueError
+        if rule.targetMode == "single" and not (rule.containerId or rule.containerName or (rule.composeProject and rule.composeService)):
+            raise ValueError
+        if rule.targetMode == "selected" and (not rule.containers or any(not (t.containerId or t.containerName or (t.composeProject and t.composeService)) for t in rule.containers)):
+            raise ValueError
+        return sanitize_container_protection_rule(rule)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="invalid rule") from None
+
+
+def agent_rule_mutate(kind: str, payload: AgentRuleMutation) -> dict:
+    with collector.settings_lock, collector.protection_lock:
+        current = agent_rule_rows(kind)
+        if not re.fullmatch(r"[a-f0-9]{64}", payload.expectedRevision) or payload.expectedRevision != agent_rules_revision(current):
+            raise HTTPException(status_code=409, detail="rules changed; reload before retry")
+        ids = [row.get("id") for row in current]
+        if len(set(ids)) != len(ids):
+            raise HTTPException(status_code=409, detail="duplicate existing rule IDs")
+        rows = copy.deepcopy(current)
+        if payload.operation == "put":
+            if payload.rule is None or payload.ruleId is not None:
+                raise HTTPException(status_code=422, detail="put requires rule only")
+            candidate_id = payload.rule.get("id")
+            if candidate_id in ids:
+                existing = rows[ids.index(candidate_id)]
+                if set(existing) - set(payload.rule):
+                    raise HTTPException(status_code=422, detail="replacement requires every existing field")
+                if kind == "protection":
+                    for key, nested_model in (("containers", ContainerProtectionTarget), ("conditions", ContainerProtectionCondition)):
+                        items = payload.rule.get(key, [])
+                        if isinstance(items, list) and any(isinstance(item, dict) and set(nested_model.model_fields) - set(item) for item in items):
+                            raise HTTPException(status_code=422, detail="replacement requires complete nested fields")
+            rule = validate_agent_rule(kind, payload.rule)
+            rule_id = rule["id"]
+            if rule_id in ids:
+                rows[ids.index(rule_id)] = rule
+            else:
+                rows.append(rule)
+        else:
+            if payload.rule is not None or not valid_agent_rule_id(payload.ruleId):
+                raise HTTPException(status_code=422, detail="delete requires ruleId only")
+            rule_id = payload.ruleId
+            if rule_id not in ids:
+                raise HTTPException(status_code=404, detail="rule not found")
+            rows.pop(ids.index(rule_id))
+        changed = rows != current
+        if kind == "monitor":
+            if not collector.db.set_setting("monitor_rules", {"rules": rows}).get("ok"):
+                raise HTTPException(status_code=500, detail="rule persistence failed")
+            collector.monitor_rules = rows
+            if changed:
+                collector.rule_states.pop(rule_id, None)
+            collector.sync_legacy_settings()
+        else:
+            # Keep other rules' live sampling state, and reset only the changed rule's windows.
+            states = copy.deepcopy(collector.container_protection_states)
+            if payload.operation == "delete":
+                states.pop(rule_id, None)
+            elif changed and rule_id in states:
+                states[rule_id] = restore_states(durable_states({rule_id: states[rule_id]}, {rule_id}), {rule_id})[rule_id]
+            if payload.operation == "put":
+                release_legacy_restart_limits({rule_id: states.get(rule_id, {})}, [rule])
+            # Commit rules and durable state in one transaction. This prevents a
+            # deleted rule's old lock/history reviving if its ID is later reused.
+            persisted = collector.db.set_settings_atomic({
+                "container_protection_rules": {"rules": rows},
+                "container_protection_states": durable_states(states, {row["id"] for row in rows}),
+            })
+            if not persisted.get("ok"):
+                raise HTTPException(status_code=500, detail="rule persistence failed")
+            collector.container_protection_rules = rows
+            collector.container_protection_states = states
+        return {"ok": True, "rules": copy.deepcopy(rows), "revision": agent_rules_revision(rows)}
+
+
+@app.get("/api/agent/rules/{kind}")
+async def agent_rules(kind: str) -> dict:
+    return await run_blocking(agent_rule_snapshot, kind)
+
+
+@app.post("/api/agent/rules/{kind}")
+async def agent_rules_update(kind: str, payload: AgentRuleMutation, request: Request) -> dict:
+    require_agent_write_access(request)
+    return await run_blocking(agent_rule_mutate, kind, payload)
+
+
+def agent_restart_container(container_id: str) -> dict:
+    if not re.fullmatch(r"[a-f0-9]{12,64}", container_id):
+        raise HTTPException(status_code=422, detail="a Docker container ID of 12 to 64 lowercase hexadecimal characters is required")
+    # Serialize against automatic protection and other manual restarts; do not
+    # alter protection history or cooldown for an explicitly requested action.
+    with collector.protection_lock:
+        return agent_restart_container_locked(container_id)
+
+
+def agent_restart_container_locked(container_id: str) -> dict:
+    result = docker_api_request("GET", "/containers/json?all=1", timeout=5.0)
+    rows = result.get("json")
+    if not result.get("ok") or not isinstance(rows, list):
+        raise HTTPException(status_code=502, detail="Docker container discovery failed")
+    ids = [row.get("Id") for row in rows if isinstance(row, dict)]
+    if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) for value in ids):
+        raise HTTPException(status_code=502, detail="Docker container IDs unavailable")
+    matches = [value for value in ids if value.startswith(container_id)]
+    if not matches:
+        raise HTTPException(status_code=404, detail="container not found")
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="container ID is ambiguous")
+    full_id = matches[0]
+    action = docker_api_request("POST", f"/containers/{full_id}/restart?t=10", timeout=30.0)
+    if not action.get("ok"):
+        raise HTTPException(status_code=502, detail="Docker restart failed")
+    with collector.lock:
+        collector.docker_stats_cache.pop(full_id[:12], None)
+        collector.last_container_refresh = 0.0
+    return {"ok": True, "action": "restart", "containerId": full_id}
+
+
+@app.post("/api/agent/containers/{container_id}/restart")
+async def agent_container_restart(container_id: str, request: Request) -> dict:
+    require_agent_write_access(request)
+    return await run_blocking(agent_restart_container, container_id)
 
 
 @app.post("/api/agent/query")
