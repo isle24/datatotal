@@ -8,6 +8,7 @@ const readSource = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g,
 const source = await readSource(new URL("../src/App.vue", import.meta.url));
 const theme = await readSource(new URL("../src/styles/console-theme.css", import.meta.url));
 const desktop = await readSource(new URL("../src/desktop/desktop.css", import.meta.url));
+const base = await readSource(new URL("../src/styles.css", import.meta.url));
 
 test("system page shows GPU and NPU utilization from the accelerator API", () => {
   assert.match(source, /const acceleratorCards = computed/);
@@ -28,24 +29,18 @@ test("system page shows GPU and NPU utilization from the accelerator API", () =>
   assert.match(theme, /\.system-card-note/);
 });
 
-test("console palette leads with light blue and keeps green for status only", () => {
-  assert.match(theme, /--accent: #2578b8;/);
-  assert.match(theme, /--accent-soft: #e6f1fa;/);
-  assert.match(theme, /--accent: #7db8e8;/);
-  assert.doesNotMatch(theme, /--accent: #176a58/);
-  assert.doesNotMatch(theme, /--accent: #8ecbb3/);
-  // Neutral surfaces are cool grey instead of green tinted.
-  assert.match(theme, /--bg: #f3f5f8;/);
-  assert.match(theme, /--line: #d9e0e9;/);
-  assert.doesNotMatch(theme, /--line: #d7ded8/);
+test("the console and desktop share the light and dark theme tokens", () => {
+  assert.match(base, /--accent: #0071e3;/);
+  assert.match(base, /--accent-soft: #e5f0fd;/);
+  assert.match(base, /--bg: #f5f5f7;/);
+  assert.match(base, /:root\[data-theme="dark"\][^}]*--bg: #07080b;/s);
+  assert.match(base, /:root\[data-theme="dark"\][^}]*--panel: #111319;/s);
   // Normal temperature chips and bars follow the accent; warning and critical keep theirs.
   assert.match(theme, /\.temp-value:not\(\.warning\):not\(\.critical\) \{ background: color-mix\(in srgb, var\(--accent\) 12%/);
   assert.match(theme, /\.temp-reading-bar i\.warning \{ background: var\(--orange\); \}/);
   assert.match(theme, /\.temp-reading-bar i\.critical \{ background: var\(--red\); \}/);
   assert.match(theme, /\.fan-speed-bar i \{ background: var\(--accent\); \}/);
-  assert.match(desktop, /--ds-accent: #2578b8;/);
-  assert.match(desktop, /--ds-accent: #7db8e8;/);
-  assert.doesNotMatch(desktop, /--ds-accent: #0b8068/);
+  assert.match(desktop, /--ds-accent: var\(--accent\);/);
 });
 
 test("VPU cores are surfaced alongside the GPU and NPU cards", () => {

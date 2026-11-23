@@ -4,7 +4,7 @@ NAS Traffic Lens 是一个面向家庭 NAS 的轻量网络监控面板：实时�
 
 已在 **极空间 Z425（x86，i915 核显 + Intel NPU）** 与 **绿联 DXP4300 Plus（ARM，Mali GPU + RKNPU + VPU）** 上实机验证，同一镜像同时提供 `linux/amd64` 与 `linux/arm64`，通用 Linux 与飞牛 OS 使用通用模板即可。各平台的能力差异与部署步骤见 [多 NAS 兼容性说明](doc/nas-compat.md)。
 
-Windows / macOS 另有 **Traffic Lens 0.5.0 桌面预览版**：无需 Docker，可查看本机基础资源与网卡总流量、使用本机 AI 分析，也可保存并切换多台 NAS。每台 NAS 可选择客户端布局或网页布局，完整使用其 Docker、AI、监控和系统页面。各端新增服务导航，支持分组、搜索、图标与地址维护，Docker Web 端口可一键加入导航。桌面端支持从 GitHub 检查并安装签名更新。
+Windows / macOS 另有 **Traffic Lens 0.6.0 桌面预览版**：无需 Docker，可查看本机资源与网卡总流量、使用本机 AI 分析，也可保存并切换多台 NAS。NAS 的客户端和网页布局共享新版实时流量总览。按 `⌘ / Ctrl + K` 可搜索当前工作区的页面和服务，连接 NAS 时还可搜索 Docker 容器。桌面端支持从 GitHub 检查并安装签名更新。
 
 桌面版不包含本机公网归属、进程网络流量和传感器采集；完整能力与构建方法见 [桌面客户端使用与构建](doc/desktop-usage.md)。Mac Apple Silicon / Intel 和 Windows x64 安装包见 [桌面 Releases](https://github.com/isle24/datatotal/releases?q=desktop-v)；跨平台签名更新包由 [GitHub Actions](https://github.com/isle24/datatotal/actions/workflows/desktop-release.yml) 编译。NAS 导航需要更新 Docker 镜像，Compose 不需要新增环境变量或挂载。
 

@@ -1,38 +1,13 @@
 <template>
   <div class="dn-overview">
-    <div class="dn-overview-title">
-      <div>
-        <span class="dn-caption">{{ targetName }}</span>
-        <h2>网络运行概览</h2>
-        <p>{{ updated }} · {{ connectionSource }}</p>
-      </div>
-      <button class="ds-button" @click="analyze">
-        <Sparkles :size="16" />AI 分析
-      </button>
-    </div>
+    <TrafficOverviewHero :wan="summary.wan" :theme="theme" :target-name="targetName" :status="status" :fresh="fresh" :updated="updated" :format-bytes="formatBytes" :ai-loading="aiLoading" :analyze="analyze" :open-connections="openConnections" />
     <div class="dn-stat-grid">
-      <button
-        class="dn-stat"
-        @click="openConnections({ scope: 'wan', direction: 'rx' })"
-      >
-        <span><ArrowDown class="dn-rx" :size="18" />公网下行</span
-        ><strong>{{ bytes(summary.wan?.rxBps) }}<small>/s</small></strong
-        ><small>累计 {{ bytes(summary.wan?.rxBytes) }}</small>
-      </button>
-      <button
-        class="dn-stat"
-        @click="openConnections({ scope: 'wan', direction: 'tx' })"
-      >
-        <span><ArrowUp class="dn-tx" :size="18" />公网上行</span
-        ><strong>{{ bytes(summary.wan?.txBps) }}<small>/s</small></strong
-        ><small>累计 {{ bytes(summary.wan?.txBytes) }}</small>
-      </button>
-      <button class="dn-stat" @click="openConnections({ scope: 'wan' })">
+      <SpotlightCard as="button" type="button" class="dn-stat" @click="openConnections({ scope: 'wan' })">
         <span><Network :size="18" />公网连接</span
         ><strong>{{ connections.wan || 0 }}<small>条</small></strong
-        ><small>总连接 {{ connections.total || 0 }}</small>
-      </button>
-      <button class="dn-stat" @click="navigate('docker')">
+        ><small>总连接 {{ connections.total || 0 }} · {{ connectionSource }}</small>
+      </SpotlightCard>
+      <SpotlightCard as="button" type="button" class="dn-stat" @click="navigate('docker')">
         <span><Container :size="18" />Docker 容器</span
         ><strong
           >{{ overview?.containerStatus?.containerCount ?? "—"
@@ -41,7 +16,7 @@
           >{{ overview?.containerStatus?.enabled ? "已接入" : "未接入" }} ·
           {{ overview?.containerStatus?.count || 0 }} 个端口</small
         >
-      </button>
+      </SpotlightCard>
     </div>
     <section class="dn-chart-section">
       <div class="dn-section-title">
@@ -50,7 +25,7 @@
           ><i></i>{{ fresh ? "正在采集" : "等待数据" }}</span
         >
       </div>
-      <TrafficChart :points="points" :dark="dark" label="公网实时上下行速率" />
+      <TrafficChart :points="points" :dark="theme === 'dark'" label="公网实时上下行速率" />
     </section>
     <div class="dn-bottom-grid">
       <section>
@@ -114,48 +89,33 @@
   </div>
 </template>
 <script setup>
-import { ref, watch, computed } from "vue";
 import {
-  ArrowDown,
-  ArrowUp,
   Network,
   Container,
-  Sparkles,
   ArrowUpRight,
   Bell,
   ShieldCheck,
 } from "@lucide/vue";
 import TrafficChart from "./TrafficChart.vue";
-const props = defineProps({
+import TrafficOverviewHero from "../components/TrafficOverviewHero.vue";
+import SpotlightCard from "../components/SpotlightCard.vue";
+defineProps({
   summary: Object,
   overview: Object,
   connections: Object,
   connectionSource: String,
   fresh: Boolean,
   updated: String,
+  status: String,
+  points: Array,
+  aiLoading: Boolean,
+  formatBytes: Function,
   openConnections: Function,
   navigate: Function,
   analyze: Function,
   targetName: String,
   theme: String,
 });
-const points = ref([]);
-const dark = computed(() => props.theme === "dark");
-watch(
-  () => props.overview,
-  () => {
-    if (props.fresh)
-      points.value = [
-        ...points.value,
-        {
-          timestamp: Date.now() / 1000,
-          rx: props.summary.wan?.rxBps || 0,
-          tx: props.summary.wan?.txBps || 0,
-        },
-      ].slice(-60);
-  },
-  { immediate: true },
-);
 function bytes(value) {
   if (!Number.isFinite(value)) return "—";
   const n = Math.min(4, Math.floor(Math.log2(Math.max(1, value)) / 10));

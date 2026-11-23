@@ -1,0 +1,62 @@
+.glass-surface {
+  background: var(--glass);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+}
+
+.spotlight-card { position: relative; isolation: isolate; }
+@media (hover: hover) and (pointer: fine) {
+  .spotlight-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(230px at var(--spot-x, 50%) var(--spot-y, 50%), var(--spotlight-color), transparent 75%);
+    transition: opacity .25s ease;
+  }
+  .spotlight-card:hover::after { opacity: 1; }
+}
+
+.app-shell .spring-segments,
+.desktop-shell .spring-segments {
+  --segment-padding: 3px;
+  position: relative;
+  isolation: isolate;
+  display: inline-grid;
+  grid-template-columns: repeat(var(--segment-count), minmax(0, 1fr));
+  gap: 0;
+  padding: var(--segment-padding);
+  border-radius: var(--radius-pill);
+}
+.spring-segments::before {
+  content: "";
+  position: absolute;
+  inset: var(--segment-padding) auto var(--segment-padding) var(--segment-padding);
+  z-index: -1;
+  width: calc((100% - 2 * var(--segment-padding)) / var(--segment-count));
+  border-radius: inherit;
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .12);
+  transform: translateX(calc(var(--segment-index) * 100%));
+  transition: transform .32s var(--ease-spring);
+}
+:root :is(.app-shell, .desktop-shell) .spring-segments button:is(.active, :hover, :active) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--accent);
+}
+
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .app-shell > .main > :is(.view, .nav-hub) { animation: view-enter .24s var(--ease-spring); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spotlight-card::after, .spring-segments::before { transition: none; }
+}

@@ -5,26 +5,13 @@
  */
 :root .app-shell,
 :root .app-shell.nas-native-content {
-  color-scheme: light;
-  --bg: #f3f5f8;
-  --side: #222b35;
-  --panel: #ffffff;
-  --panel-soft: #eef2f7;
-  --text: #1f2a37;
-  --muted: #5b6878;
-  --line: #d9e0e9;
-  --control-line: #8592a3;
-  --accent: #2578b8;
-  --accent-hover: #1f689f;
-  --accent-soft: #e6f1fa;
+  --control-line: #82828b;
   --violet: #6d5bd0;
-  --blue: var(--accent);
-  --cyan: #2f8fbf;
+  --cyan: var(--rx-color);
   --green: var(--accent);
   --orange: #87591e;
   --red: #aa3e35;
   --teal: var(--accent);
-  --shadow: none;
   --ds-bg: var(--bg);
   --ds-surface: var(--panel);
   --ds-text: var(--text);
@@ -43,21 +30,8 @@
 
 :root[data-theme="dark"] .app-shell,
 :root[data-theme="dark"] .app-shell.nas-native-content {
-  color-scheme: dark;
-  --bg: #141a21;
-  --side: #131920;
-  --panel: #1e2732;
-  --panel-soft: #26313d;
-  --text: #e6ecf4;
-  --muted: #a3b0c0;
-  --line: #34404e;
-  --control-line: #6d7d8f;
-  --accent: #7db8e8;
-  --accent-hover: #a1cdf0;
-  --accent-soft: #1f3548;
+  --control-line: #737683;
   --violet: #a99cf0;
-  --cyan: #6cc0dd;
-  --green: var(--accent);
   --orange: #ddba7d;
   --red: #f0a99e;
 }
@@ -123,12 +97,12 @@
 :root .app-shell :is(.primary-button, .nav-primary) {
   border-color: var(--accent);
   background: var(--accent);
-  color: var(--panel);
+  color: var(--accent-ink);
 }
 :root .app-shell :is(.primary-button, .nav-primary):not(:disabled):hover {
   border-color: var(--accent-hover);
   background: var(--accent-hover);
-  color: var(--panel);
+  color: var(--accent-ink);
 }
 :root .app-shell .subtle-button { border-style: solid; color: var(--text); background: var(--panel); }
 :root .app-shell .icon-button { width: 40px; min-width: 40px; padding: 0; }
@@ -137,19 +111,20 @@
   height: 100dvh;
   padding: 24px 14px;
   background: var(--side);
-  color: #eaf0f7;
+  color: var(--text);
+  border: 0;
+  border-right: 1px solid var(--line);
 }
 :root .app-shell .brand { gap: 11px; margin: 0 4px 28px; }
 :root .app-shell .brand-mark {
   width: 36px;
   height: 36px;
-  border: 1px solid #46586c;
-  border-radius: 8px;
-  background: #2b3a4a;
-  color: #9dc6ea;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
 }
 :root .app-shell .brand h1 { font-size: .9375rem; font-weight: 650; letter-spacing: 0; }
-:root .app-shell .brand p { color: #a9b7c7; font-size: .75rem; }
+:root .app-shell .brand p { color: var(--muted); font-size: .75rem; }
 :root .app-shell .menu { gap: 4px; }
 :root .app-shell .menu button {
   min-height: 44px;
@@ -157,13 +132,13 @@
   border: 1px solid transparent;
   padding: 10px 13px;
   background: transparent;
-  color: #b3c0cf;
+  color: var(--muted);
   font-size: .875rem;
   font-weight: 500;
 }
-:root .app-shell .menu button:hover { color: #f1f6fb; background: #2c3846; border-color: transparent; }
-:root .app-shell .menu button.active { color: #dceafb; background: #2f4257; border-color: #47617f; }
-:root .app-shell .menu button:focus-visible { outline-color: #8fc0e8; }
+:root .app-shell .menu button:hover { color: var(--text); background: var(--panel-soft); border-color: transparent; }
+:root .app-shell .menu button.active { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+:root .app-shell .menu button:focus-visible { outline-color: var(--accent); }
 :root .app-shell > .main,
 :root .app-shell.nas-native-content > .main {
   width: 100%;
@@ -174,10 +149,33 @@
 }
 :root .app-shell.nas-native-content { display: block; min-height: 0; }
 :root .app-shell .topbar { gap: 20px; margin-bottom: 24px; }
-:root .app-shell .topbar h2 { font-size: 1.375rem; font-weight: 650; letter-spacing: -.02em; line-height: 1.35; }
+:root .app-shell .topbar {
+  position: sticky;
+  top: 8px;
+  z-index: 4;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--glass);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+}
+:root .app-shell .topbar h2 { font-size: 1.25rem; font-weight: 650; line-height: 1.35; }
+:root .app-shell .topbar-description { font-size: .75rem; color: var(--muted); }
 :root .app-shell .eyebrow { margin-bottom: 5px; font-size: .75rem; }
-:root .app-shell .top-actions { gap: 8px; }
+:root .app-shell .top-actions { gap: 8px; flex-wrap: wrap; }
 :root .app-shell .toast { color: var(--accent); font-size: .8125rem; font-weight: 550; }
+:root .app-shell .console-toast {
+  position: fixed;
+  inset: auto 18px 18px auto;
+  z-index: 70;
+  max-width: min(500px, calc(100vw - 36px));
+  padding: 10px 16px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  white-space: normal;
+}
 :root .app-shell .view { gap: 24px; min-width: 0; }
 :root .app-shell :is(.view > *, .grid > *, .metric-grid > *) { min-width: 0; }
 :root .app-shell .grid.two { gap: 24px; }
@@ -219,44 +217,8 @@
 :root .app-shell .empty { color: var(--muted); font-size: .8125rem; line-height: 1.7; }
 :root .app-shell .request-error { border-color: var(--red); border-radius: 8px; box-shadow: none; font-size: .8125rem; line-height: 1.6; }
 
-/* The overview remains an operational readout, with no decorative hero. */
-:root .app-shell .dashboard-board {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
-  color: var(--text);
-  box-shadow: none;
-}
-:root .app-shell .dashboard-board::after,
 :root .app-shell .monitor-stat::before { display: none; }
-:root .app-shell .dashboard-kicker { display: none; }
-:root .app-shell .dashboard-board-header { padding: 18px 20px; gap: 20px; border-color: var(--line); }
-:root .app-shell .dashboard-board-title h3 { margin: 0; font-size: 1rem; font-weight: 650; }
-:root .app-shell .dashboard-board-title p { margin-top: 5px; color: var(--muted); font-size: .75rem; }
-:root .app-shell .dashboard-board-status { gap: 9px; }
-:root .app-shell .dashboard-board-status strong { font-size: .8125rem; font-weight: 550; }
-:root .app-shell .dashboard-board-status span { color: var(--muted); font-size: .75rem; }
-:root .app-shell .live-dot,
-:root .app-shell .live-dot.pending { flex: 0 0 8px; width: 8px; height: 8px; box-shadow: none; }
-:root .app-shell .board-ai-button { color: var(--text); border-color: var(--control-line); background: var(--panel); }
-:root .app-shell .dashboard-board-main { grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) minmax(0, 1fr); }
-:root .app-shell .dashboard-total-block { min-height: 158px; gap: 7px; padding: 22px 20px; border-right-color: var(--line); }
-:root .app-shell .dashboard-total-block > span,
-:root .app-shell .dashboard-total-block small { color: var(--muted); font-size: .75rem; }
-:root .app-shell .dashboard-total-block > strong { font-size: 1.25rem; line-height: 1.35; font-weight: 650; overflow-wrap: anywhere; }
-:root .app-shell .dashboard-total-primary > strong { color: var(--text); font-size: 1.875rem; letter-spacing: -.025em; }
-:root .app-shell .dashboard-total-connections > strong { color: var(--text); font-size: 1.875rem; }
-:root .app-shell .dashboard-total-connections button { color: var(--accent); background: transparent; border-color: var(--control-line); }
-:root .app-shell .rx-text { color: var(--cyan); }
-:root .app-shell .tx-text { color: var(--orange); }
-:root .app-shell .dashboard-rate-bars { gap: 8px; margin-top: 9px; }
-:root .app-shell .dashboard-rate-row { grid-template-columns: 56px minmax(30px, 1fr) 88px; gap: 8px; }
-:root .app-shell .dashboard-rate-row > span { color: var(--muted); font-size: .75rem; }
-:root .app-shell .dashboard-rate-row i { height: 4px; background: var(--panel-soft); }
-:root .app-shell .dashboard-rate-row b.rx { background: var(--cyan); }
-:root .app-shell .dashboard-rate-row b.tx { background: var(--orange); }
-:root .app-shell .dashboard-rate-row em { color: var(--text); font-size: .75rem; }
-:root .app-shell .dashboard-board-footer { gap: 10px 24px; padding: 12px 20px; border-top: 1px solid var(--line); color: var(--muted); background: var(--panel-soft); font-size: .75rem; }
+:root .app-shell :is(.live-dot, .live-dot.pending) { flex: 0 0 8px; width: 8px; height: 8px; box-shadow: none; }
 :root .app-shell .metric-grid { gap: 12px; }
 :root .app-shell .metric-card {
   min-height: 108px;
@@ -274,22 +236,81 @@
 :root .app-shell .metric-card strong { margin-top: 5px; font-size: 1.375rem; line-height: 1.4; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 :root .app-shell .metric-footer { font-size: .75rem; }
 :root .app-shell .metric-footer button { min-height: 32px; }
-:root .app-shell .dashboard-metric-grid { gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
-:root .app-shell .dashboard-metric-grid .metric-card { min-height: 100px; border: 0; border-right: 1px solid var(--line); border-radius: 0; }
-:root .app-shell .dashboard-metric-grid .metric-card:last-child { border-right: 0; }
+:root .app-shell .dashboard-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+:root .app-shell .dashboard-metric-grid .metric-card { min-height: 100px; }
 :root .app-shell .dashboard-metric-grid .metric-card strong { font-size: 1.125rem; }
 
 /* Native desktop overview uses the same scoped tokens. */
-:root .app-shell .dn-overview-title { margin-bottom: 20px; }
-:root .app-shell .dn-overview-title h2 { margin: 0 0 6px; font-size: 1.375rem; font-weight: 650; }
-:root .app-shell .dn-caption { display: none; }
 :root .app-shell .dn-stat-grid { gap: 12px; }
 :root .app-shell .dn-stat-grid .dn-stat { min-height: 124px; gap: 10px; padding: 18px; border-color: var(--line); border-radius: 10px; background: var(--panel); box-shadow: none; }
 :root .app-shell .dn-stat strong { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
-:root .app-shell .dn-rx { color: var(--cyan); }
-:root .app-shell .dn-tx { color: var(--orange); }
+:root .app-shell .dn-rx { color: var(--rx-color); }
+:root .app-shell .dn-tx { color: var(--tx-color); }
 :root .app-shell .dn-chart-section { margin-top: 24px; }
 :root .app-shell .dn-bottom-grid { gap: 24px; border-color: var(--line); }
+
+:root .app-shell .traffic-hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(258px, .72fr);
+  align-items: center;
+  gap: clamp(20px, 4vw, 72px);
+  padding: clamp(22px, 4vw, 52px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background: radial-gradient(ellipse at 20% 90%, var(--accent-soft), transparent 72%), var(--panel);
+  box-shadow: var(--inner-highlight), var(--shadow);
+}
+.traffic-hero-copy, .traffic-hero-rates { position: relative; min-width: 0; }
+.traffic-hero-copy { display: grid; justify-items: start; gap: 12px; }
+.traffic-hero-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .8125rem;
+  color: var(--muted);
+}
+:root .app-shell .traffic-hero .live-dot { animation: none; }
+.traffic-hero h3 { color: var(--text); font-size: clamp(1.8rem, 4vw, 3.35rem); font-weight: 650; line-height: 1.15; }
+.traffic-hero-meta { display: grid; gap: 3px; margin-block: 3px 5px; color: var(--muted); font-size: .8125rem; }
+.traffic-hero-meta strong { color: var(--text); font-size: clamp(1.15rem, 2.6vw, 1.7rem); font-weight: 600; }
+:root .app-shell .board-ai-button { border-radius: var(--radius-pill); padding-inline: 16px; }
+.traffic-hero-rates { display: grid; gap: 12px; }
+:root .app-shell .traffic-rate {
+  --direction-color: var(--rx-color);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  gap: 7px;
+  min-width: 0;
+  padding: 15px 18px;
+  border-color: var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--panel) 90%, var(--direction-color));
+  box-shadow: var(--inner-highlight), var(--shadow);
+  text-align: left;
+}
+:root .app-shell .traffic-rate-tx { --direction-color: var(--tx-color); }
+:root .app-shell .traffic-rate:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--direction-color) 50%, var(--line));
+  background: color-mix(in srgb, var(--panel) 85%, var(--direction-color));
+}
+.traffic-rate-label { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: .8125rem; }
+.traffic-rate-label svg { flex-shrink: 0; color: var(--direction-color); }
+.traffic-rate-label .traffic-rate-link { margin-left: auto; color: var(--muted); }
+.traffic-rate strong { color: var(--text); font-size: clamp(1.15rem, 3vw, 1.95rem); font-weight: 650; overflow-wrap: anywhere; }
+.traffic-rate-total { color: var(--muted); font-size: .75rem; }
+.traffic-rate-total b { color: var(--text); margin-left: 4px; }
+.live-traffic-chart .ds-chart { height: clamp(220px, 34vw, 320px); padding: 14px 8px 2px; }
+.dn-overview > .traffic-hero { margin-bottom: 18px; }
+@media (max-width: 734px) {
+  :root .app-shell .traffic-hero { grid-template-columns: minmax(0, 1fr); }
+  .traffic-hero-rates { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  :root .app-shell .traffic-rate { padding: 12px; }
+  .traffic-rate-label .traffic-rate-link { display: none; }
+}
 
 /* Tables keep their native horizontal scroll instead of shrinking every cell. */
 :root .app-shell .table-wrap { max-width: 100%; border: 0; border-radius: 0; background: var(--panel); overscroll-behavior-x: contain; }
@@ -302,9 +323,9 @@
 :root .app-shell .text-link { min-height: 32px; padding: 3px 0; border: 0; border-radius: 4px; color: var(--accent); background: transparent; text-underline-offset: 3px; }
 :root .app-shell .text-link:hover { background: transparent; text-decoration: underline; }
 :root .app-shell :is(.pill, .state-badge, .rule-state, .fan-status) { font-size: .75rem; font-weight: 550; }
-:root .app-shell .segmented { gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); }
+:root .app-shell .segmented { border: 1px solid var(--line); background: var(--panel-soft); }
 :root .app-shell .segmented button { min-height: 34px; border: 1px solid transparent; background: transparent; color: var(--muted); padding: 6px 10px; }
-:root .app-shell .segmented button.active { color: var(--accent); background: var(--panel); border-color: var(--line); }
+:root .app-shell .segmented button.active { color: var(--accent); }
 :root .app-shell .pager { gap: 8px; padding: 14px 20px; font-size: .75rem; }
 
 /* Settings are a workspace: persistent category tabs and one form at a time. */
@@ -629,11 +650,6 @@
 @media (max-width: 1280px) {
   :root .app-shell > .main,
   :root .app-shell.nas-native-content > .main { padding: 24px; }
-  :root .app-shell .dashboard-board-main { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); }
-  :root .app-shell .dashboard-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  :root .app-shell .dashboard-metric-grid .metric-card { border-bottom: 1px solid var(--line); }
-  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(3n) { border-right: 0; }
-  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(n+4) { border-bottom: 0; }
   :root .app-shell .inline-field { grid-template-columns: minmax(0, 1fr) auto; }
   :root .app-shell .inline-field > select { grid-column: 1 / -1; }
 }
@@ -646,9 +662,6 @@
   :root .app-shell .menu button { flex-shrink: 0; padding: 10px 12px; }
   :root .app-shell .grid.two { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   :root .app-shell :is(.form-grid, .form-grid.mini, .info-grid, .history-cards, .system-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  :root .app-shell .dashboard-board-main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  :root .app-shell .dashboard-total-primary { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--line); }
-  :root .app-shell .dashboard-total-block { min-height: 144px; }
   :root .app-shell .card-head { flex-direction: row; align-items: center; flex-wrap: wrap; }
   :root .app-shell .card-actions { justify-content: flex-start; }
   :root .app-shell .connection-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -658,7 +671,7 @@
   :root .app-shell .search-input { width: min(320px, 100%); }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 734px) {
   :root .app-shell > .main,
   :root .app-shell.nas-native-content > .main { padding: 18px 14px 28px; }
   :root .app-shell .topbar { margin-bottom: 20px; gap: 12px; align-items: flex-start; }
@@ -668,29 +681,15 @@
   :root .app-shell .icon-button { min-width: 44px; width: 44px; }
   :root .app-shell :is(input[type="checkbox"], input[type="radio"]) { min-height: 17px; }
   :root .app-shell :is(.view, .settings-workspace) { gap: 18px; }
-  :root .app-shell :is(.card-head, .dashboard-board-header) { padding: 16px; gap: 12px; }
+  :root .app-shell .card-head { padding: 16px; gap: 12px; }
   :root .app-shell .card-head { align-items: flex-start; flex-direction: column; }
   :root .app-shell .card-actions { width: 100%; }
   :root .app-shell .card-actions > :is(input, .controls) { width: 100%; }
   :root .app-shell .controls { width: 100%; }
   :root .app-shell .controls :is(input, select) { flex: 1 1 150px; width: 100%; }
-  :root .app-shell .dashboard-board-header { grid-template-columns: minmax(0, 1fr) auto; }
-  :root .app-shell .dashboard-board-title { grid-column: 1 / -1; }
   :root .app-shell .board-ai-button { width: auto; }
-  :root .app-shell .dashboard-board-status { min-width: 0; }
-  :root .app-shell .dashboard-board-main { grid-template-columns: minmax(0, 1fr); }
-  :root .app-shell .dashboard-total-block { min-height: 0; padding: 18px 16px; border-right: 0; border-bottom: 1px solid var(--line); }
-  :root .app-shell .dashboard-total-primary > strong,
-  :root .app-shell .dashboard-total-connections > strong { font-size: 1.625rem; }
-  :root .app-shell .dashboard-board-footer { display: flex; gap: 8px 16px; padding: 12px 16px; }
-  :root .app-shell .dashboard-rate-row { grid-template-columns: 54px minmax(20px, 1fr) 88px; }
   :root .app-shell :is(.metric-grid, .dashboard-metric-grid, .dn-stat-grid) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  :root .app-shell .dashboard-metric-grid .metric-card { min-height: 96px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(3n) { border-right: 1px solid var(--line); }
-  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(2n),
-  :root .app-shell .dashboard-metric-grid .metric-card:last-child { border-right: 0; }
-  :root .app-shell .dashboard-metric-grid .metric-card:nth-child(n+4) { border-bottom: 1px solid var(--line); }
-  :root .app-shell .dashboard-metric-grid .metric-card:last-child { grid-column: 1 / -1; border-bottom: 0; }
+  :root .app-shell .dashboard-metric-grid .metric-card:last-child { grid-column: 1 / -1; }
   :root .app-shell .metric-card { min-height: 104px; padding: 14px; }
   :root .app-shell .metric-card strong { font-size: 1.25rem; }
   :root .app-shell .dn-stat-grid .dn-stat { min-height: 124px; padding: 16px; }
@@ -772,13 +771,13 @@
 :root .app-shell .advanced-fields > summary { cursor: pointer; color: var(--muted); font-size: .8125rem; padding: 8px 0; }
 :root .app-shell .advanced-fields > .form-grid { padding: 16px 0 0; }
 :root .app-shell .card-editor .advanced-fields { margin-inline: 0; }
-@media (max-width: 720px) {
+@media (max-width: 734px) {
   :root .app-shell :is(input, select, textarea) { font-size: 1rem; }
 }
 :root .app-shell fieldset.settings-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
 :root .app-shell .delivery-muted { color: var(--muted); border-color: var(--line); background: var(--panel-soft); }
 :root .app-shell .mobile-page-select { display: none; }
-@media (max-width: 720px) {
+@media (max-width: 734px) {
   :root .app-shell .sidebar > .menu { display: none; }
   :root .app-shell .mobile-page-select { display: grid; gap: 6px; color: #d4ded9; font-size: .75rem; margin-top: 12px; }
   :root .app-shell .mobile-page-select select { color: #f1f6fb; background: #2a3744; border-color: #55697e; width: 100%; }
@@ -789,7 +788,7 @@
 /* ---------------------------------------------------------------------------
  * Sidebar navigation.
  * Every page except the portal keeps the menu in its own grid column, so
- * opening it pushes the content instead of covering it. Phones (<= 720px)
+ * opening it pushes the content instead of covering it. Phones (<= 734px)
  * fall back to a slide-over drawer, where a column would be unusable.
  * ------------------------------------------------------------------------- */
 :root .app-shell { grid-template-columns: minmax(0, 1fr); }
@@ -805,6 +804,8 @@
   padding: 20px 14px 22px;
   overflow: hidden auto;
   overscroll-behavior: contain;
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
 }
 :root .app-shell:not(.menu-open) > .sidebar { display: none; }
 :root .app-shell.menu-open > .sidebar { animation: sidebar-in .22s cubic-bezier(.22, .61, .36, 1); }
@@ -819,11 +820,11 @@
   gap: 8px;
   margin-top: auto;
   padding-top: 18px;
-  border-top: 1px solid rgba(255, 255, 255, .08);
+  border-top: 1px solid var(--line);
 }
-:root .app-shell .sidebar-tools span { color: #8395a8; font-size: .6875rem; }
+:root .app-shell .sidebar-tools span { color: var(--muted); font-size: .6875rem; }
 :root .app-shell .sidebar-tools kbd {
-  border: 1px solid rgba(255, 255, 255, .18);
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0 4px;
   font-family: inherit;
@@ -841,15 +842,31 @@
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #b3c0cf;
+  color: var(--muted);
   font-size: .75rem;
 }
-:root .app-shell .sidebar-tools button:hover { color: #f1f6fb; background: #2c3846; }
+:root .app-shell .sidebar-tools button:hover { color: var(--text); background: var(--panel-soft); }
 :root .app-shell .sidebar > .menu { display: grid; }
 :root .app-shell .mobile-page-select { display: none; }
 :root .app-shell .menu-toggle { display: inline-flex; }
 
-@media (max-width: 720px) {
+:root .app-shell.is-portal-mode:not(.nas-native-content) { grid-template-columns: minmax(0, 1fr); }
+:root .app-shell.is-portal-mode.menu-open > .sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 60;
+  width: min(272px, 84vw);
+  box-shadow: var(--shadow-float);
+}
+:root .app-shell.is-portal-mode .sidebar-backdrop.show {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgb(7 8 11 / .4);
+}
+
+@media (max-width: 734px) {
   /* Phones: the menu slides over the content and dims it behind a backdrop. */
   :root .app-shell.menu-open:not(.nas-native-content),
   :root .app-shell { grid-template-columns: minmax(0, 1fr); }
@@ -942,43 +959,39 @@
 :root .app-shell .workbench-tile-copy small { color: var(--muted); font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :root .app-shell .workbench-tile-arrow { color: var(--muted); transition: transform .2s ease, color .2s ease; }
 :root .app-shell .workbench-tile:hover .workbench-tile-arrow { color: var(--accent); transform: translateX(3px); }
-@media (max-width: 720px) {
+@media (max-width: 734px) {
   :root .app-shell .workbench-tiles { grid-template-columns: minmax(0, 1fr); }
   :root .app-shell .workbench-head { align-items: flex-start; flex-direction: column; }
 }
 
 /* ---------------------------------------------------------------------------
  * Portal home.
- * The first screen is a launcher, not a dashboard: a brand line, six large
- * destination cards and a few quiet text links. Everything else (version,
- * theme switch, refresh, settings, logout) sits in the top-right corner and
- * only becomes visible when the pointer or keyboard focus reaches it.
+ * Bookmarked services and console shortcuts are grouped around search.
  * ------------------------------------------------------------------------- */
 :root .app-shell .view.portal {
   display: grid;
   place-items: center;
-  min-height: calc(100dvh - 72px);
-  padding: 24px 0 56px;
+  min-height: calc(100dvh - 76px);
+  padding: 48px 0 48px;
 }
 :root .app-shell .portal-inner {
-  width: min(880px, 100%);
+  width: min(720px, 100%);
   display: grid;
   justify-items: center;
-  gap: 32px;
+  gap: 25px;
   text-align: center;
 }
 :root .app-shell .portal-brand { display: grid; justify-items: center; gap: 10px; }
 :root .app-shell .portal-mark {
   display: grid;
   place-items: center;
-  width: 54px;
-  height: 54px;
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-  color: var(--accent);
-  box-shadow: 0 18px 34px -26px rgba(15, 30, 51, .55);
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  color: var(--text);
 }
-:root .app-shell .portal-brand h2 { margin: 0; font-size: 1.5rem; font-weight: 650; letter-spacing: -.015em; }
+:root .app-shell .portal-brand h2 { margin: 0; font-size: clamp(2rem, 5.5vw, 3rem); font-weight: 650; letter-spacing: -.04em; }
 :root .app-shell .portal-status {
   display: inline-flex;
   align-items: center;
@@ -994,9 +1007,9 @@
   gap: 10px;
   width: min(520px, 100%);
   padding: 0 14px;
-  min-height: 48px;
+  min-height: 52px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
   background: var(--panel);
   color: var(--muted);
   text-align: left;
@@ -1040,37 +1053,32 @@
 :root .app-shell .portal-services {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   text-align: left;
 }
 :root .app-shell .portal-service {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  align-items: center;
-  gap: 2px 12px;
-  min-height: 68px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 97%, var(--accent) 3%), var(--panel));
-  text-align: left;
-  transition: transform .2s cubic-bezier(.22, .61, .36, 1), border-color .2s ease, box-shadow .24s ease;
+  justify-items: center;
+  align-content: center;
+  gap: 6px;
+  min-height: 105px;
+  min-width: 0;
+  padding: 12px;
+  border-color: var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--inner-highlight);
+  text-align: center;
 }
-:root .app-shell .portal-service:hover {
-  transform: translateY(-2px);
-  border-color: var(--accent);
-  box-shadow: 0 20px 34px -28px rgba(15, 30, 51, .6);
-}
+:root .app-shell .portal-service:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 :root .app-shell .portal-service-logo {
-  grid-row: span 2;
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel-soft));
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
   color: var(--accent);
   overflow: hidden;
 }
@@ -1079,7 +1087,7 @@
   color: var(--text);
   font-size: .875rem;
   font-weight: 600;
-  /* Keep every card the same height: long names ellipsize instead of wrapping. */
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1087,6 +1095,7 @@
 :root .app-shell .portal-service small {
   color: var(--muted);
   font-size: .75rem;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1123,52 +1132,35 @@
   font-family: inherit;
   font-size: .6875rem;
 }
-:root .app-shell .topbar.quiet {
-  position: fixed;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 30;
+:root .app-shell .portal-tools {
+  position: absolute;
+  inset: 12px 14px auto auto;
   display: flex;
-  justify-content: flex-end;
-  margin: 0;
-  padding: 14px 18px;
+  gap: 6px;
+}
+:root .app-shell .portal-tools:empty { display: none; }
+:root .app-shell .portal-tools button { border-color: var(--line); }
+:root .app-shell .portal-status {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-pill);
+  padding-inline: 12px;
+  min-height: 32px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+:root .app-shell .portal-hint button {
+  padding: 4px 2px;
   border: 0;
   background: transparent;
-}
-:root .app-shell .topbar.quiet > div:first-child { display: none; }
-:root .app-shell .topbar.quiet .top-actions {
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity .22s ease;
-}
-:root .app-shell .topbar.quiet:hover .top-actions,
-:root .app-shell .topbar.quiet:focus-within .top-actions { opacity: 1; visibility: visible; }
-:root .app-shell .topbar.quiet .quiet-more {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
   color: var(--muted);
-  opacity: .2;
-  transition: opacity .2s ease;
+  font-size: inherit;
 }
-:root .app-shell .topbar.quiet:hover .quiet-more,
-:root .app-shell .topbar.quiet:focus-within .quiet-more { opacity: 0; visibility: hidden; }
-/* Touch devices have no hover, so the controls stay reachable at low emphasis. */
-@media (hover: none) {
-  :root .app-shell .topbar.quiet .top-actions { opacity: .35; visibility: visible; }
-  :root .app-shell .topbar.quiet .quiet-more { display: none; }
-}
-@media (max-width: 720px) {
-  :root .app-shell .view.portal { min-height: calc(100dvh - 40px); padding: 16px 0 40px; }
-  :root .app-shell .portal-inner { gap: 22px; }
-  :root .app-shell .portal-services { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  :root .app-shell .portal-service { grid-template-columns: 34px minmax(0, 1fr); min-height: 62px; padding: 10px 12px; gap: 2px 10px; }
-  :root .app-shell .portal-service-logo { width: 34px; height: 34px; border-radius: 10px; }
-  :root .app-shell .portal-search { min-height: 44px; }
-  :root .app-shell .topbar.quiet .top-actions { opacity: .22; }
+@media (max-width: 734px) {
+  :root .app-shell .view.portal { min-height: calc(100dvh - 46px); padding: 56px 0 36px; }
+  :root .app-shell .portal-inner { gap: 20px; }
+  :root .app-shell .portal-services { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  :root .app-shell .portal-search { min-height: 48px; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1187,14 +1179,14 @@
 }
 :root .app-shell :is(
   .metric-card strong, .system-card-metric b, .temp-value, .accel-value,
-  .dashboard-total-block strong, .dashboard-rate-row em, .info-item strong,
+  .traffic-rate strong, .traffic-hero-meta strong, .info-item b,
   .metric-value, .stat strong, .ds-metric strong, .badge, .pill, .accel-badge,
   .system-card-metric small, .temp-reading b
 ) {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
-:root .app-shell :is(.metric-card strong, .dashboard-total-block strong) {
+:root .app-shell .metric-card strong {
   letter-spacing: -.015em;
 }
 :root .app-shell :is(.card h3, .system-card-copy strong, .portal-service strong, .metric-card small) {
@@ -1204,9 +1196,7 @@
   text-wrap: pretty;
 }
 /* Labels read as labels: small, spaced, quiet. */
-:root .app-shell :is(.dashboard-board-title h3, .portal-brand h2, .topbar h2) {
-  letter-spacing: -.02em;
-}
+:root .app-shell .topbar h2 { letter-spacing: 0; }
 
 /* Surface depth: one light source, tinted shadows, faint grain ------------- */
 :root .app-shell::before {
@@ -1215,9 +1205,7 @@
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background:
-    radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 60%),
-    radial-gradient(80% 50% at 100% 0%, color-mix(in srgb, var(--violet) 5%, transparent), transparent 65%);
+  background: radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%);
 }
 :root .app-shell::after {
   content: "";
@@ -1433,7 +1421,7 @@
 }
 :root .app-shell .agent-error { margin: 0; color: var(--red); font-size: .8125rem; }
 :root .app-shell .agent-usage { margin: 0; color: color-mix(in srgb, var(--muted) 85%, transparent); font-size: .6875rem; }
-@media (max-width: 720px) {
+@media (max-width: 734px) {
   :root .app-shell .agent-ask { grid-template-columns: minmax(0, 1fr); }
 }
 

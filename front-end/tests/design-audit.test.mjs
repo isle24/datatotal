@@ -9,6 +9,7 @@ const source = await readSource(new URL("../src/App.vue", import.meta.url));
 const base = await readSource(new URL("../src/styles.css", import.meta.url));
 const theme = await readSource(new URL("../src/styles/console-theme.css", import.meta.url));
 const indexHtml = await readSource(new URL("../index.html", import.meta.url));
+const portal = await readSource(new URL("../src/components/HomePortalView.vue", import.meta.url));
 
 test("typography uses a self-hosted display face with tabular figures", async () => {
   // The NAS can be offline, so the font ships with the bundle instead of a CDN.
@@ -48,7 +49,7 @@ test("loading and empty states are designed, not bare text", () => {
   assert.match(theme, /\.app-shell \.skeleton \{/);
   assert.match(theme, /@keyframes skeleton-shimmer/);
   assert.match(theme, /\.skeleton-service \{ min-height: 68px; \}/);
-  assert.match(source, /class="skeleton skeleton-service"/);
+  assert.match(portal, /class="skeleton skeleton-service"/);
   assert.match(theme, /\.app-shell \.empty \{\n  display: grid;\n  justify-items: center;/);
   assert.match(theme, /\.app-shell \.empty::before \{/);
 });
@@ -56,7 +57,7 @@ test("loading and empty states are designed, not bare text", () => {
 test("document head carries the branding the audit asks for", () => {
   assert.match(indexHtml, /<html lang="zh-CN">/);
   assert.match(indexHtml, /<meta name="description" content="[^"]{40,}" \/>/);
-  assert.match(indexHtml, /<meta name="theme-color" content="#f4f6f8"/);
+  assert.match(indexHtml, /<meta name="theme-color" content="#f5f5f7"/);
   assert.match(indexHtml, /<link\n      rel="icon"\n      href="data:image\/svg\+xml,/);
   assert.match(source, /<a v-if="!native" class="skip-link" href="#main">跳到主要内容<\/a>/);
   assert.match(source, /<main class="main" id="main">/);

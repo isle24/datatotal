@@ -1,15 +1,11 @@
-Traffic Lens 0.5.0 桌面预览版
+Traffic Lens 0.6.0 桌面预览版
 
-- 新增运维助手（只读 Agent）：用一句话问"今天公网上传了多少流量""最近哪个进程上传最多""哪个容器在大量读写磁盘"，面板会展示选用的只读工具、参数、耗时与 token 估算，并把结果渲染成小卡与排行条，原始 JSON 可折叠查看。所有工具都是只读，不会修改配置或容器。
-- 首页改为门户：居中品牌 + 一行实时状态 + 六个大入口卡片 + 一行次级入口，顶部按钮默认隐藏，鼠标移入才出现；导航、进程、设置等页面恢复常驻菜单。
-- 服务直达：NAS 端「服务导航」里的服务会直接出现在首页，支持搜索（`/` 或 `⌘K` 聚焦，回车直达第一个命中）。
-- 手风琴卡片改为层叠 3D 牌堆：滚动视差、悬停浮起、点击展开置顶；Docker、系统传感器、GPU/NPU/VPU、监控规则与设置编辑器全部接入。
-- 全局配色统一为浅蓝，状态色不再使用绿色；系统页新增 GPU / NPU / VPU 卡片，ARM 机型（绿联云等）通过 devfreq 与 `/proc/mpp_service` 读取利用率。
-- 界面细节按设计审计重做：自托管 Geist 字体与等宽数字、极淡噪点与环境光晕、1480px 内容宽度、按下反馈与焦点环、合成空态与骨架屏。
-- 配套 NAS 镜像：`isle204/nas-traffic-lens:2026.10.07-12`，Docker Hub 同时提供 `linux/amd64` 与 `linux/arm64`；支持极空间（ZOS）、绿联云（UGOS Pro，ARM）与通用 Linux / 飞牛 OS。
+- NAS 首页集中展示采集状态、常用服务和页面入口。按 `/` 聚焦搜索，按 `m` 打开页面菜单。
+- 公网概览的光场随实际上下行速率变化。点击速率卡片可查看对应方向的连接，也可从概览直接启动 AI 分析。
+- `⌘ / Ctrl + K` 搜索当前工作区的页面和服务。连接 NAS 时可按容器名或镜像名搜索 Docker 容器。
+- Web 和桌面端采用同一套明暗主题。服务导航适配窄屏，流量图表区分上下行并跟随主题切换。
+- 配套 NAS 镜像为 `isle204/nas-traffic-lens:2026.11.23-1`，提供 `linux/amd64` 和 `linux/arm64`。
 
-下载：macOS Apple Silicon 用 arm64 DMG，Intel 用 x64 DMG，Windows 用 x64 setup.exe。
+macOS Apple Silicon 下载 arm64 DMG，Intel Mac 下载 x64 DMG，Windows 下载 x64 setup.exe。
 
-预览限制：Mac 为 ad-hoc 签名，尚未 Apple Developer ID 签名或公证；Windows 尚未 Authenticode 签名。遇到 No route to host 时应检查路由与系统本地网络权限。
-
-本机暂未提供公网分类、进程网络流量、Docker 控制、GPU/NPU、温度和风扇采集；这些能力在连接 NAS 后使用 NAS 端采集结果。自动更新签名与 Apple/Windows 开发者签名彼此独立。
+更新包使用 Traffic Lens 自动更新签名。Mac 安装包采用 ad-hoc 签名，Windows 安装包尚未采用 Authenticode 签名。

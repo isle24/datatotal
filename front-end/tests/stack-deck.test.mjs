@@ -105,16 +105,15 @@ test("every accordion stack opts into the shared deck motion", () => {
   assert.match(theme, /\.stack-deck > \*\.expanded \+ \* \{ margin-top: 10px; \}/);
 });
 
-test("the console palette has no green left anywhere", () => {
+test("console controls use the brand accent alongside dedicated traffic colors", () => {
   const greenToken = /--green:\s*#/;
   assert.doesNotMatch(theme, greenToken);
   assert.match(theme, /--green: var\(--accent\)/);
   assert.doesNotMatch(base, /var\(--green\)/);
   assert.doesNotMatch(desktop, /#0d9c7c|#127c64|#147d65|#0f9d82/);
-  // Sidebar chrome follows the blue-slate palette.
-  assert.match(theme, /\.menu button\.active \{ color: #dceafb; background: #2f4257; border-color: #47617f; \}/);
-  assert.match(theme, /\.menu button:hover \{ color: #f1f6fb; background: #2c3846; border-color: transparent; \}/);
-  assert.match(theme, /\.brand-mark \{[^}]*background: #2b3a4a;/s);
+  assert.match(theme, /\.menu button\.active \{ color: var\(--accent\); background: var\(--accent-soft\);/);
+  assert.match(theme, /\.menu button:hover \{ color: var\(--text\); background: var\(--panel-soft\);/);
+  assert.match(theme, /\.traffic-rate-tx \{ --direction-color: var\(--tx-color\);/);
   // Running/healthy states use the accent instead of green.
   assert.match(base, /\.state-running,\n\.rule-state\.enabled \{\n  color: var\(--accent\);/);
   assert.match(base, /\.fan-status\.running \{ color: var\(--accent\);/);

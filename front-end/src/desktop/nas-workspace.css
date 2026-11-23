@@ -4,12 +4,15 @@
   min-height: calc(100vh - 104px);
   background: var(--ds-bg);
 }
+.dn-workspace.dn-menu-hidden { grid-template-columns: minmax(0, 1fr); }
 .dn-sidebar {
   padding: 24px 16px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--ds-line);
-  background: var(--ds-surface);
+  background: var(--side);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
   position: sticky;
   top: 64px;
   height: calc(100vh - 104px);
@@ -90,19 +93,6 @@
 .dn-header strong {
   font-size: 13px;
   font-weight: 500;
-}
-.nas-native-content.app-shell {
-  display: block;
-  min-height: 0;
-  --bg: var(--ds-bg);
-  --panel: var(--ds-surface);
-  --panel-soft: var(--ds-bg);
-  --text: var(--ds-text);
-  --muted: var(--ds-muted);
-  --line: var(--ds-line);
-  --blue: var(--ds-accent);
-  --shadow: 0 2px 4px #00000004;
-  background: var(--ds-bg);
 }
 .nas-native-content > .main {
   margin: 0;
@@ -203,30 +193,9 @@
 .nas-native-content button {
   font-weight: 500;
 }
-.dn-overview-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  margin-bottom: 28px;
-}
-.dn-overview-title h2 {
-  font-size: 25px;
-  line-height: 1.3;
-  margin: 6px 0 8px;
-}
-.dn-overview-title p {
-  font-size: 12px;
-  color: var(--ds-muted);
-  margin: 0;
-}
-.dn-caption {
-  font-size: 12px;
-  color: var(--ds-accent);
-}
 .dn-stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 .dn-stat-grid .dn-stat {

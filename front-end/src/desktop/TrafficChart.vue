@@ -30,17 +30,25 @@ const element = ref();
 let chart, observer;
 function draw() {
   if (!chart) return;
-  const color = props.dark ? "#aebcb8" : "#62726e";
+  const style = getComputedStyle(element.value);
+  const token = (name) => style.getPropertyValue(name).trim();
+  const color = token("--muted");
+  const directions = [["下行", "rx", token("--rx-color")], ["上行", "tx", token("--tx-color")]];
   const unit = props.history ? "MiB" : "KiB/s";
   const divisor = props.history ? 1048576 : 1024;
   chart.setOption(
     {
       animation: false,
-      color: ["#2f8fbf", "#c2703c"],
+      color: directions.map(([, , directionColor]) => directionColor),
       grid: { left: 62, right: 24, top: 42, bottom: 30 },
       legend: { top: 0, right: 16, textStyle: { color } },
       tooltip: {
         trigger: "axis",
+        confine: true,
+        backgroundColor: token("--glass"),
+        borderColor: token("--line"),
+        textStyle: { color: token("--text"), fontSize: 12 },
+        extraCssText: "backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-radius: 10px; font-variant-numeric: tabular-nums;",
         valueFormatter: (v) => `${Number(v).toFixed(2)} ${unit}`,
       },
       xAxis: {
@@ -48,7 +56,7 @@ function draw() {
         min: props.start ? props.start * 1000 : undefined,
         max: props.end ? props.end * 1000 : undefined,
         axisLabel: { color },
-        axisLine: { lineStyle: { color: props.dark ? "#33404e" : "#d9e0e9" } },
+        axisLine: { lineStyle: { color: token("--line") } },
       },
       yAxis: {
         type: "value",
@@ -56,12 +64,9 @@ function draw() {
         min: 0,
         nameTextStyle: { color },
         axisLabel: { color },
-        splitLine: { lineStyle: { color: props.dark ? "#26313d" : "#eef2f7" } },
+        splitLine: { show: false },
       },
-      series: [
-        ["下行", "rx"],
-        ["上行", "tx"],
-      ].map(([name, key]) => ({
+      series: directions.map(([name, key, directionColor]) => ({
         name,
         type: "line",
         smooth: true,
@@ -69,7 +74,13 @@ function draw() {
         symbolSize: 6,
         connectNulls: false,
         lineStyle: { width: 2 },
-        areaStyle: { opacity: 0.07 },
+        areaStyle: {
+          opacity: .18,
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: directionColor },
+            { offset: 1, color: "transparent" },
+          ]),
+        },
         data: props.points.map((p) => [
           p.timestamp * 1000,
           p[key] == null ? null : p[key] / divisor,

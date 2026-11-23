@@ -1,6 +1,6 @@
 <template>
-  <div :class="{ 'dn-workspace': native }">
-    <aside v-if="native" class="dn-sidebar">
+  <div :class="{ 'dn-workspace': native, 'dn-menu-hidden': !sidebarOpen }">
+    <aside v-if="native && sidebarOpen" class="dn-sidebar">
       <div class="dn-sidebar-title">
         <Server :size="20" />
         <div>
@@ -32,8 +32,10 @@
           }}</strong>
         </div>
         <div>
-          <span v-if="toast" role="status">{{ toast }}</span
-          ><button
+          <span v-if="toast" role="status">{{ toast }}</span>
+          <button class="ds-icon" aria-label="全局搜索" title="全局搜索（Ctrl / ⌘ + K）" @click="app?.openCommandPalette()"><Search :size="17" /></button>
+          <button class="ds-icon" aria-label="切换侧栏菜单" :aria-expanded="sidebarOpen" title="切换菜单（m）" @click="sidebarOpen = !sidebarOpen"><Menu :size="17" /></button>
+          <button
             class="ds-icon"
             title="刷新当前页面"
             aria-label="刷新当前页面"
@@ -58,6 +60,7 @@
         :target-name="profile.name"
         @view="view = $event"
         @toast="toast = $event"
+        @toggle-menu="sidebarOpen = !sidebarOpen"
       >
         <template v-if="native" #overview="state"
           ><NasOverview
@@ -89,6 +92,8 @@ import {
   ChevronRight,
   ExternalLink,
   RefreshCw,
+  Search,
+  Menu,
 } from "@lucide/vue";
 import "./nas-workspace.css";
 import { createNasTransport } from "../api/transport.js";
@@ -100,6 +105,7 @@ const props = defineProps({
 });
 const app = ref(null),
   view = ref("overview"),
+  sidebarOpen = ref(true),
   toast = ref("");
 const pages = [
   { id: "overview", name: "运行概览", icon: Activity },

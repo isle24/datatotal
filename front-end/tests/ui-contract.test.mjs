@@ -8,11 +8,16 @@ const readSource = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g,
 
 const source = await readSource(new URL("../src/App.vue", import.meta.url));
 const styles = await readSource(new URL("../src/styles.css", import.meta.url));
+const hero = await readSource(new URL("../src/components/TrafficOverviewHero.vue", import.meta.url));
+const desktop = await readSource(new URL("../src/desktop/NasOverview.vue", import.meta.url));
 const markdownSource = await readSource(new URL("../src/utils/markdown.js", import.meta.url));
 
 test("dashboard UI exposes the refreshed screen contracts", () => {
-  assert.match(source, /class="dashboard-board"/);
-  assert.match(source, /实时监控台/);
+  assert.match(source, /<TrafficOverviewHero :wan="summary\.wan"/);
+  assert.match(desktop, /<TrafficOverviewHero :wan="summary\.wan"/);
+  assert.match(hero, /<TrafficFieldCanvas :rx-rate="wan\?\.rxBps" :tx-rate="wan\?\.txBps"/);
+  assert.match(hero, /openConnections\(\{ scope: 'wan', direction: metric\.key \}\)/);
+  assert.match(hero, /@click="analyze\(\)"/);
   assert.match(source, /dockerStateIcon/);
   assert.match(source, /expandedMonitorCards/);
   assert.match(source, /expandedDockerCards/);
@@ -46,7 +51,6 @@ test("dashboard UI exposes the refreshed screen contracts", () => {
   assert.match(source, /title="风扇转速"/);
   assert.match(source, /v-for="fan in systemFans"/);
   assert.match(source, /formatFanRpm/);
-  assert.match(styles, /\.dashboard-board/);
   assert.match(styles, /\.accordion-stack/);
   assert.match(styles, /\.docker-card-trigger/);
 });

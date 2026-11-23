@@ -68,7 +68,7 @@
         {{ section.name }}<span>{{ section.items.length }}</span>
       </h4>
       <div class="nav-grid">
-        <article
+        <SpotlightCard as="article"
           v-for="entry in section.items"
           :key="entry.id"
           class="nav-card"
@@ -82,9 +82,7 @@
                 loading="lazy" /><Globe v-else :size="26" /></span
             ><span class="nav-copy"
               ><strong>{{ entry.name }}</strong
-              ><small>{{
-                entry.notes || displayAddress(entry.url)
-              }}</small></span
+              ><small v-if="entry.notes">{{ entry.notes }}</small></span
             ><ArrowUpRight :size="18" class="nav-launch-arrow" />
           </button>
           <div class="nav-card-footer">
@@ -92,8 +90,9 @@
               ><Container v-if="entry.sourceKey" :size="13" /><Link2
                 v-else
                 :size="13"
-              />{{ displayAddress(entry.url) }}</span
-            ><button
+              />{{ displayAddress(entry.url) }}</span>
+            <small v-if="entry.containerState" class="nav-service-state">{{ entry.containerState }}</small>
+            <button
               :title="`编辑 ${entry.name}`"
               :aria-label="`编辑 ${entry.name}`"
               @click="edit(entry)"
@@ -101,7 +100,7 @@
               <Pencil :size="14" />
             </button>
           </div>
-        </article>
+        </SpotlightCard>
       </div>
     </section>
     <dialog
@@ -233,9 +232,11 @@ import {
   Server,
 } from "@lucide/vue";
 import { safeNavigationUrl, navigationIcon } from "../utils/navigation.js";
+import SpotlightCard from "./SpotlightCard.vue";
 const props = defineProps({
   repository: { type: Object, required: true },
   scope: { type: String, default: "此 NAS" },
+  containerStates: { type: Object, default: () => ({}) },
 });
 const entries = ref([]),
   query = ref(""),
@@ -268,7 +269,10 @@ const filtered = computed(() =>
 const sections = computed(() =>
   [...new Set(filtered.value.map((e) => e.group || "常用"))].map((name) => ({
     name,
-    items: filtered.value.filter((e) => (e.group || "常用") === name),
+    items: filtered.value.filter((e) => (e.group || "常用") === name).map(entry => ({
+      ...entry,
+      containerState: entry.sourceKey?.startsWith("docker:") ? props.containerStates[entry.sourceKey.split(":")[1]] : "",
+    })),
   })),
 );
 function displayAddress(url) {
@@ -457,6 +461,7 @@ onUnmounted(() => {
   --nav-accent: var(--ds-accent, var(--blue));
   color: var(--nav-text);
   min-width: 0;
+  container-type: inline-size;
 }
 .nav-toolbar,
 .nav-tools,
@@ -546,16 +551,22 @@ onUnmounted(() => {
 }
 .nav-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
+}
+@container (max-width: 800px) {
+  .nav-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (max-width: 510px) {
+  .nav-grid { grid-template-columns: minmax(0, 1fr); }
 }
 .nav-card {
   background: var(--nav-panel);
   border: 1px solid var(--nav-line);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   min-width: 0;
   overflow: hidden;
-  box-shadow: 0 2px 4px #00000003;
+  box-shadow: var(--inner-highlight), var(--shadow);
   transition:
     box-shadow 0.15s,
     border-color 0.15s;
@@ -633,6 +644,8 @@ onUnmounted(() => {
 .nav-card-footer svg {
   flex-shrink: 0;
 }
+.nav-card-footer > span { margin-right: auto; }
+.nav-service-state { color: var(--nav-muted); flex-shrink: 0; font-size: .6875rem; }
 .nav-card-footer button {
   border: 0;
   width: 30px;

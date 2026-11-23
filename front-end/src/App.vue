@@ -1,6 +1,7 @@
 <template>
-  <div class="app-shell" :class="{ 'nas-native-content': native, 'menu-open': menuOpen }">
+  <div class="app-shell" :class="{ 'nas-native-content': native, 'menu-open': menuOpen, 'is-portal-mode': activeView === 'home' }">
     <a v-if="!native" class="skip-link" href="#main">跳到主要内容</a>
+    <div v-if="!native && toast" class="toast console-toast glass-surface" role="status">{{ toast }}</div>
     <div v-if="!native" class="sidebar-backdrop" :class="{ show: menuOpen }" @click="closeMenu"></div>
     <aside v-if="!native" class="sidebar" :class="{ 'sidebar-open': menuOpen }">
       <div class="brand">
@@ -11,7 +12,7 @@
         </div>
       </div>
       <nav class="menu">
-        <button v-for="item in navItems" :key="item.key" :class="{ active: activeView === item.key }" @click="navigate(item.key)">
+        <button v-for="item in navItems" :key="item.key" :class="{ active: activeView === item.key }" :aria-current="activeView === item.key ? 'page' : undefined" @click="navigate(item.key)">
           <component :is="item.icon" :size="18" />
           <span>{{ item.label }}</span>
         </button>
@@ -23,14 +24,13 @@
     </aside>
 
     <main class="main" id="main">
-      <header v-if="!native" class="topbar" :class="{ quiet: activeView === 'home' }">
+      <header v-if="!native && activeView !== 'home'" class="topbar">
         <div>
           <p class="topbar-description">{{ subtitle }}</p>
           <h2>{{ currentTitle }}</h2>
         </div>
         <div class="top-actions">
-          <span v-if="toast" class="toast" role="status" aria-live="polite">{{ toast }}</span>
-          <span class="quiet-more" aria-hidden="true"><MoreHorizontal :size="18" /></span>
+          <button class="icon-button" type="button" aria-label="全局搜索" title="全局搜索（Ctrl / ⌘ + K）" @click="openCommandPalette"><Search :size="18" /></button>
           <button class="icon-button menu-toggle" type="button" :aria-expanded="menuOpen" :title="menuOpen ? '收起菜单（m）' : '打开菜单（m）'" @click="toggleMenu">
             <X v-if="menuOpen" :size="18" />
             <Menu v-else :size="18" />
@@ -50,121 +50,26 @@
       </header>
       <div v-if="requestError" class="request-error" role="alert"><CircleAlert :size="18" /><span>{{ requestError }}</span><button type="button" @click="refreshActive"><RefreshCw :size="15" />重试</button></div>
 
-      <NavigationView v-if="activeView === 'navigation'" :repository="bookmarks" :scope="targetName || '此 NAS'" />
-      <section v-if="activeView === 'home'" class="view portal">
-        <div class="portal-inner">
-          <div class="portal-brand">
-            <span class="portal-mark"><Activity :size="24" /></span>
-            <h2>NAS Traffic Lens</h2>
-            <p class="portal-status">
-              <span :class="['live-dot', { pending: !overviewIsFresh }]" aria-hidden="true"></span>
-              {{ portalStatusLine }}
-            </p>
-          </div>
-
-          <label class="portal-search">
-            <Search :size="18" />
-            <input
-              ref="portalSearchInput"
-              v-model="portalQuery"
-              type="search"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="搜索服务或页面，回车直达"
-              aria-label="搜索服务或页面"
-              @keydown.enter.prevent="submitPortalSearch"
-              @keydown.esc="portalQuery = ''"
-            />
-            <kbd v-if="!portalSearching">/</kbd>
-            <button v-else class="portal-search-clear" type="button" title="清除" @click="portalQuery = ''"><X :size="15" /></button>
-          </label>
-
-          <div v-if="portalServiceMatches.length" class="portal-services">
-            <button
-              v-for="entry in portalServiceMatches"
-              :key="entry.id"
-              class="portal-service"
-              type="button"
-              :title="entry.url"
-              @click="openPortalService(entry)"
-            >
-              <span class="portal-service-logo">
-                <img v-if="entry.icon" :src="entry.icon" alt="" loading="lazy" />
-                <Globe v-else :size="22" />
-              </span>
-              <strong>{{ entry.name }}</strong>
-              <small>{{ entry.notes || portalAddress(entry.url) }}</small>
-            </button>
-          </div>
-          <p v-else-if="portalSearching" class="portal-empty">没有匹配的服务，页面入口见下方</p>
-          <p v-else-if="portalError" class="portal-empty">{{ portalError }}</p>
-          <div v-else-if="portalLoading" class="portal-services" aria-hidden="true">
-            <span v-for="index in 6" :key="`skeleton-${index}`" class="skeleton skeleton-service"></span>
-          </div>
-          <button v-else class="portal-add" type="button" @click="navigate('navigation')"><Plus :size="16" />添加常用服务</button>
-
-          <div class="portal-links">
-            <button v-for="item in portalPageMatches" :key="item.key" type="button" @click="navigate(item.key)">{{ item.label }}</button>
-          </div>
-          <p class="portal-hint">按 <kbd>/</kbd> 搜索 · <kbd>m</kbd> 打开全部页面</p>
-        </div>
-      </section>
+      <NavigationView v-if="activeView === 'navigation'" :repository="bookmarks" :scope="targetName || '此 NAS'" :container-states="navigationContainerStates" />
+      <HomePortalView
+        v-if="activeView === 'home'" ref="homePortal" v-model:query="portalQuery"
+        :status="portalStatusLine" :fresh="overviewIsFresh" :services="portalServiceMatches" :pages="portalPageMatches"
+        :error="portalError" :loading="portalLoading" :searching="portalSearching" :address="portalAddress" :menu-open="menuOpen"
+        @navigate="navigate" @submit="submitPortalSearch" @open-service="openPortalService" @toggle-menu="toggleMenu"
+      >
+        <template v-if="!native" #tools>
+          <button class="icon-button" type="button" aria-label="全局搜索" title="全局搜索（Ctrl / ⌘ + K）" @click="openCommandPalette"><Search :size="18" /></button>
+          <button class="icon-button" type="button" :aria-label="theme === 'dark' ? '切换浅色模式' : '切换暗黑模式'" @click="toggleTheme">
+            <Sun v-if="theme === 'dark'" :size="18" /><Moon v-else :size="18" />
+          </button>
+          <button v-if="overview?.authEnabled" class="icon-button" type="button" aria-label="退出登录" title="退出登录" @click="logout"><LogOut :size="17" /></button>
+        </template>
+      </HomePortalView>
 
       <section v-if="activeView === 'overview'" class="view">
-        <slot name="overview" :summary="summary" :overview="overview" :connections="connectionSummary" :connection-source="connectionSourceLabel" :fresh="overviewIsFresh" :updated="lastUpdated" :open-connections="openConnections" :navigate="setView" :analyze="() => analyzeWithAi('overview')">
-        <section class="dashboard-board">
-          <div class="dashboard-board-header">
-            <div class="dashboard-board-title">
-              <span class="dashboard-kicker"><Activity :size="14" /> 实时监控台</span>
-              <h3>公网流量总览</h3>
-              <p>{{ lastUpdated }} · {{ connectionSourceLabel }}</p>
-            </div>
-            <div class="dashboard-board-status">
-              <span :class="['live-dot', { pending: !overviewIsFresh }]" aria-hidden="true"></span>
-              <div>
-                <strong>{{ overviewStatusLabel }}</strong>
-                <span>{{ overviewIsFresh ? (overview?.containerStatus?.enabled ? "Docker 已接入" : "Docker 未接入") : "数据等待更新" }}</span>
-              </div>
-            </div>
-            <button class="board-ai-button" type="button" :disabled="aiLoading" @click="analyzeWithAi('overview')">
-              <Sparkles :size="16" />{{ aiLoading ? "分析中" : "AI 分析" }}
-            </button>
-          </div>
-          <div class="dashboard-board-main">
-            <div class="dashboard-total-block dashboard-total-primary">
-              <span>当前公网总速率</span>
-              <strong>{{ formatRate((summary.wan?.rxBps || 0) + (summary.wan?.txBps || 0)) }}</strong>
-              <div class="dashboard-rate-bars">
-                <div class="dashboard-rate-row"><span><ArrowDown :size="14" />下行</span><i><b class="rx" :style="{ width: rateBarWidth(summary.wan?.rxBps) }"></b></i><em>{{ formatRate(summary.wan?.rxBps) }}</em></div>
-                <div class="dashboard-rate-row"><span><ArrowUp :size="14" />上行</span><i><b class="tx" :style="{ width: rateBarWidth(summary.wan?.txBps) }"></b></i><em>{{ formatRate(summary.wan?.txBps) }}</em></div>
-              </div>
-            </div>
-            <div class="dashboard-total-block">
-              <span>公网累计</span>
-              <strong class="rx-text">↓ {{ formatBytes(summary.wan?.rxBytes) }}</strong>
-              <strong class="tx-text">↑ {{ formatBytes(summary.wan?.txBytes) }}</strong>
-              <small>采集累计流量</small>
-            </div>
-            <div class="dashboard-total-block dashboard-total-connections">
-              <span>公网连接</span>
-              <strong>{{ connectionSummary.wan || 0 }}</strong>
-              <small>总连接 {{ connectionSummary.total || 0 }} · {{ connectionSourceLabel }}</small>
-              <button type="button" @click="openWanConnections"><Network :size="15" />查看公网连接</button>
-            </div>
-          </div>
-          <div class="dashboard-board-footer">
-            <span><Network :size="14" /> 活跃网卡 {{ summary.interfaces?.up || 0 }} / {{ summary.interfaces?.total || 0 }}</span>
-            <span><Server :size="14" /> 抓包接口 {{ (overview?.captureInterfaces || []).join("、") || "-" }}</span>
-            <span><ShieldCheck :size="14" /> 数据刷新 {{ overviewIsFresh ? "正常" : "等待" }}</span>
-          </div>
-        </section>
+        <slot name="overview" :summary="summary" :overview="overview" :connections="connectionSummary" :connection-source="connectionSourceLabel" :fresh="overviewIsFresh" :updated="lastUpdated" :status="overviewStatusLabel" :points="liveWanPoints" :format-bytes="formatBytes" :ai-loading="aiLoading" :open-connections="openConnections" :navigate="setView" :analyze="() => analyzeWithAi('overview')">
+        <TrafficOverviewHero :wan="summary.wan" :theme="theme" :target-name="targetName" :status="overviewStatusLabel" :fresh="overviewIsFresh" :updated="lastUpdated" :format-bytes="formatBytes" :ai-loading="aiLoading" :analyze="() => analyzeWithAi('overview')" :open-connections="openConnections" />
         <div class="metric-grid dashboard-metric-grid">
-          <MetricCard title="公网实时下行" accent="blue" :value="formatRate(summary.wan?.rxBps)" @click="openConnections({ scope: 'wan', direction: 'rx' })">
-            <ArrowDown :size="18" />
-          </MetricCard>
-          <MetricCard title="公网实时上行" accent="orange" :value="formatRate(summary.wan?.txBps)" @click="openConnections({ scope: 'wan', direction: 'tx' })">
-            <ArrowUp :size="18" />
-          </MetricCard>
           <MetricCard title="内网实时下行" accent="cyan" :value="formatRate(summary.lan?.rxBps)">
             <ArrowDown :size="18" />
           </MetricCard>
@@ -175,6 +80,10 @@
             <Network :size="18" />
           </MetricCard>
         </div>
+        <section class="card live-traffic-chart">
+          <CardHead title="公网实时趋势" :meta="overviewIsFresh ? '正在采集' : '等待数据'" />
+          <TrafficChart :points="liveWanPoints" :dark="theme === 'dark'" label="公网实时上下行速率" />
+        </section>
 
         <div class="dashboard-status-grid grid two">
           <section class="card">
@@ -259,8 +168,8 @@
       <section v-if="activeView === 'history'" class="view">
         <section class="card">
           <CardHead title="历史统计" meta="公网/内网分色平滑曲线">
-            <div class="segmented">
-              <button v-for="item in historyPeriods" :key="item.key" type="button" :class="{ active: historyPeriod === item.key }" @click="refreshHistory(item.key)">{{ item.label }}</button>
+            <div class="segmented spring-segments" role="group" aria-label="历史统计范围" :style="{ '--segment-count': historyPeriods.length, '--segment-index': historyPeriods.findIndex(item => item.key === historyPeriod) }">
+              <button v-for="item in historyPeriods" :key="item.key" type="button" :aria-pressed="historyPeriod === item.key" :class="{ active: historyPeriod === item.key }" @click="refreshHistory(item.key)">{{ item.label }}</button>
             </div>
             <button type="button" :disabled="aiLoading" @click="analyzeWithAi('history')"><Sparkles :size="16" />AI 分析</button>
           </CardHead>
@@ -331,7 +240,7 @@
           <section class="card">
             <CardHead title="温度" :meta="temperatureGroups.length ? `${temperatureGroups.length} 组传感器 · 点击展开` : 'psutil / sensors'" />
             <div v-if="temperatureGroups.length" class="accordion-stack system-stack">
-              <article v-stack-motion
+              <SpotlightCard as="article" v-stack-motion
                 v-for="group in temperatureGroups"
                 :key="temperatureGroupKey(group)"
                 :class="['system-card', 'temp-stack-card', { expanded: isSystemCardExpanded('temp', temperatureGroupKey(group)) }]"
@@ -358,7 +267,7 @@
                     <b :class="['temp-value', item.level]">{{ formatTemperature(item.current) }}</b>
                   </div>
                 </div>
-              </article>
+              </SpotlightCard>
             </div>
             <div v-else class="empty">当前环境未暴露温度传感器</div>
           </section>
@@ -366,7 +275,7 @@
         <section v-if="acceleratorCards.length" class="card">
           <CardHead :title="acceleratorSectionTitle" :meta="`${acceleratorCards.length} 个设备 · 点击展开`" />
           <div class="accordion-stack system-stack">
-            <article v-stack-motion
+            <SpotlightCard as="article" v-stack-motion
               v-for="item in acceleratorCards"
               :key="item.cardKey"
               :class="['system-card', 'accelerator-card', { expanded: isSystemCardExpanded('accel', item.cardKey) }]"
@@ -421,13 +330,13 @@
                 </template>
                 <p v-if="item.hint" class="system-card-note">{{ item.hint }}</p>
               </div>
-            </article>
+            </SpotlightCard>
           </div>
         </section>
         <section class="card">
           <CardHead title="风扇转速" :meta="systemFans.length ? `${systemFans.length} 个传感器 · 点击展开` : 'psutil / hwmon'" />
           <div v-if="systemFans.length" class="accordion-stack system-stack">
-            <article v-stack-motion
+            <SpotlightCard as="article" v-stack-motion
               v-for="fan in systemFans"
               :key="fanCardKey(fan)"
               :class="['system-card', 'fan-stack-card', { expanded: isSystemCardExpanded('fan', fanCardKey(fan)) }]"
@@ -454,7 +363,7 @@
                   <small>相对最高转速 {{ formatFanRpm(fanPeakRpm(systemFans)) }} 转/分</small>
                 </div>
               </div>
-            </article>
+            </SpotlightCard>
           </div>
           <div v-else class="empty fan-empty">当前环境未暴露风扇转速传感器</div>
         </section>
@@ -1162,6 +1071,7 @@
       </div>
     </dialog>
     <ConfirmDialog ref="confirmDialog" />
+    <CommandPalette ref="commandPalette" :items="commandItems" :busy="portalLoading || dockerListLoading" @select="selectCommand" />
   </div>
 </template>
 
@@ -1170,6 +1080,11 @@ import { computed, defineComponent, h, inject, nextTick, onMounted, onUnmounted,
 import { browserTransport } from "./api/transport.js";
 import ContainerPicker from "./components/ContainerPicker.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import HomePortalView from "./components/HomePortalView.vue";
+import CommandPalette from "./components/CommandPalette.vue";
+import SpotlightCard from "./components/SpotlightCard.vue";
+import TrafficOverviewHero from "./components/TrafficOverviewHero.vue";
+import TrafficChart from "./desktop/TrafficChart.vue";
 import "./styles/console-theme.css";
 import { selectionForRule, applyContainerSelection, switchProtectionScope } from "./utils/container-selection.js";
 import { createSettingsDrafts, notificationMode, monitorPayload, validateContainerRules,
@@ -1211,9 +1126,9 @@ import {
   History,
   House,
   ImagePlus,
+  LogOut,
   Menu,
   Moon,
-  MoreHorizontal,
   Monitor,
   Network,
   Pencil,
@@ -1242,7 +1157,7 @@ const MetricCard = defineComponent({
   emits: ["click"],
   setup(props, { slots, emit }) {
     return () =>
-      h("button", { class: ["metric-card", `accent-${props.accent || "blue"}`, props.wide ? "wide" : ""], type: "button", onClick: () => emit("click") }, [
+      h(SpotlightCard, { as: "button", class: ["metric-card", `accent-${props.accent || "blue"}`, props.wide ? "wide" : ""], type: "button", onClick: () => emit("click") }, () => [
         h("span", { class: "metric-icon" }, slots.default?.()),
         h("span", { class: "metric-title" }, props.title),
         h("strong", props.value || "-"),
@@ -1354,11 +1269,11 @@ const historyPeriods = [
 ];
 
 const props = defineProps({ native: Boolean, view: String, targetName: String, themeMode: String });
-const emit = defineEmits(['view', 'toast']);
+const emit = defineEmits(['view', 'toast', 'toggle-menu']);
 const activeView = ref(props.view || (props.native ? "overview" : "home"));
 watch(() => props.view, view => { if (view && view !== activeView.value) setView(view); });
 watch(() => props.native, () => nextTick(handleResize));
-defineExpose({ refresh: refreshActive });
+defineExpose({ refresh: refreshActive, openCommandPalette });
 import NavigationView from './components/NavigationView.vue';
 import { navigationRepository } from './api/navigation.js';
 import { dockerBookmark, navigationIcon, safeNavigationUrl, serviceUrl } from './utils/navigation.js';
@@ -1367,18 +1282,19 @@ const toast = ref("");
 watch(toast, value => emit('toast', value));
 const requestError = ref("");
 let requestErrorUrl = "";
-const theme = ref(localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+const theme = ref(props.themeMode || localStorage.getItem("ntl-theme") || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 const DEFAULT_PORTAL_PAGES = ["overview", "docker", "monitor", "history", "system", "navigation"];
 // The portal is the only page without the menu; every other page keeps the
 // sidebar in its own grid column so the content is never covered.
 function defaultMenuOpen(view) {
   if (view === "home") return false;
-  if (typeof window === "undefined") return true;
-  return window.innerWidth > 720;
+  return !phoneMenu.matches;
 }
+const phoneMenu = window.matchMedia("(max-width: 734px)");
 const menuOpen = ref(defaultMenuOpen(activeView.value));
 const overview = ref(null);
 const overviewFresh = ref(false);
+const liveWanPoints = ref([]);
 const snapshot = ref(null);
 const settings = ref(null);
 const system = ref(null);
@@ -1493,7 +1409,6 @@ let overviewLoading = false;
 let systemLoading = false;
 let dockerLoading = false;
 const handleResize = () => {
-  if (window.innerWidth <= 720 && menuOpen.value) closeMenu();
   historyChart?.resize();
 };
 
@@ -1555,7 +1470,8 @@ const portalQuery = ref("");
 const portalEntries = ref([]);
 const portalError = ref("");
 const portalLoading = ref(false);
-const portalSearchInput = ref(null);
+const homePortal = ref(null);
+const commandPalette = ref(null);
 let portalLoaded = false;
 
 async function loadPortalServices() {
@@ -1596,15 +1512,44 @@ const portalServiceMatches = computed(() => {
   if (!keyword) return list;
   return list.filter((entry) => `${entry.name} ${entry.url} ${entry.notes} ${entry.group}`.toLowerCase().includes(keyword));
 });
-const portalPages = computed(() => navItems.filter((item) => item.key !== "home"));
+const portalPages = navItems.filter((item) => item.key !== "home");
 const portalPageMatches = computed(() => {
   const keyword = portalQuery.value.trim().toLowerCase();
   if (!keyword) {
-    return portalPages.value.filter((item) => DEFAULT_PORTAL_PAGES.includes(item.key));
+    return portalPages.filter((item) => DEFAULT_PORTAL_PAGES.includes(item.key));
   }
-  return portalPages.value.filter((item) => `${item.label} ${item.key}`.toLowerCase().includes(keyword));
+  return portalPages.filter((item) => `${item.label} ${item.key}`.toLowerCase().includes(keyword));
 });
 const portalSearching = computed(() => portalQuery.value.trim().length > 0);
+const commandItems = computed(() => [
+  ...navItems.filter(page => !props.native || page.key !== "home").map(page => ({
+    id: `page-${page.key}`, kind: "页面", label: page.label, icon: page.icon, searchText: page.key, page,
+  })),
+  ...portalEntries.value.map(entry => ({
+    id: `service-${entry.id}`, kind: "服务", label: entry.name, detail: portalAddress(entry.url),
+    searchText: `${entry.url} ${entry.notes || ""} ${entry.group || ""}`, icon: Globe, entry,
+  })),
+  ...(dockerData.value?.containers || []).map(container => ({
+    id: `docker-${dockerKey(container)}`, kind: "Docker 容器", label: container.name, detail: container.image,
+    searchText: container.id, icon: Server, container,
+  })),
+]);
+const navigationContainerStates = computed(() => Object.fromEntries(
+  (dockerData.value?.containers || []).map(container => [container.name, dockerStateMeta(container.state).label]),
+));
+function openCommandPalette() {
+  commandPalette.value?.open();
+  loadPortalServices();
+  refreshDocker(false, true).catch(error => console.warn("load command containers failed", error));
+}
+function selectCommand(item) {
+  if (item.page) navigate(item.page.key);
+  else if (item.entry) openPortalService(item.entry);
+  else if (item.container) {
+    dockerSearch.value = item.container.name;
+    navigate("docker");
+  }
+}
 const portalFirstResult = computed(() => {
   const service = portalServiceMatches.value[0];
   if (service) return { type: "service", entry: service };
@@ -1804,12 +1749,6 @@ function formatConfigValue(value) {
 function formatPercent(value) {
   const number = Number(value);
   return Number.isFinite(number) ? `${number.toFixed(number >= 10 ? 0 : 1)}%` : "-";
-}
-function rateBarWidth(value) {
-  const rx = Number(summary.value.wan?.rxBps || 0);
-  const tx = Number(summary.value.wan?.txBps || 0);
-  const peak = Math.max(1, rx, tx);
-  return `${Math.max(3, Math.min(100, (Number(value || 0) / peak) * 100))}%`;
 }
 function formatTemperature(value) {
   const number = Number(value);
@@ -2064,6 +2003,13 @@ async function refreshOverview() {
   try {
     overview.value = await api(`/api/overview?interfaces=${encodeURIComponent(interfaceView.value)}`);
     overviewFresh.value = true;
+    const data = overview.value;
+    if (overviewIsFresh.value && data.summary?.wan && data.timestamp && data.timestamp > (liveWanPoints.value.at(-1)?.timestamp || 0)) {
+      const { rxBps: rx, txBps: tx } = data.summary.wan;
+      const previous = liveWanPoints.value.at(-1);
+      const gap = previous && data.timestamp - previous.timestamp > 15 ? [{ timestamp: data.timestamp - 1, rx: null, tx: null }] : [];
+      liveWanPoints.value = [...liveWanPoints.value, ...gap, { timestamp: data.timestamp, rx, tx }].slice(-60);
+    }
   } catch (error) {
     overviewFresh.value = false;
     console.warn("load overview failed", error);
@@ -2469,12 +2415,12 @@ async function refreshSystem() {
     systemLoading = false;
   }
 }
-async function refreshDocker(force = false) {
+async function refreshDocker(force = false, localError = false) {
   if (dockerLoading) return;
   dockerLoading = true;
   dockerListLoading.value = true;
   try {
-  const data = await api(`/api/docker/containers${force === true ? '?refresh=true' : ''}`);
+  const data = await api(`/api/docker/containers${force === true ? '?refresh=true' : ''}`, { localError });
   dockerData.value = { ...data, containers: mergeDockerContainers(data.containers || []) };
   } finally {
     dockerLoading = false;
@@ -2666,21 +2612,26 @@ function toggleMenu() {
 function closeMenu() {
   menuOpen.value = false;
 }
+function syncMenuToViewport() {
+  menuOpen.value = defaultMenuOpen(activeView.value);
+}
 function handleMenuKeydown(event) {
+  if (event.defaultPrevented || event.isComposing || document.querySelector("dialog[open]")) return;
   if (event.key === "Escape" && menuOpen.value) closeMenu();
-  const target = event.target;
-  const typing = target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
-  if (activeView.value === "home" && !typing && !target?.isContentEditable
-    && (event.key === "/" || (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)))) {
+  if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
     event.preventDefault();
-    portalSearchInput.value?.focus();
+    openCommandPalette();
     return;
   }
+  if (event.target?.closest?.("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
+  if (activeView.value === "home" && event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    homePortal.value?.focusSearch();
+  }
   if (event.key.toLowerCase() === "m" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-    if (!typing && !target?.isContentEditable) {
-      event.preventDefault();
-      toggleMenu();
-    }
+    event.preventDefault();
+    if (props.native) emit("toggle-menu");
+    else toggleMenu();
   }
 }
 function navigate(view) {
@@ -2694,6 +2645,7 @@ function setView(view) {
     historyChart = null;
   }
   if (view !== "docker") stopDockerTimer();
+  if (activeView.value === "navigation") portalLoaded = false;
   activeView.value = view;
   menuOpen.value = defaultMenuOpen(view);
   emit('view', view);
@@ -2705,6 +2657,7 @@ async function refreshActive() {
   try {
   if (activeView.value === "overview" || activeView.value === "home") await refreshOverview();
   if (activeView.value === "home") loadPortalServices();
+  if (activeView.value === "navigation") await refreshDocker(false, true);
   if (activeView.value === "interfaces") await refreshInterfaces();
   if (activeView.value === "history") await refreshHistory();
   if (activeView.value === "processes") await refreshProcesses();
@@ -3116,13 +3069,14 @@ watch(theme, (value) => {
 watch(() => props.themeMode, value => { if (value === 'dark' || value === 'light') theme.value = value; });
 
 onMounted(async () => {
+  window.addEventListener("keydown", handleMenuKeydown);
+  phoneMenu.addEventListener("change", syncMenuToViewport);
   await refreshOverview();
   if (!disposed && activeView.value !== 'overview') await refreshActive();
   if (disposed) return;
   startViewTimer();
   document.addEventListener("visibilitychange", handleVisibility);
   window.addEventListener("resize", handleResize);
-  window.addEventListener("keydown", handleMenuKeydown);
 });
 onUnmounted(() => {
   disposed = true;
@@ -3134,6 +3088,7 @@ onUnmounted(() => {
   window.clearTimeout(showToast.timer);
   if (connectionDebounce) clearTimeout(connectionDebounce);
   window.removeEventListener("resize", handleResize);
+  phoneMenu.removeEventListener("change", syncMenuToViewport);
   historyChart?.dispose();
 });
 function handleVisibility() {

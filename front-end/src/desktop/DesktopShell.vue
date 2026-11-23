@@ -3,13 +3,14 @@
     class="desktop-shell"
     :class="{ 'ds-remote': source !== 'local' && !settingsOpen }"
   >
-    <header class="ds-sourcebar">
+    <header class="ds-sourcebar glass-surface">
       <div class="ds-brand">
         <span class="ds-brand-icon"><Activity :size="21" /></span
         ><strong>Traffic Lens</strong
         ><span class="ds-version">DESKTOP {{ config.version }}</span>
       </div>
       <div class="ds-source-controls">
+        <button v-if="localCommandScope" class="ds-icon" title="全局搜索（Ctrl / ⌘ + K）" aria-label="全局搜索" @click="openLocalCommands"><Search :size="18" /></button>
         <button v-if="updateState.phase === 'available'" class="ds-icon" title="有客户端更新" aria-label="有客户端更新" @click="settingsOpen = true"><Download :size="18" /></button>
         <Monitor :size="17" />
         <select
@@ -46,6 +47,7 @@
         </button>
       </div>
     </header>
+    <CommandPalette v-if="localCommandScope" ref="localPalette" :items="localCommands" :busy="localCommandLoading" @select="selectLocalCommand" />
     <div v-if="error" class="ds-error" role="alert">
       <CircleAlert :size="17" /><span>{{ error }}</span
       ><button class="ds-icon" aria-label="关闭提示" @click="error = ''">
@@ -456,11 +458,12 @@
         </template>
         <template v-else-if="view === 'history'">
           <div class="ds-table-tools">
-            <div class="ds-segments">
+            <div class="ds-segments spring-segments" role="group" aria-label="历史统计范围" :style="{ '--segment-count': periods.length, '--segment-index': periods.findIndex(item => item.id === period) }">
               <button
                 v-for="p in periods"
                 :key="p.id"
                 :class="{ active: period === p.id }"
+                :aria-pressed="period === p.id"
                 @click="period = p.id"
               >
                 {{ p.name }}
@@ -550,7 +553,7 @@
       <div class="ds-target">
         <Server :size="15" /><strong>{{ currentProfile?.name }}</strong
         ><span>{{ currentProfile?.url }}</span
-        ><div class="ds-layout-switch" role="group" aria-label="NAS 界面模式"><button :aria-pressed="nasLayout === 'native'" :class="{ active: nasLayout === 'native' }" @click="setNasLayout('native')"><Monitor :size="14" />客户端</button><button :aria-pressed="nasLayout === 'web'" :class="{ active: nasLayout === 'web' }" @click="setNasLayout('web')"><Globe :size="14" />网页</button></div>
+        ><div class="ds-layout-switch spring-segments" role="group" aria-label="NAS 界面模式" :style="{ '--segment-count': 2, '--segment-index': nasLayout === 'web' ? 1 : 0 }"><button :aria-pressed="nasLayout === 'native'" :class="{ active: nasLayout === 'native' }" @click="setNasLayout('native')"><Monitor :size="14" />客户端</button><button :aria-pressed="nasLayout === 'web'" :class="{ active: nasLayout === 'web' }" @click="setNasLayout('web')"><Globe :size="14" />网页</button></div>
       </div>
       <NasView
         v-if="authenticated && currentProfile"
@@ -681,6 +684,8 @@ import {
   Download,
 } from "@lucide/vue";
 import TrafficChart from "./TrafficChart.vue";
+import CommandPalette from "../components/CommandPalette.vue";
+import { safeNavigationUrl } from "../utils/navigation.js";
 const AiSettings = defineAsyncComponent(() => import("./AiSettings.vue"));
 const LocalAiView = defineAsyncComponent(() => import("./LocalAiView.vue"));
 const NasView = defineAsyncComponent(() => import("./NasView.vue"));
@@ -737,6 +742,41 @@ const periods = [
   { id: "month", name: "本月" },
   { id: "30days", name: "近 30 天" },
 ];
+const localPalette = ref(null), localCommandLoading = ref(false), localServices = ref([]);
+const localCommandScope = computed(() => settingsOpen.value || source.value === "local" || !authenticated.value);
+const localCommands = computed(() => [
+  ...tabs.map(tab => ({ id: tab.id, label: tab.name, icon: tab.icon, kind: "本机页面", searchText: tab.id, tab })),
+  { id: "settings", label: "桌面设置", icon: Settings2, kind: "本机页面" },
+  ...localServices.value.map(entry => ({
+    id: `service-${entry.id}`, label: entry.name, detail: entry.url,
+    searchText: `${entry.notes || ""} ${entry.group || ""}`, kind: "本机服务", icon: Globe, entry,
+  })),
+]);
+async function openLocalCommands() {
+  localPalette.value?.open();
+  if (localCommandLoading.value) return;
+  localCommandLoading.value = true;
+  try { localServices.value = await invoke("local_navigation"); }
+  catch (e) { error.value = String(e?.message || e); }
+  finally { localCommandLoading.value = false; }
+}
+function handleLocalCommands(event) {
+  if (!localCommandScope.value || event.defaultPrevented || event.isComposing || document.querySelector("dialog[open]")) return;
+  if (event.key.toLowerCase() !== "k" || !(event.metaKey || event.ctrlKey)) return;
+  event.preventDefault();
+  openLocalCommands();
+}
+async function selectLocalCommand(item) {
+  if (item.entry) {
+    const url = safeNavigationUrl(item.entry.url);
+    if (url) await run(() => invoke("open_external", { url }));
+    else error.value = "服务地址无效，请在导航里修改";
+  } else if (item.tab) {
+    if (source.value !== "local") await switchSource("local");
+    settingsOpen.value = false;
+    view.value = item.tab.id;
+  } else settingsOpen.value = true;
+}
 const currentProfile = computed(() =>
   config.profiles.find((p) => p.id === source.value),
 );
@@ -1078,6 +1118,7 @@ watch(pages, (count) => {
   if (page.value > count) page.value = count;
 });
 onMounted(async () => {
+  window.addEventListener("keydown", handleLocalCommands);
   await run(async () => {
     await loadConfig();
     selected.value = config.interface || "";
@@ -1094,5 +1135,6 @@ onUnmounted(() => {
   historyGeneration++;
   resolvePrompt(null);
   document.removeEventListener("visibilitychange", visibility);
+  window.removeEventListener("keydown", handleLocalCommands);
 });
 </script>

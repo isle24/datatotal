@@ -1,5 +1,5 @@
 <template>
-  <dialog ref="dialog" class="modal narrow" :aria-labelledby="titleId" @cancel.prevent="answer(false)">
+  <dialog ref="dialog" class="modal narrow glass-surface confirmation-dialog" :aria-labelledby="titleId" @cancel.prevent="answer(false)">
     <div class="modal-box confirmation-box">
       <h3 :id="titleId">{{ title }}</h3>
       <p class="confirmation-message">{{ message }}</p>
@@ -30,5 +30,14 @@ onUnmounted(() => answer(false));
 defineExpose({ ask });
 </script>
 <style scoped>
-.confirmation-box{max-width:520px;display:grid;gap:18px}.confirmation-message{line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.confirmation-box .edit-actions{justify-content:flex-end;flex-wrap:wrap}
+.confirmation-dialog.modal.narrow {
+  width: min(520px, calc(100% - 32px));
+  border-radius: var(--radius-xl);
+  background: var(--glass);
+  box-shadow: var(--shadow-float);
+}
+.confirmation-box { display: grid; gap: 18px; }
+.confirmation-message { line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.confirmation-box .edit-actions { justify-content: flex-end; flex-wrap: wrap; }
+.confirmation-box .edit-actions button { border-radius: var(--radius-pill); }
 </style>
